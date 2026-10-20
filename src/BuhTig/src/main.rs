@@ -1,4 +1,6 @@
 mod config;
+mod db;
+mod entity;
 
 use std::env;
 use std::ffi::OsString;
@@ -84,6 +86,25 @@ fn main() -> ExitCode {
 }
 
 async fn serve(config: Config) -> ExitCode {
+    // FR-DB-02, FR-DB-05: the schema is migrated before BuhTig listens, and a failure
+    // stops it before it serves anything.
+    let db = match db::connect(&config.database).await {
+        Ok(db) => db,
+        Err(error) => {
+            error!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match db::migrate(&db).await {
+        Ok(migration) => info!("{migration}"),
+        Err(error) => {
+            error!("{error}");
+            return ExitCode::FAILURE;
+        }
+    }
+    // Held open for the features that read and write the database (#4, #6, #22, …).
+    let _db = db;
+
     let app = Router::new().route("/", get(|| async { "Hello World!" }));
 
     let listen = config.server.listen;

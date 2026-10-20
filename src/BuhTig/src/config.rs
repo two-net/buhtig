@@ -6,18 +6,20 @@
 
 #![allow(
     dead_code,
-    reason = "settings are read by features still to come (#2, #5, #22, …)"
+    reason = "settings are read by features still to come (#5, #22, …)"
 )]
 
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use sea_orm::sqlx::postgres::PgConnectOptions;
 use toml::{Table, Value};
 use url::Url;
 
@@ -496,14 +498,129 @@ fn listen(value: Value) -> Result<SocketAddr, String> {
         .map_err(|_| "must be an IP address and port such as 0.0.0.0:8080".to_owned())
 }
 
+/// The connection parameters sqlx understands. It would log any other parameter along
+/// with its value, which may be a secret (FR-CFG-04).
+const DATABASE_PARAMETERS: [&str; 18] = [
+    "application_name",
+    "dbname",
+    "host",
+    "hostaddr",
+    "options",
+    "password",
+    "port",
+    "ssl-ca",
+    "ssl-cert",
+    "ssl-key",
+    "ssl-mode",
+    "ssl-root-cert",
+    "sslcert",
+    "sslkey",
+    "sslmode",
+    "sslrootcert",
+    "statement-cache-capacity",
+    "user",
+];
+
+const SSL_MODES: [&str; 6] = [
+    "disable",
+    "allow",
+    "prefer",
+    "require",
+    "verify-ca",
+    "verify-full",
+];
+
+/// A PostgreSQL URL, normalized so that sqlx connects exactly as it says.
+///
+/// NFR-SEC-10: a database on another host is reached over TLS. Its `sslmode` defaults to
+/// `verify-full`, and the modes that may fall back to plain text are refused.
 fn database_url(value: Value) -> Result<Secret<Url>, String> {
-    Url::parse(&string(value)?)
+    const PROBLEM: &str = "must be a PostgreSQL URL such as postgres://user:password@host/database";
+    let mut url = Url::parse(&string(value)?)
         .ok()
         .filter(|url| matches!(url.scheme(), "postgres" | "postgresql"))
-        .map(Secret)
-        .ok_or_else(|| {
-            "must be a PostgreSQL URL such as postgres://user:password@host/database".to_owned()
-        })
+        .ok_or_else(|| PROBLEM.to_owned())?;
+
+    // Later parameters win, as in sqlx.
+    let mut ssl_mode = None;
+    let mut has_password = url.password().is_some();
+    for (key, value) in url.query_pairs() {
+        match &*key {
+            "sslmode" | "ssl-mode" => ssl_mode = Some(value.to_ascii_lowercase()),
+            "password" => has_password = true,
+            key if DATABASE_PARAMETERS.contains(&key)
+                || key.starts_with("options[") && key.ends_with(']') => {}
+            // Not named, in case the parameter is a misplaced secret.
+            _ => {
+                return Err(
+                    "has a parameter that sqlx does not support; use only host, \
+                     hostaddr, port, dbname, user, password, sslmode, sslrootcert, sslcert, \
+                     sslkey, application_name, options or statement-cache-capacity"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    if ssl_mode
+        .as_deref()
+        .is_some_and(|mode| !SSL_MODES.contains(&mode))
+    {
+        return Err(
+            "has an unknown sslmode; use disable, allow, prefer, require, verify-ca or \
+             verify-full"
+                .to_owned(),
+        );
+    }
+    // FR-CFG-02: without a password, sqlx would look one up in ~/.pgpass, finding the home
+    // directory even with the environment cleared. An empty one stops that.
+    if !has_password {
+        url.query_pairs_mut().append_pair("password", "");
+    }
+
+    // Where sqlx will connect, as sqlx itself reads the URL.
+    let options = PgConnectOptions::from_str(url.as_str()).map_err(|_| PROBLEM.to_owned())?;
+    let host = options.get_host();
+    let local = match options.get_socket() {
+        Some(_) => true,
+        None if host.is_empty() => {
+            return Err("must name the database host, or a socket directory with \
+                 ?host=/path/to/directory"
+                .to_owned());
+        }
+        // sqlx would pass the brackets on to the name lookup.
+        None if host.starts_with('[') => {
+            return Err(
+                "must give an IPv6 address as ?host=::1 rather than in brackets".to_owned(),
+            );
+        }
+        None => is_local(host),
+    };
+
+    match ssl_mode.as_deref() {
+        Some("require" | "verify-ca" | "verify-full") => {}
+        Some(mode @ ("disable" | "allow" | "prefer")) if !local => {
+            return Err(format!(
+                "sslmode={mode} is not allowed for a database on another host; \
+                 use verify-full, verify-ca or require"
+            ));
+        }
+        Some(_) => {}
+        None if !local => {
+            url.query_pairs_mut().append_pair("sslmode", "verify-full");
+        }
+        None => {}
+    }
+    Ok(Secret(url))
+}
+
+/// Whether a TCP host is this machine: a Unix socket directory, `localhost`, or a
+/// loopback address.
+fn is_local(host: &str) -> bool {
+    host.starts_with('/')
+        || host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn proxy_url(value: Value) -> Result<Secret<Url>, String> {
@@ -771,6 +888,18 @@ mod tests {
             ("server.listen", 8080.into(), "must be a string"),
             ("database.url", "mysql://u:p@db/buhtig".into(), "must be a PostgreSQL URL"),
             ("database.url", "not a url".into(), "must be a PostgreSQL URL"),
+            ("database.url", "postgres://db.example.com/b?sslmode=disable".into(), "sslmode=disable is not allowed"),
+            ("database.url", "postgres://db.example.com/b?sslmode=allow".into(), "sslmode=allow is not allowed"),
+            ("database.url", "postgres://db.example.com/b?ssl-mode=Prefer".into(), "sslmode=prefer is not allowed"),
+            ("database.url", "postgres://localhost/b?host=db.example.com&sslmode=disable".into(), "sslmode=disable"),
+            ("database.url", "postgres://localhost/b?hostaddr=10.0.0.5&sslmode=disable".into(), "sslmode=disable"),
+            ("database.url", "postgres://localhost/b?sslmode=bogus".into(), "unknown sslmode"),
+            ("database.url", "postgres://localhost/b?host=%252Fdb.example.com&sslmode=disable".into(), "sslmode=disable"),
+            ("database.url", "postgres://db.example.com/b?host=&sslmode=disable".into(), "must name the database host"),
+            ("database.url", "postgres://[::1]/b".into(), "?host=::1"),
+            ("database.url", "postgres://localhost/b?sslpassword=x".into(), "does not support"),
+            ("database.url", "postgres://localhost/b?channel_binding=require".into(), "does not support"),
+            ("database.url", "postgres://localhost/b?port=x".into(), "must be a PostgreSQL URL"),
             ("database.max_connections", 0.into(), "must be a whole number from 1"),
             ("database.max_connections", (-1).into(), "must be a whole number from 1"),
             ("database.max_connections", 5_000_000_000_i64.into(), "must be a whole number"),
@@ -870,6 +999,97 @@ mod tests {
         assert_eq!(config.log.level, LogLevel::Debug);
     }
 
+    fn database_url(value: &str) -> Url {
+        parse(set(minimal(), "database.url", value))
+            .unwrap()
+            .database
+            .url
+            .expose()
+            .clone()
+    }
+
+    /// The TLS mode sqlx will use for a URL.
+    fn ssl_mode(url: &Url) -> String {
+        format!(
+            "{:?}",
+            PgConnectOptions::from_str(url.as_str())
+                .unwrap()
+                .get_ssl_mode()
+        )
+    }
+
+    #[test]
+    fn remote_databases_use_tls() {
+        for (value, mode) in [
+            ("postgres://u:pw@db.example.com/buhtig", "VerifyFull"),
+            (
+                "postgres://u:pw@localhost/buhtig?host=10.0.0.5",
+                "VerifyFull",
+            ),
+            (
+                "postgres://u:pw@localhost/buhtig?hostaddr=10.0.0.5",
+                "VerifyFull",
+            ),
+            (
+                "postgres://u:pw@db.example.com/buhtig?sslmode=require",
+                "Require",
+            ),
+            (
+                "postgres://u:pw@db.example.com/buhtig?sslmode=verify-ca&sslrootcert=/etc/ca.pem",
+                "VerifyCa",
+            ),
+            // On this machine, any mode is allowed.
+            (
+                "postgres://u:pw@127.0.0.1/buhtig?sslmode=disable",
+                "Disable",
+            ),
+            ("postgres://u:pw@localhost/buhtig?ssl-mode=allow", "Allow"),
+            (
+                "postgres://u:pw@localhost/buhtig?host=::1&sslmode=prefer",
+                "Prefer",
+            ),
+            (
+                "postgres://u:pw@%2Frun%2Fpostgresql/buhtig?sslmode=disable",
+                "Disable",
+            ),
+            // sqlx keeps to a socket once it has one.
+            (
+                "postgres://u:pw@%2Frun%2Fpostgresql/buhtig?host=db.example.com&sslmode=disable",
+                "Disable",
+            ),
+            (
+                "postgres://u:pw@db.example.com/buhtig?host=/run/postgresql&sslmode=disable",
+                "Disable",
+            ),
+        ] {
+            assert_eq!(ssl_mode(&database_url(value)), mode, "{value}");
+        }
+
+        for local in [
+            "postgres://u:pw@localhost/buhtig",
+            "postgres://u:pw@LocalHost:5433/buhtig",
+            "postgres://u:pw@127.1.2.3/buhtig",
+            "postgresql://u:pw@localhost/buhtig?host=/run/postgresql",
+        ] {
+            assert_eq!(database_url(local).as_str(), local, "left as it is");
+        }
+    }
+
+    /// FR-CFG-02: sqlx would otherwise look a missing password up in ~/.pgpass.
+    #[test]
+    fn a_missing_password_is_set_empty() {
+        assert_eq!(
+            database_url("postgres://buhtig@localhost/buhtig").as_str(),
+            "postgres://buhtig@localhost/buhtig?password="
+        );
+        for has_password in [
+            "postgres://buhtig:pw@localhost/buhtig",
+            "postgres://buhtig@localhost/buhtig?password=pw",
+        ] {
+            assert_eq!(database_url(has_password).as_str(), has_password);
+        }
+    }
+
     #[test]
     fn substitution_is_not_supported() {
         for key in [
@@ -897,6 +1117,20 @@ mod tests {
                 "postgres://buhtig:hunter2@db:port/buhtig".into(),
             ),
             ("database.url", "${hunter2}".into()),
+            (
+                "database.url",
+                "postgres://buhtig:hunter2@db/buhtig?sslmode=disable".into(),
+            ),
+            (
+                "database.url",
+                "postgres://buhtig:hunter2@db/buhtig?sslmode=hunter2".into(),
+            ),
+            (
+                "database.url",
+                "postgres://buhtig@db/buhtig?sslpassword=hunter2".into(),
+            ),
+            ("database.url", "postgres://buhtig@db/buhtig?hunter2".into()),
+            ("database.url", "postgres://buhtig@[hunter2]/buhtig".into()),
             ("database.url", Value::from(vec![marker])),
             ("github.client_secret", 2_000_000_007.into()),
             ("github.client_secret", Value::from(vec![marker])),

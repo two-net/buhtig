@@ -6,6 +6,17 @@ edition = "2024"
 [dependencies]
 axum = "0.8.9"
 base64 = "0.22.1"
+# Pinned exactly: schema sync, which migrates the database at startup, is exempt from
+# SeaORM's semver guarantees. Upgrade deliberately and rerun tests/migration.rs.
+sea-orm = { version = "=2.0.4", default-features = false, features = [
+    "macros",
+    "runtime-tokio-rustls",
+    "schema-sync",
+    "sqlx-postgres",
+    "with-chrono",
+    "with-json",
+] }
+semver = "1.0.28"
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "net"] }
 toml = "1.1.6"
 tracing = "0.1.44"

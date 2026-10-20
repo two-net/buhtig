@@ -1,12 +1,8 @@
 //! Starts the real binary to check how it treats its config file and environment.
 
-use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
+mod support;
 
-use tempfile::TempDir;
+use support::{buhtig, buhtig_with, cluster, run_to_exit, start, stderr, stdout, write_config};
 
 const CONFIG: &str = r#"
 [server]
@@ -14,7 +10,7 @@ public_url = "https://buhtig.example.com"
 listen = "127.0.0.1:0"
 
 [database]
-url = "postgres://buhtig:file-password@file-host/buhtig"
+url = "{database_url}"
 
 [github]
 client_id = "Iv1.client-id"
@@ -27,97 +23,16 @@ encryption_key = "E9kO4wdc96sDx81yxStONaEoRd/p1+5zlz2JSlcH8Xc="
 level = "debug"
 "#;
 
-/// Values a library would pick up from the environment if BuhTig let it (AC-07).
-/// tokio panics on `TOKIO_WORKER_THREADS=0`, so BuhTig starts only if it removed them.
-const ENVIRONMENT: [(&str, &str); 4] = [
-    (
-        "DATABASE_URL",
-        "postgres://env-user:env-password@env-host/env-db",
-    ),
-    ("HTTPS_PROXY", "http://env-proxy:3128"),
-    ("PGPASSWORD", "env-password"),
-    ("TOKIO_WORKER_THREADS", "0"),
-];
-
-fn write_config(dir: &TempDir, contents: &str, mode: u32) -> PathBuf {
-    let path = dir.path().join("BuhTig.toml");
-    std::fs::write(&path, contents).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
-    }
-    #[cfg(not(unix))]
-    let _ = mode;
-    path
-}
-
-fn buhtig(args: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_BuhTig"));
-    command.args(args).env_clear().envs(ENVIRONMENT);
-    command
-}
-
-fn buhtig_with(config: &Path) -> Command {
-    let mut command = buhtig(&["--config"]);
-    command.arg(config);
-    command
-}
-
-fn stderr(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-/// A running BuhTig, killed when dropped.
-struct Running(Child);
-
-impl Drop for Running {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-/// Starts BuhTig and returns its log lines up to and including the "listening" line.
-fn start(config: &Path) -> (Running, Vec<String>) {
-    let mut child = buhtig_with(config)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let stdout = child.stdout.take().unwrap();
-    let running = Running(child);
-
-    let (lines, received) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            if lines.send(line.unwrap()).is_err() {
-                break;
-            }
-        }
-    });
-
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut log = Vec::new();
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        match received.recv_timeout(remaining) {
-            Ok(line) => {
-                let listening = line.contains("listening on http://127.0.0.1:");
-                log.push(line);
-                if listening {
-                    return (running, log);
-                }
-            }
-            Err(_) => panic!("BuhTig did not start listening; log so far: {log:#?}"),
-        }
-    }
+/// A config file for a fresh database in the test cluster.
+fn config() -> String {
+    let cluster = cluster();
+    CONFIG.replace("{database_url}", &cluster.url(&cluster.create_database()))
 }
 
 #[test]
 fn environment_does_not_fill_in_a_missing_key() {
     let dir = tempfile::tempdir().unwrap();
-    let config = CONFIG.replace("url = \"postgres://", "# url = \"postgres://");
+    let config = CONFIG.replace(r#"url = "{database_url}""#, "");
     let output = buhtig_with(&write_config(&dir, &config, 0o600))
         .output()
         .unwrap();
@@ -134,17 +49,26 @@ fn environment_does_not_fill_in_a_missing_key() {
 #[test]
 fn starts_from_the_config_file_with_the_environment_removed() {
     let dir = tempfile::tempdir().unwrap();
-    let (_running, log) = start(&write_config(&dir, CONFIG, 0o600));
+    let (_running, log) = start(&write_config(&dir, &config(), 0o600));
 
     let removed = log
         .iter()
         .find(|line| line.contains("removed environment variables"))
         .unwrap_or_else(|| panic!("no removal line in {log:#?}"));
+    // On macOS, CoreFoundation (linked through chrono) sets one more in every process
+    // before `main` runs.
+    let names = if cfg!(target_os = "macos") {
+        r#"names=["DATABASE_URL", "HTTPS_PROXY", "PGPASSWORD", "PGSSLMODE", "TOKIO_WORKER_THREADS", "__CF_USER_TEXT_ENCODING"]"#
+    } else {
+        r#"names=["DATABASE_URL", "HTTPS_PROXY", "PGPASSWORD", "PGSSLMODE", "TOKIO_WORKER_THREADS"]"#
+    };
+    assert!(removed.ends_with(names), "{removed}");
+    // Only the file's settings were used: with `PGSSLMODE=require` from the environment,
+    // sqlx could not have connected to the test cluster (AC-07).
     assert!(
-        removed.ends_with(
-            r#"names=["DATABASE_URL", "HTTPS_PROXY", "PGPASSWORD", "TOKIO_WORKER_THREADS"]"#
-        ),
-        "{removed}"
+        log.iter()
+            .any(|line| line.contains("connected to PostgreSQL")),
+        "{log:#?}"
     );
     for line in &log {
         assert!(!line.contains("env-"), "{line}");
@@ -162,13 +86,84 @@ fn starts_from_the_config_file_with_the_environment_removed() {
 #[test]
 fn warns_when_others_can_read_the_config_file() {
     let dir = tempfile::tempdir().unwrap();
-    let (_running, log) = start(&write_config(&dir, CONFIG, 0o644));
+    let (_running, log) = start(&write_config(&dir, &config(), 0o644));
 
     assert!(
         log.iter()
             .any(|line| line.contains("WARN") && line.contains("can be read by other accounts")),
         "{log:#?}"
     );
+}
+
+#[test]
+fn exits_when_the_database_rejects_the_connection() {
+    let cluster = cluster();
+    let url = cluster.url_as(&cluster.create_database(), "postgres", "hunter2");
+    let dir = tempfile::tempdir().unwrap();
+    let output = run_to_exit(&write_config(
+        &dir,
+        &CONFIG.replace("{database_url}", &url),
+        0o600,
+    ));
+
+    assert_eq!(output.status.code(), Some(1));
+    let log = stdout(&output);
+    assert!(
+        log.contains("cannot connect to the database (database.url): ")
+            && log.contains("password authentication failed"),
+        "{log}"
+    );
+    assert!(!log.contains("hunter2"), "{log}");
+    assert!(!log.contains("listening on"), "{log}");
+}
+
+/// FR-CFG-02: a URL without a password must not send sqlx to ~/.pgpass, which it would
+/// find through the account database even with the environment cleared.
+#[test]
+fn a_url_without_a_password_reads_no_pgpass_file() {
+    let cluster = cluster();
+    let url = cluster
+        .url(&cluster.create_database())
+        .replace(&format!("&password={}", support::PASSWORD), "");
+    let dir = tempfile::tempdir().unwrap();
+    let output = run_to_exit(&write_config(
+        &dir,
+        &CONFIG.replace("{database_url}", &url),
+        0o600,
+    ));
+
+    // The cluster wants a password, so the empty one fails.
+    assert_eq!(output.status.code(), Some(1));
+    let log = stdout(&output);
+    assert!(log.contains("password authentication failed"), "{log}");
+    assert!(!log.contains("pgpass"), "{log}");
+}
+
+/// FR-CFG-04: sqlx logs connection parameters it does not know, with their values, so
+/// BuhTig refuses them before sqlx sees them.
+#[test]
+fn unknown_connection_parameters_are_refused_unseen() {
+    let cluster = cluster();
+    let url = format!(
+        "{}&sslpassword=hunter2",
+        cluster.url(&cluster.create_database())
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let output = buhtig_with(&write_config(
+        &dir,
+        &CONFIG.replace("{database_url}", &url),
+        0o600,
+    ))
+    .output()
+    .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("database.url: has a parameter that sqlx does not support"),
+        "{stderr}"
+    );
+    assert!(!format!("{stderr}{}", stdout(&output)).contains("hunter2"));
 }
 
 #[test]
