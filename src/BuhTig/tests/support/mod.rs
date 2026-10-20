@@ -15,7 +15,7 @@ use std::env;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
@@ -109,15 +109,24 @@ pub struct Running {
 impl Running {
     /// Waits for BuhTig to log a line that contains one of `messages`, and returns it.
     pub fn wait_for(&self, messages: &[&str]) -> String {
+        self.log_until(messages).pop().unwrap()
+    }
+
+    /// Waits for BuhTig to log a line that contains one of `messages`, and returns every
+    /// line it logged up to and including that one.
+    pub fn log_until(&self, messages: &[&str]) -> Vec<String> {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut log = Vec::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             match self.log.recv_timeout(remaining) {
-                Ok(line) if messages.iter().any(|message| line.contains(message)) => {
-                    return line;
+                Ok(line) => {
+                    let found = messages.iter().any(|message| line.contains(message));
+                    log.push(line);
+                    if found {
+                        return log;
+                    }
                 }
-                Ok(line) => log.push(line),
                 Err(_) => panic!("BuhTig did not log any of {messages:?}; it logged {log:#?}"),
             }
         }
@@ -125,16 +134,42 @@ impl Running {
 
     /// Sends `GET path` and returns the whole response.
     pub fn get(&self, path: &str) -> String {
-        let mut stream = TcpStream::connect(&self.address).unwrap();
-        write!(
-            stream,
+        self.request(&format!(
             "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
             self.address
-        )
-        .unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        response
+        ))
+    }
+
+    /// Sends a raw HTTP request, which should ask to close the connection, and returns
+    /// the whole response, with any bytes that are not UTF-8 replaced.
+    pub fn request(&self, request: &str) -> String {
+        let mut stream = TcpStream::connect(&self.address).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    /// Asks BuhTig to stop with SIGTERM, as a service manager would, and waits for it to
+    /// exit. Its log can still be read afterwards.
+    #[cfg(unix)]
+    pub fn terminate(&mut self) -> ExitStatus {
+        let kill = Command::new("kill")
+            .args(["-TERM", &self.child.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(kill.success(), "kill failed");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "BuhTig kept running after SIGTERM"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
@@ -338,6 +373,31 @@ impl Cluster {
         let name = format!("test_{}", NEXT.fetch_add(1, Ordering::Relaxed));
         self.psql("postgres", &format!("CREATE DATABASE {name}"));
         name
+    }
+
+    /// Makes a database unreachable, as if it had gone down: it takes no new connections,
+    /// and those it has are cut. The rest of the cluster carries on.
+    pub fn refuse_connections(&self, database: &str) {
+        // Committed first, so that nothing can reconnect once the sessions are cut.
+        self.psql(
+            "postgres",
+            &format!("ALTER DATABASE {database} WITH ALLOW_CONNECTIONS false"),
+        );
+        self.psql(
+            "postgres",
+            &format!(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity \
+                 WHERE datname = '{database}'"
+            ),
+        );
+    }
+
+    /// Makes a database reachable again after [`Cluster::refuse_connections`].
+    pub fn allow_connections(&self, database: &str) {
+        self.psql(
+            "postgres",
+            &format!("ALTER DATABASE {database} WITH ALLOW_CONNECTIONS true"),
+        );
     }
 
     /// The `database.url` of a database, as the `postgres` superuser.

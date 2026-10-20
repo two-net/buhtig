@@ -1,21 +1,30 @@
 mod config;
 mod db;
 mod entity;
+mod health;
 mod housekeeping;
+mod ui;
+mod web;
 
 use std::env;
 use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::time::Duration;
 
-use axum::{Router, routing::get};
 use tracing::{debug, error, info, warn};
 
 use crate::config::{Config, LogLevel};
+use crate::health::Health;
 
 /// Where the config file is read from unless `--config` says otherwise (FR-CFG-01).
 const DEFAULT_CONFIG_PATH: &str = "BuhTig.toml";
+
+/// How long requests in flight may take to finish once BuhTig is asked to stop
+/// (FR-OPS-05).
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 const USAGE: &str = "\
 Usage: BuhTig [--config <path>]
@@ -103,7 +112,7 @@ async fn serve(config: Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    let app = Router::new().route("/", get(|| async { "Hello World!" }));
+    let app = web::router(Arc::new(Health::new(db.clone())));
 
     let listen = config.server.listen;
     let listener = match tokio::net::TcpListener::bind(listen).await {
@@ -118,16 +127,32 @@ async fn serve(config: Config) -> ExitCode {
         listener.local_addr().unwrap_or(listen)
     );
     // FR-DB-08. Started after the line above, so that its first pass logs after it.
-    housekeeping::spawn(
-        db,
+    let housekeeping = housekeeping::spawn(
+        db.clone(),
         housekeeping::Settings {
             session_idle_timeout: config.auth.session_idle_timeout,
             session_max_age: config.auth.session_max_age,
             cache_retention: config.cache.retention,
         },
     );
-    match axum::serve(listener, app).await {
-        Ok(()) => ExitCode::SUCCESS,
+    let served = web::serve(
+        listener,
+        app,
+        web::shutdown_signal(SHUTDOWN_GRACE),
+        SHUTDOWN_GRACE,
+    )
+    .await;
+
+    // A pass cut short here rolls back, and the next start runs a new one.
+    housekeeping.abort();
+    // So that PostgreSQL sees BuhTig leave rather than lose its connections. A request
+    // still running past the grace period may hold one, so this does not wait for long.
+    let _ = tokio::time::timeout(Duration::from_secs(1), db.close()).await;
+    match served {
+        Ok(()) => {
+            info!("stopped");
+            ExitCode::SUCCESS
+        }
         Err(error) => {
             error!("server stopped: {error}");
             ExitCode::FAILURE

@@ -4,6 +4,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
 use sea_orm::entity::prelude::ChronoUtc;
 use sea_orm::sea_query::{Func, Query};
@@ -30,6 +31,10 @@ const MIGRATION_LOCK: i64 = 0x4275_6854_6967;
 /// The advisory lock that lets only one BuhTig process do housekeeping at a time
 /// (A-07). The key is "BuhTigH" in ASCII.
 pub(crate) const HOUSEKEEPING_LOCK: i64 = 0x42_7568_5469_6748;
+
+/// How long a request waits for a database connection. While the database is
+/// unreachable, requests thus fail within seconds rather than sqlx's default 30 (FR-DB-09).
+pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Why BuhTig cannot use the database. No message contains the connection string.
 #[derive(Debug)]
@@ -128,6 +133,7 @@ pub async fn connect(config: &DatabaseConfig) -> Result<DatabaseConnection, Erro
 
     let pool = PgPoolOptions::new()
         .max_connections(config.max_connections)
+        .acquire_timeout(ACQUIRE_TIMEOUT)
         .connect_with(options)
         .await
         .map_err(Error::Connect)?;
