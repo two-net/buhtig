@@ -40,7 +40,10 @@ url = "postgres://buhtig:CHANGE-ME@localhost:5432/buhtig"
 # with the callback URL {server.public_url}/-/auth/callback.
 client_id = "CHANGE-ME"
 client_secret = "CHANGE-ME"
-# Outbound proxy for requests to GitHub. By default there is none.
+# Outbound proxy for requests to GitHub, with its user name and password in
+# the URL if it needs them. By default there is none, and BuhTig ignores
+# HTTPS_PROXY and the other proxy variables either way. BuhTig trusts only the
+# root certificates built into it, so a proxy that inspects TLS will not work.
 # proxy_url = "http://proxy.example.com:3128"
 
 [security]

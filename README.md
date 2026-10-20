@@ -55,6 +55,13 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   its default.
 - **TLS:** terminate HTTPS in front of BuhTig, for example in a reverse proxy. BuhTig
   itself listens on plain HTTP at `server.listen`.
+- **GitHub:** BuhTig only reads from GitHub, through `api.github.com` over HTTPS. It
+  checks GitHub's certificate against the root certificates built into it, not the host's.
+  Requests go through `github.proxy_url` if it is set, and never through a proxy named in
+  the environment, so a proxy that inspects TLS does not work. Visitors' requests carry
+  the OAuth app's client ID and secret, which earn a higher rate limit than anonymous
+  requests. GitHub ignores a client ID it does not know, so check `github.client_id` if
+  visitors run into the rate limit soon.
 - **Health:** `GET /-/health` answers `200 ok` while BuhTig can reach its database, and
   `503 unavailable` otherwise. During a database outage, pages show a short "try again"
   notice. BuhTig recovers on its own when the database is back.

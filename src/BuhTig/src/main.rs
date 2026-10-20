@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod entity;
+mod github;
 mod health;
 mod housekeeping;
 mod ui;

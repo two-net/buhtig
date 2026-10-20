@@ -6,8 +6,12 @@ edition = "2024"
 [dependencies]
 axum = "0.8.9"
 base64 = "0.22.1"
+# The client for GitHub's API. Its TLS is the rustls and ring that sqlx already uses,
+# configured in `github::https`, so neither aws-lc-rs nor the host's CA files are needed.
+reqwest = { version = "0.13.5", default-features = false, features = ["gzip", "rustls-no-provider"] }
 # The built Angular UI, embedded in release builds and read from disk in debug ones.
 rust-embed = { version = "8.13.0", features = ["mime-guess"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 # Pinned exactly: schema sync, which migrates the database at startup, is exempt from
 # SeaORM's semver guarantees. Upgrade deliberately and rerun tests/migration.rs.
 sea-orm = { version = "=2.0.4", default-features = false, features = [
@@ -19,11 +23,13 @@ sea-orm = { version = "=2.0.4", default-features = false, features = [
     "with-json",
 ] }
 semver = "1.0.28"
+serde_json = "1.0.154"
 tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
 url = "2.5.8"
+webpki-roots = "1.0.10"
 
 [dev-dependencies]
 tempfile = "3.27.0"

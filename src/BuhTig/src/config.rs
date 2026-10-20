@@ -131,6 +131,11 @@ pub enum LogLevel {
 pub struct Secret<T>(T);
 
 impl<T> Secret<T> {
+    /// Wraps a sensitive value from elsewhere, such as a decrypted GitHub token.
+    pub fn new(value: T) -> Self {
+        Secret(value)
+    }
+
     pub fn expose(&self) -> &T {
         &self.0
     }
