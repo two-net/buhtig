@@ -102,9 +102,27 @@ pub struct Running {
     child: Child,
     /// Where it listens, such as `127.0.0.1:52817`.
     pub address: String,
+    /// What it writes to stdout and stderr, line by line.
+    log: mpsc::Receiver<String>,
 }
 
 impl Running {
+    /// Waits for BuhTig to log a line that contains one of `messages`, and returns it.
+    pub fn wait_for(&self, messages: &[&str]) -> String {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut log = Vec::new();
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.log.recv_timeout(remaining) {
+                Ok(line) if messages.iter().any(|message| line.contains(message)) => {
+                    return line;
+                }
+                Ok(line) => log.push(line),
+                Err(_) => panic!("BuhTig did not log any of {messages:?}; it logged {log:#?}"),
+            }
+        }
+    }
+
     /// Sends `GET path` and returns the whole response.
     pub fn get(&self, path: &str) -> String {
         let mut stream = TcpStream::connect(&self.address).unwrap();
@@ -136,26 +154,33 @@ pub fn start(config: &Path) -> (Running, Vec<String>) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let stdout = child.stdout.take().unwrap();
+    let (lines, received) = mpsc::channel();
+    // Stderr too, so that a panic shows up in the log.
+    let pipes: [Box<dyn Read + Send>; 2] = [
+        Box::new(child.stdout.take().unwrap()),
+        Box::new(child.stderr.take().unwrap()),
+    ];
+    for pipe in pipes {
+        let lines = lines.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(pipe).lines() {
+                if lines.send(line.unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
     let mut running = Running {
         child,
         address: String::new(),
+        log: received,
     };
-
-    let (lines, received) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            if lines.send(line.unwrap()).is_err() {
-                break;
-            }
-        }
-    });
 
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut log = Vec::new();
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        match received.recv_timeout(remaining) {
+        match running.log.recv_timeout(remaining) {
             Ok(line) => {
                 let address = line
                     .split_once(LISTENING)
@@ -334,7 +359,25 @@ impl Cluster {
     }
 
     pub fn try_psql(&self, database: &str, sql: &str) -> Result<String, String> {
-        let output = Command::new(self.bin.join("psql"))
+        let output = self.psql_command(database, sql).output().unwrap();
+        if output.status.success() {
+            Ok(stdout(&output).trim_end().to_owned())
+        } else {
+            Err(stderr(&output))
+        }
+    }
+
+    /// Runs SQL in the background, for example to hold a lock while it sleeps.
+    pub fn spawn_psql(&self, database: &str, sql: &str) -> Child {
+        self.psql_command(database, sql)
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn psql_command(&self, database: &str, sql: &str) -> Command {
+        let mut command = Command::new(self.bin.join("psql"));
+        command
             .args(["--no-psqlrc", "--no-align", "--tuples-only"])
             .args(["--set", "ON_ERROR_STOP=1"])
             .arg("--host")
@@ -342,14 +385,8 @@ impl Cluster {
             .args(["--port", &PORT.to_string(), "--username", "postgres"])
             .args(["--dbname", database, "--command", sql])
             .env_clear()
-            .env("PGPASSWORD", PASSWORD)
-            .output()
-            .unwrap();
-        if output.status.success() {
-            Ok(stdout(&output).trim_end().to_owned())
-        } else {
-            Err(stderr(&output))
-        }
+            .env("PGPASSWORD", PASSWORD);
+        command
     }
 
     /// Everything about a database's schema that migration may change: columns,
