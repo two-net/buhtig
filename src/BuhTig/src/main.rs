@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod entity;
+mod housekeeping;
 
 use std::env;
 use std::ffi::OsString;
@@ -102,9 +103,6 @@ async fn serve(config: Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    // Held open for the features that read and write the database (#4, #6, #22, …).
-    let _db = db;
-
     let app = Router::new().route("/", get(|| async { "Hello World!" }));
 
     let listen = config.server.listen;
@@ -118,6 +116,15 @@ async fn serve(config: Config) -> ExitCode {
     info!(
         "listening on http://{}",
         listener.local_addr().unwrap_or(listen)
+    );
+    // FR-DB-08. Started after the line above, so that its first pass logs after it.
+    housekeeping::spawn(
+        db,
+        housekeeping::Settings {
+            session_idle_timeout: config.auth.session_idle_timeout,
+            session_max_age: config.auth.session_max_age,
+            cache_retention: config.cache.retention,
+        },
     );
     match axum::serve(listener, app).await {
         Ok(()) => ExitCode::SUCCESS,

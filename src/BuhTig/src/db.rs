@@ -27,6 +27,10 @@ const MIN_SERVER_VERSION: u32 = 150000;
 /// The key is "BuhTig" in ASCII.
 const MIGRATION_LOCK: i64 = 0x4275_6854_6967;
 
+/// The advisory lock that lets only one BuhTig process do housekeeping at a time
+/// (A-07). The key is "BuhTigH" in ASCII.
+pub(crate) const HOUSEKEEPING_LOCK: i64 = 0x42_7568_5469_6748;
+
 /// Why BuhTig cannot use the database. No message contains the connection string.
 #[derive(Debug)]
 pub enum Error {
@@ -171,23 +175,25 @@ pub async fn migrate(db: &DatabaseConnection) -> Result<Migration, Error> {
 
 /// Holds the migration lock until `txn` ends. A second BuhTig process waits here until
 /// the first has committed its migration (FR-DB-06).
-///
-/// CON-03 exception: the ORM has no API for advisory locks, so this calls PostgreSQL's
-/// lock functions, through the ORM's query builder.
 async fn lock(txn: &DatabaseTransaction) -> Result<(), DbErr> {
-    let locked: bool = txn
-        .query_one(
-            Query::select().expr(Func::cust("pg_try_advisory_xact_lock").arg(MIGRATION_LOCK)),
-        )
-        .await?
-        .ok_or_else(|| DbErr::RecordNotFound("pg_try_advisory_xact_lock".to_owned()))?
-        .try_get_by_index(0)?;
-    if !locked {
+    if !try_lock(txn, MIGRATION_LOCK).await? {
         info!("waiting for another BuhTig process to finish migrating the database");
         txn.execute(Query::select().expr(Func::cust("pg_advisory_xact_lock").arg(MIGRATION_LOCK)))
             .await?;
     }
     Ok(())
+}
+
+/// Takes the advisory lock `key` until `txn` ends, unless another process holds it, in
+/// which case this returns false at once.
+///
+/// CON-03 exception: the ORM has no API for advisory locks, so this and [`lock`] call
+/// PostgreSQL's lock functions, through the ORM's query builder.
+pub(crate) async fn try_lock(txn: &DatabaseTransaction, key: i64) -> Result<bool, DbErr> {
+    txn.query_one(Query::select().expr(Func::cust("pg_try_advisory_xact_lock").arg(key)))
+        .await?
+        .ok_or_else(|| DbErr::RecordNotFound("pg_try_advisory_xact_lock".to_owned()))?
+        .try_get_by_index(0)
 }
 
 /// Decides what migration does from the versions recorded in the database. A database

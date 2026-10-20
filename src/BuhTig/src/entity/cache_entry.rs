@@ -21,6 +21,9 @@ pub struct Model {
     pub user: BelongsTo<Option<super::user::Entity>>,
     #[sea_orm(column_type = "JsonBinary")]
     pub data: Json,
+    /// Also updated when GitHub confirms that the data is unchanged (FR-DATA-09):
+    /// housekeeping deletes entries fetched more than `cache.retention` ago by this
+    /// column, never by `expires_at` (FR-DATA-05, FR-DATA-12).
     pub fetched_at: DateTimeUtc,
     pub expires_at: DateTimeUtc,
     /// GitHub's validator, for conditional requests (FR-DATA-09).

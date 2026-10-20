@@ -5,6 +5,10 @@ use sea_orm::entity::prelude::*;
 
 use super::ResourceKind;
 
+/// How many entries housekeeping keeps per user, the newest by `last_viewed_at`. A user
+/// may have more until the next pass, so reads must limit themselves too.
+pub const KEPT_PER_USER: u64 = 20;
+
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "history_entries")]
