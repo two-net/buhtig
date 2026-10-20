@@ -1,0 +1,74 @@
+# BuhTig configuration
+#
+# BuhTig reads all of its settings from this one file when it starts, and from
+# nowhere else: not from environment variables, .env files or secret stores.
+# Restart BuhTig after changing the file.
+#
+# Copy this file to BuhTig.toml in the directory BuhTig runs from, or pass its
+# path with --config. It holds the database password, the GitHub client secret
+# and the encryption key, so make it readable only by the account that runs
+# BuhTig:  chmod 600 BuhTig.toml
+#
+# The five required keys are set below. Every other key is commented out and
+# shows its default. Durations are a whole number followed by s (seconds),
+# m (minutes), h (hours) or d (days).
+
+[server]
+# External base URL, used for the sign-in callback and links. It must use
+# https:// unless the host is localhost.
+public_url = "https://buhtig.example.com"
+# Address and port BuhTig listens on.
+# listen = "0.0.0.0:8080"
+
+[database]
+# PostgreSQL connection string, including the password.
+url = "postgres://buhtig:CHANGE-ME@localhost:5432/buhtig"
+# Maximum number of open database connections.
+# max_connections = 10
+
+[github]
+# Client ID and client secret of BuhTig's GitHub OAuth app. Register the app
+# with the callback URL {server.public_url}/-/auth/callback.
+client_id = "CHANGE-ME"
+client_secret = "CHANGE-ME"
+# Outbound proxy for requests to GitHub. By default there is none.
+# proxy_url = "http://proxy.example.com:3128"
+
+[security]
+# Random secret of at least 256 bits in base64, used to encrypt stored GitHub
+# credentials. Generate one with:  openssl rand -base64 32
+# Changing it signs users out and asks them to enter their tokens again.
+encryption_key = "CHANGE-ME"
+
+[access]
+# "public" lets anyone view public dashboards; "private" requires sign-in for
+# every page.
+# mode = "public"
+# GitHub logins allowed to sign in, ignoring case. Empty means anyone.
+# allowed_users = []
+
+[auth]
+# A session ends after this long without use...
+# session_idle_timeout = "7d"
+# ...and in any case this long after sign-in.
+# session_max_age = "30d"
+
+[cache]
+# How long cached GitHub data counts as fresh.
+# ttl = "15m"
+# Cached data fetched longer ago than this is deleted.
+# retention = "30d"
+
+[limits]
+# Maximum number of repositories analyzed per organization.
+# org_repositories = 1000
+# Dashboard loads per visitor per hour that need a fetch from GitHub.
+# visitor_fetches_per_hour = 30
+
+[ui]
+# false turns off non-essential motion for everyone.
+# animations = true
+
+[log]
+# "debug", "info", "warn" or "error".
+# level = "info"

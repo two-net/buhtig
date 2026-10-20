@@ -1,1 +1,3 @@
 /target
+# The real config file holds secrets; only BuhTig.example.toml is committed.
+/BuhTig.toml
