@@ -62,6 +62,10 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   the OAuth app's client ID and secret, which earn a higher rate limit than anonymous
   requests. GitHub ignores a client ID it does not know, so check `github.client_id` if
   visitors run into the rate limit soon.
+- **Cache:** BuhTig keeps the GitHub data it shows in the database, and serves it for
+  `cache.ttl` before it asks GitHub again. While GitHub is unreachable or rate-limited,
+  dashboards show the latest data they have, with its age. Data fetched with a user's
+  personal access token is shown only to that user.
 - **Health:** `GET /-/health` answers `200 ok` while BuhTig can reach its database, and
   `503 unavailable` otherwise. During a database outage, pages show a short "try again"
   notice. BuhTig recovers on its own when the database is back.

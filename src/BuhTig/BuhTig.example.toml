@@ -66,7 +66,8 @@ encryption_key = "CHANGE-ME"
 # session_max_age = "30d"
 
 [cache]
-# How long cached GitHub data counts as fresh.
+# How long cached GitHub data counts as fresh. While GitHub is unreachable or
+# rate-limited, BuhTig shows older data, with its age.
 # ttl = "15m"
 # Cached data fetched longer ago than this is deleted.
 # retention = "30d"

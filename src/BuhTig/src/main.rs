@@ -1,3 +1,4 @@
+mod cache;
 mod config;
 mod db;
 mod entity;
@@ -6,6 +7,13 @@ mod health;
 mod housekeeping;
 mod ui;
 mod web;
+
+// The integration tests' PostgreSQL cluster, for unit tests that need a database.
+#[cfg(test)]
+#[path = "../tests/support/cluster.rs"]
+mod test_cluster;
+#[cfg(test)]
+mod test_log;
 
 use std::env;
 use std::ffi::OsString;

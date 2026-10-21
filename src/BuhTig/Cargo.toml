@@ -24,7 +24,7 @@ sea-orm = { version = "=2.0.4", default-features = false, features = [
 ] }
 semver = "1.0.28"
 serde_json = "1.0.154"
-tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 toml = "1.1.6"
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"

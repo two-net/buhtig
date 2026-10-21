@@ -33,7 +33,7 @@ pub struct Model {
 impl ActiveModelBehavior for ActiveModel {}
 
 /// Who a cache entry may be served to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Scope {
     /// Public data fetched without a PAT, which anyone may see.
     Shared,

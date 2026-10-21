@@ -18,7 +18,7 @@
 
 #![allow(
     dead_code,
-    reason = "the cache, dashboards, sign-in and tokens that call GitHub are still to come (#6, #15, #22, #23)"
+    reason = "the dashboards, sign-in and tokens that call GitHub are still to come (#15, #22, #23)"
 )]
 
 mod https;
@@ -129,6 +129,25 @@ pub enum Reply<T> {
     NotModified,
     /// GitHub is still computing this statistic; ask again later (FR-REPO-10).
     Computing,
+}
+
+impl<T> Reply<T> {
+    /// The same reply, with `f` applied to its data.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Reply<U> {
+        match self {
+            Reply::Fresh {
+                data,
+                etag,
+                redirected,
+            } => Reply::Fresh {
+                data: f(data),
+                etag,
+                redirected,
+            },
+            Reply::NotModified => Reply::NotModified,
+            Reply::Computing => Reply::Computing,
+        }
+    }
 }
 
 /// The items of a paginated list.
@@ -849,10 +868,9 @@ pub mod stub {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
     use super::stub::{Stub, answer, client};
     use super::*;
+    use crate::test_log::capture_log;
 
     /// `client-id:client-secret` in base64.
     const APP: &str = "Basic Y2xpZW50LWlkOmNsaWVudC1zZWNyZXQ=";
@@ -880,29 +898,6 @@ mod tests {
 
     fn is_fresh<T>(reply: &Result<Reply<T>, Error>) -> bool {
         matches!(reply, Ok(Reply::Fresh { .. }))
-    }
-
-    /// Collects what is logged on this thread while the guard lives.
-    fn capture_log() -> (Arc<Mutex<Vec<u8>>>, tracing::subscriber::DefaultGuard) {
-        struct Writer(Arc<Mutex<Vec<u8>>>);
-        impl io::Write for Writer {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(bytes);
-                Ok(bytes.len())
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let writer = log.clone();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_ansi(false)
-            .with_writer(move || Writer(writer.clone()))
-            .finish();
-        (log, tracing::subscriber::set_default(subscriber))
     }
 
     #[test]
