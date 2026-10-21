@@ -1,24 +1,34 @@
 import { TestBed } from '@angular/core/testing';
-import { App } from './app';
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { provideRouter, withComponentInputBinding } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
+import { routes } from './app.routes';
 
-describe('App', () => {
-  beforeEach(async () => {
-    await TestBed.configureTestingModule({
-      imports: [App],
-    })
-      .compileComponents();
+describe('routes', () => {
+  beforeEach(() => {
+    TestBed.configureTestingModule({
+      providers: [
+        provideRouter(routes, withComponentInputBinding()),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+      ],
+    });
   });
 
-  it('should create the app', () => {
-    const fixture = TestBed.createComponent(App);
-    const app = fixture.componentInstance;
-    expect(app).toBeTruthy();
+  it('shows the search box on the home page', async () => {
+    const harness = await RouterTestingHarness.create('/');
+    const page = harness.routeNativeElement!;
+    expect(page.querySelector('h1')?.textContent).toBe('BuhTig');
+    expect(page.querySelector('form[role="search"] input')).not.toBeNull();
   });
 
-  it('should render title', async () => {
-    const fixture = TestBed.createComponent(App);
-    await fixture.whenStable();
-    const compiled = fixture.nativeElement as HTMLElement;
-    expect(compiled.querySelector('h1')?.textContent).toContain('Hello, BuhTig');
+  it('has a dashboard for each repository and organization (FR-NAV-01)', async () => {
+    const harness = await RouterTestingHarness.create();
+    const heading = () => harness.routeNativeElement?.querySelector('h1')?.textContent?.trim();
+    await harness.navigateByUrl('/vercel/next.js');
+    expect(heading()).toBe('vercel/next.js');
+    await harness.navigateByUrl('/angular');
+    expect(heading()).toBe('angular');
   });
 });

@@ -1,0 +1,23 @@
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
+input {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 0.75rem 1rem;
+  font: inherit;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  font: inherit;
+}
+
+p {
+  flex-basis: 100%;
+  margin: 0;
+}

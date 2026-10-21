@@ -1,3 +1,4 @@
+mod accounts;
 mod cache;
 mod config;
 mod db;
@@ -26,6 +27,7 @@ use std::time::Duration;
 
 use tracing::{debug, error, info, warn};
 
+use crate::cache::Cache;
 use crate::config::{Config, LogLevel};
 use crate::health::Health;
 
@@ -122,7 +124,15 @@ async fn serve(config: Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    let app = web::router(Arc::new(Health::new(db.clone())));
+    let github = match github::Client::new(&config.github) {
+        Ok(github) => github,
+        Err(error) => {
+            error!("{error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let cache = Cache::new(db.clone(), Arc::new(github), &config.cache, &config.limits);
+    let app = web::router(Arc::new(Health::new(db.clone())), Arc::new(cache));
 
     let listen = config.server.listen;
     let listener = match tokio::net::TcpListener::bind(listen).await {

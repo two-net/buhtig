@@ -1,0 +1,21 @@
+<form role="search" novalidate (submit)="search($event)">
+  <input
+    #box
+    type="search"
+    name="q"
+    aria-label="GitHub repository or organization URL"
+    placeholder="Enter a GitHub repository or organization URL"
+    autocomplete="off"
+    autocapitalize="off"
+    spellcheck="false"
+    enterkeyhint="go"
+    [value]="query()"
+    [attr.aria-invalid]="message() ? 'true' : null"
+    [attr.aria-describedby]="message() ? 'search-message' : null"
+    (input)="edit(box.value)"
+  />
+  <button type="submit">Show dashboard</button>
+  @if (message(); as message) {
+    <p id="search-message" role="alert">{{ message }}</p>
+  }
+</form>

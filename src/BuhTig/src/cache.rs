@@ -804,7 +804,7 @@ fn value_list(value: Value) -> Option<List> {
 mod tests {
     use std::future::Future;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use axum::body::Bytes;
     use axum::http::header::{AUTHORIZATION, IF_NONE_MATCH};
@@ -987,6 +987,17 @@ mod tests {
             let mut connections = Vec::new();
             for _ in 0..12 {
                 connections.push(pool.acquire().await.unwrap());
+            }
+        }
+
+        /// Waits for a request spawned before to lead a fetch, so that the next one waits
+        /// for it. How long a spawned request takes to start varies with the load on the
+        /// machine.
+        async fn leading(&self) {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while self.cache.flights().is_empty() {
+                assert!(Instant::now() < deadline, "no request leads a fetch");
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
         }
 
@@ -1509,7 +1520,7 @@ mod tests {
         setup.answer(|_| Err(github::Error::Unreachable("connection refused".to_owned())));
         let repo = path(&["repos", "owner", "repo"]);
         let leader = tokio::spawn(setup.spawn_get(visitor(), &repo));
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        setup.leading().await;
         let follower = setup
             .cache
             .get(&signed_in("sign-in-b"), DASHBOARD, &repo)
@@ -1530,7 +1541,7 @@ mod tests {
         });
         let other = path(&["repos", "owner", "other"]);
         let leader = tokio::spawn(setup.spawn_get(signed_in("sign-in-a"), &other));
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        setup.leading().await;
         let follower = setup
             .cache
             .get(&signed_in("sign-in-b"), DASHBOARD, &other)
@@ -1554,7 +1565,7 @@ mod tests {
         });
         let repo = path(&["repos", "owner", "secret"]);
         let leader = tokio::spawn(setup.spawn_get(signed_in("sign-in-a"), &repo));
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        setup.leading().await;
         let follower = setup.cache.get(&visitor(), DASHBOARD, &repo).await;
         assert_eq!(data(leader.await.unwrap()).data["name"], "secret");
         assert_eq!(github_error(follower), github::Error::NotFound);

@@ -20,6 +20,8 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
+use crate::accounts;
+use crate::cache::Cache;
 use crate::health::{self, Health};
 use crate::ui::{self, Ui};
 
@@ -27,9 +29,13 @@ use crate::ui::{self, Ui};
 /// what happened and what to do (NFR-UX-06), and nothing about why (NFR-SEC-09).
 const UNAVAILABLE: &str = include_str!("unavailable.html");
 
-pub fn router(health: Arc<Health>) -> Router {
+pub fn router(health: Arc<Health>, cache: Arc<Cache>) -> Router {
     Router::new()
         .route("/-/health", get(health::check))
+        .route(
+            "/-/api/accounts/{name}",
+            get(accounts::kind).with_state(cache),
+        )
         .fallback(get(page))
         .with_state(health)
         // Outermost, so that every response is logged, whichever part answered.
