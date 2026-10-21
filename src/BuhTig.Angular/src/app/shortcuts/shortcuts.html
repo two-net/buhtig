@@ -1,0 +1,11 @@
+@if (shortcuts().length > 0) {
+  <nav aria-label="Your dashboards">
+    <ul>
+      @for (shortcut of shortcuts(); track shortcut.kind + shortcut.name) {
+        <li>
+          <a [routerLink]="'/' + shortcut.name">{{ shortcut.name }}</a>
+        </li>
+      }
+    </ul>
+  </nav>
+}

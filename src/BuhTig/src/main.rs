@@ -6,6 +6,7 @@ mod entity;
 mod github;
 mod health;
 mod housekeeping;
+mod session;
 mod ui;
 mod visitors;
 mod web;

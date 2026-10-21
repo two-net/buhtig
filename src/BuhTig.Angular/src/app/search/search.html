@@ -13,6 +13,7 @@
     [attr.aria-invalid]="message() ? 'true' : null"
     [attr.aria-describedby]="message() ? 'search-message' : null"
     (input)="edit(box.value)"
+    (keydown.escape)="edit('')"
   />
   <button type="submit">Show dashboard</button>
   @if (message(); as message) {

@@ -24,6 +24,7 @@ describe('Search', () => {
   afterEach(() => {
     http.verify();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   const element = () => fixture.nativeElement as HTMLElement;
@@ -132,5 +133,80 @@ describe('Search', () => {
     await new Promise((resolve) => setTimeout(resolve));
     expect(message()).toBeUndefined();
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  describe('keyboard (FR-SRCH-07)', () => {
+    function press(target: EventTarget, key: string, init: KeyboardEventInit = {}): KeyboardEvent {
+      const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
+      target.dispatchEvent(event);
+      return event;
+    }
+
+    /** A new search box, on a desktop or a touch screen. */
+    async function load(focusOnDesktop: boolean, desktop: boolean): Promise<HTMLInputElement> {
+      vi.stubGlobal('matchMedia', () => ({ matches: desktop }));
+      const loaded = TestBed.createComponent(Search);
+      loaded.componentRef.setInput('focusOnDesktop', focusOnDesktop);
+      await loaded.whenStable();
+      return (loaded.nativeElement as HTMLElement).querySelector('input')!;
+    }
+
+    it('focuses the input once it is shown on desktop, if asked to', async () => {
+      const box = await load(true, true);
+      expect(document.activeElement).toBe(box);
+    });
+
+    it('does not focus the input on a touch screen, or unless asked to', async () => {
+      for (const box of [await load(true, false), await load(false, true), input()]) {
+        expect(document.activeElement).not.toBe(box);
+      }
+    });
+
+    it('focuses the input on /, without typing it', () => {
+      const event = press(document.body, '/');
+      expect(document.activeElement).toBe(input());
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('leaves / to other fields, to the input itself, and to shortcuts', () => {
+      const other = document.createElement('textarea');
+      document.body.append(other);
+      other.focus();
+      expect(press(other, '/').defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(other);
+      other.remove();
+
+      for (const modifier of ['ctrlKey', 'metaKey', 'altKey']) {
+        expect(press(document.body, '/', { [modifier]: true }).defaultPrevented, modifier).toBe(
+          false,
+        );
+      }
+      expect(document.activeElement).not.toBe(input());
+
+      input().focus();
+      expect(press(input(), '/').defaultPrevented).toBe(false);
+    });
+
+    it('clears the input and its message on Esc', async () => {
+      search('gitlab.com/owner/repo');
+      await fixture.whenStable();
+      expect(message()).toBeDefined();
+      press(input(), 'Escape');
+      await fixture.whenStable();
+      expect(input().value).toBe('');
+      expect(message()).toBeUndefined();
+      expect(input().hasAttribute('aria-invalid')).toBe(false);
+    });
+
+    it('ignores what it learns about an account once Esc has cleared the input', async () => {
+      search('octocat');
+      const request = http.expectOne('/-/api/accounts/octocat');
+      press(input(), 'Escape');
+      request.flush({ type: 'user' });
+      await fixture.whenStable();
+      await new Promise((resolve) => setTimeout(resolve));
+      expect(message()).toBeUndefined();
+      expect(navigate).not.toHaveBeenCalled();
+    });
   });
 });

@@ -23,6 +23,7 @@ use tracing::{error, info, warn};
 use crate::accounts;
 use crate::cache::Cache;
 use crate::health::{self, Health};
+use crate::session;
 use crate::ui::{self, Ui};
 
 /// The page shown in place of BuhTig's own while its database is unreachable. It says
@@ -36,6 +37,8 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>) -> Router {
             "/-/api/accounts/{name}",
             get(accounts::kind).with_state(cache),
         )
+        .route("/-/api/session", get(session::current))
+        .route("/-/api/shortcuts", get(session::shortcuts))
         .fallback(get(page))
         .with_state(health)
         // Outermost, so that every response is logged, whichever part answered.

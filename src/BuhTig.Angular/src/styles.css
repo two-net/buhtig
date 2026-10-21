@@ -1,1 +1,78 @@
-/* You can add global styles to this file, and also import other style files */
+/*
+ * BuhTig's palette: neutrals and one accent, in light and dark themes that follow the
+ * operating system (UI-01, UI-07). Text is at least 4.5:1 against the backgrounds it sits
+ * on, and lines that mark controls at least 3:1 (NFR-UX-02). Provisional until the visual
+ * identity is designed (#34).
+ */
+:root {
+  color-scheme: light dark;
+  --background: #ffffff;
+  --raised: #f4f3f8;
+  --text: #1c1b22;
+  --muted: #5c5a69;
+  --line: #85828f;
+  --accent: #5b3fc4;
+  --on-accent: #ffffff;
+  --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #16151b;
+    --raised: #211f28;
+    --text: #ecebf1;
+    --muted: #a8a6b4;
+    --line: #7a7786;
+    --accent: #b2a3ff;
+    --on-accent: #16151b;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.5;
+}
+
+a {
+  color: var(--accent);
+}
+
+/* Every control shows where the keyboard is (NFR-UX-03). */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* For text that only assistive technology needs. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The slim header of BuhTig's own pages, with the wordmark leading home. */
+.page-header {
+  padding: 1rem;
+}
+
+.page-header a {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+/* The text of BuhTig's own pages, such as About and Privacy. */
+.prose {
+  max-width: 40rem;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}

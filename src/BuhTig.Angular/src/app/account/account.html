@@ -1,0 +1,33 @@
+@if (user(); as user) {
+  <button
+    #button
+    type="button"
+    class="avatar"
+    [attr.aria-expanded]="open()"
+    [attr.aria-controls]="open() ? 'account-menu' : null"
+    (click)="toggle()"
+  >
+    <img [src]="user.avatar_url" alt="" width="32" height="32" />
+    <span class="visually-hidden">Account menu, {{ user.login }}</span>
+  </button>
+  @if (open()) {
+    <div id="account-menu" class="menu">
+      <p>
+        @if (user.name) {
+          <strong>{{ user.name }}</strong>
+        }
+        <span>{{ user.login }}</span>
+      </p>
+      <ul>
+        <li><a routerLink="/-/settings">Settings</a></li>
+        <li>
+          <form method="post" action="/-/auth/sign-out">
+            <button type="submit">Sign out</button>
+          </form>
+        </li>
+      </ul>
+    </div>
+  }
+} @else if (user() === null) {
+  <a class="sign-in" [href]="signIn()">Sign in</a>
+}
