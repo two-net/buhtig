@@ -2,6 +2,7 @@ import {
   Component,
   ElementRef,
   afterNextRender,
+  computed,
   inject,
   input,
   signal,
@@ -9,13 +10,13 @@ import {
 } from '@angular/core';
 import { Router } from '@angular/router';
 import { Accounts } from './accounts';
-import { problemMessage, userMessage } from './messages';
-import { dashboardPath, parse } from './parse';
+import { problemMessage, resourceMessage, userMessage } from './messages';
+import { dashboardPath, isUnfinished, parse } from './parse';
 
 /**
- * The search box: one input that takes a GitHub repository or organization URL, and opens its
- * dashboard on Enter or "Show dashboard" (SRS §4.1). `/` focuses it and Esc clears it
- * (FR-SRCH-07).
+ * The search box: one input that takes a GitHub repository or organization URL, says what it
+ * recognizes as the user types (FR-SRCH-09), and opens its dashboard on Enter or "Show
+ * dashboard" (SRS §4.1). `/` focuses it and Esc clears it (FR-SRCH-07).
  */
 @Component({
   selector: 'app-search',
@@ -32,7 +33,19 @@ export class Search {
   readonly focusOnDesktop = input(false);
 
   protected readonly query = signal('');
-  /** Why the input opens no dashboard, shown below it (FR-SRCH-04). */
+  /**
+   * What the input names, or why it is wrong, shown below it as the user types (FR-SRCH-09).
+   * Nothing while it is empty or the beginning of a URL, so that typing one shows no error. It
+   * is worked out on each keystroke, well within 100 ms (NFR-PERF-06).
+   */
+  protected readonly hint = computed(() => {
+    const parsed = parse(this.query());
+    if (parsed.ok) {
+      return resourceMessage(parsed.resource);
+    }
+    return isUnfinished(this.query()) ? '' : problemMessage(parsed.problem);
+  });
+  /** Why the input opens no dashboard, shown in place of the hint once it is searched for. */
   protected readonly message = signal<string | undefined>(undefined);
   /** Counts edits and searches, so that an account lookup that ends after either is ignored. */
   private attempt = 0;

@@ -1,4 +1,4 @@
-import { Parsed, Problem, Resource, dashboardPath, parse } from './parse';
+import { Parsed, Problem, Resource, dashboardPath, isUnfinished, parse } from './parse';
 
 function repository(owner: string, repo: string): Parsed {
   return { ok: true, resource: { kind: 'repository', owner, repo } };
@@ -213,6 +213,35 @@ describe('parse', () => {
       ['ftp://github.com/owner/repo', 'file:///owner/repo'],
       problem({ kind: 'unrecognized' }),
     );
+  });
+});
+
+// FR-SRCH-09.
+describe('isUnfinished', () => {
+  it('holds for the beginnings of the forms in Table 4-1, in any letter case', () => {
+    for (const input of [
+      '',
+      '  ',
+      'https:',
+      'https://',
+      'https://github.c',
+      'HTTPS://GitHub.com/',
+      'http://www.',
+      'www.github.com/',
+      'github.',
+      'ssh://git@',
+      'git@github.com:',
+      'github.com/orgs',
+      ' orgs/ ',
+    ]) {
+      expect(isUnfinished(input), input).toBe(true);
+    }
+  });
+
+  it('does not hold once the input has gone wrong or names something', () => {
+    for (const input of ['gitlab.com/', 'github.com/owner', 'ftp://', 'github.com/-x', 'acme/']) {
+      expect(isUnfinished(input), input).toBe(false);
+    }
   });
 });
 

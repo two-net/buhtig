@@ -26,6 +26,19 @@ const ACCOUNT = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,38}$/;
 /** A repository's name: up to 100 letters, digits, hyphens, underscores and periods. */
 const REPOSITORY = /^[A-Za-z0-9._-]{1,100}$/;
 
+/** How the forms of SRS Table 4-1 begin, up to an organization's name, in lowercase. */
+const BEGINNINGS = [
+  'https://github.com/orgs/',
+  'https://www.github.com/orgs/',
+  'http://github.com/orgs/',
+  'http://www.github.com/orgs/',
+  'github.com/orgs/',
+  'www.github.com/orgs/',
+  'ssh://git@github.com/orgs/',
+  'git@github.com:orgs/',
+  'orgs/',
+];
+
 /**
  * The repository or organization that `input` names, in any of the forms of SRS Table 4-1, or
  * why it names none (FR-SRCH-01, FR-SRCH-02, FR-SRCH-04, FR-SRCH-05).
@@ -55,6 +68,16 @@ export function parse(input: string): Parsed {
       // Deeper paths, such as `/tree/main` or `/pull/42`, are parts of the repository.
       return repository(segments[0], segments[1]);
   }
+}
+
+/**
+ * Whether `input` is empty or the beginning of a form in Table 4-1 that names nothing yet, such
+ * as `https://github.c` while a URL is being typed, rather than wrong (FR-SRCH-09). Some
+ * beginnings, such as `github`, also name an organization; `parse` comes first.
+ */
+export function isUnfinished(input: string): boolean {
+  const text = input.trim().toLowerCase();
+  return BEGINNINGS.some((beginning) => beginning.startsWith(text));
 }
 
 /** The dashboard's path (FR-NAV-01). Names need no escaping: they are letters, digits and `._-`. */

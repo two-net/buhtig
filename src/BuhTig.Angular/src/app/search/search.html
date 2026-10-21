@@ -15,8 +15,12 @@
     (input)="edit(box.value)"
     (keydown.escape)="edit('')"
   />
+  <!-- The status is always there, so that assistive technology announces its changes. -->
+  <div class="feedback">
+    <p id="search-hint" role="status">{{ message() ? '' : hint() }}</p>
+    @if (message(); as message) {
+      <p id="search-message" role="alert">{{ message }}</p>
+    }
+  </div>
   <button type="submit">Show dashboard</button>
-  @if (message(); as message) {
-    <p id="search-message" role="alert">{{ message }}</p>
-  }
 </form>

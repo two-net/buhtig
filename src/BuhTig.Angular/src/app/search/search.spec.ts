@@ -30,6 +30,7 @@ describe('Search', () => {
   const element = () => fixture.nativeElement as HTMLElement;
   const input = () => element().querySelector('input')!;
   const message = () => element().querySelector('[role="alert"]')?.textContent?.trim();
+  const hint = () => element().querySelector('[role="status"]')?.textContent?.trim();
 
   function type(text: string): void {
     input().value = text;
@@ -135,6 +136,73 @@ describe('Search', () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  describe('as the user types (FR-SRCH-09)', () => {
+    it('shows the repository the input names, without opening it', async () => {
+      type('https://github.com/owner/repo/tree/main');
+      await fixture.whenStable();
+      expect(hint()).toBe('Repository · owner/repo');
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('shows the organization the input names, without asking the server', async () => {
+      type('github.com/orgs/acme');
+      await fixture.whenStable();
+      expect(hint()).toBe('Organization · acme');
+      // `http.verify` checks that nothing was asked.
+    });
+
+    it('shows why the input is wrong, without marking it invalid until searched for', async () => {
+      type('gitlab.com/owner/repo');
+      await fixture.whenStable();
+      expect(hint()).toBe('BuhTig supports github.com URLs only.');
+      type('-owner/repo');
+      await fixture.whenStable();
+      expect(hint()).toContain('“-owner” is not a GitHub account name.');
+      expect(message()).toBeUndefined();
+      expect(input().hasAttribute('aria-invalid')).toBe(false);
+    });
+
+    it('shows nothing while the input is empty or the beginning of a URL', async () => {
+      for (const text of ['', '  ', 'https://github.c', 'github.com/', 'git@github.com:']) {
+        type(text);
+        await fixture.whenStable();
+        expect(hint(), text).toBe('');
+      }
+    });
+
+    it('shows no problem while a URL is typed key by key', async () => {
+      for (const url of [
+        'https://github.com/owner/repo',
+        'git@github.com:owner/repo.git',
+        'ssh://git@github.com/owner/repo',
+        'github.com/orgs/acme',
+      ]) {
+        for (let end = 1; end <= url.length; end++) {
+          type(url.slice(0, end));
+          await fixture.whenStable();
+          expect(hint(), url.slice(0, end)).toMatch(/^$|^(Repository|Organization) · /);
+        }
+      }
+    });
+
+    it('shows it at once, with no delay (NFR-PERF-06)', () => {
+      type('owner/repo');
+      fixture.detectChanges();
+      expect(hint()).toBe('Repository · owner/repo');
+    });
+
+    it('gives way to the message when searched for, and comes back with the next edit', async () => {
+      search('gitlab.com/owner/repo');
+      await fixture.whenStable();
+      expect(hint()).toBe('');
+      expect(message()).toBe('BuhTig supports github.com URLs only.');
+      type('github.com/owner/repo');
+      await fixture.whenStable();
+      expect(message()).toBeUndefined();
+      expect(hint()).toBe('Repository · owner/repo');
+    });
+  });
+
   describe('keyboard (FR-SRCH-07)', () => {
     function press(target: EventTarget, key: string, init: KeyboardEventInit = {}): KeyboardEvent {
       const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
@@ -187,13 +255,14 @@ describe('Search', () => {
       expect(press(input(), '/').defaultPrevented).toBe(false);
     });
 
-    it('clears the input and its message on Esc', async () => {
+    it('clears the input, its hint and its message on Esc', async () => {
       search('gitlab.com/owner/repo');
       await fixture.whenStable();
       expect(message()).toBeDefined();
       press(input(), 'Escape');
       await fixture.whenStable();
       expect(input().value).toBe('');
+      expect(hint()).toBe('');
       expect(message()).toBeUndefined();
       expect(input().hasAttribute('aria-invalid')).toBe(false);
     });

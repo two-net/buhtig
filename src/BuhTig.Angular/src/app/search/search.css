@@ -32,7 +32,17 @@ button {
   cursor: pointer;
 }
 
-p {
+/* One line is kept for the hint, so that what follows stays put while it comes and goes. */
+.feedback {
   flex-basis: 100%;
+  min-height: 1lh;
+}
+
+p {
   margin: 0;
+  overflow-wrap: anywhere;
+}
+
+#search-hint {
+  color: var(--muted);
 }

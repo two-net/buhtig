@@ -1,7 +1,14 @@
 // What the search box says, kept apart from its logic so that it can be translated
 // (NFR-UX-07). Each message says what is wrong and what to do instead (NFR-UX-06).
 
-import { Problem } from './parse';
+import { Problem, Resource } from './parse';
+
+/** FR-SRCH-09: what the input names, shown as the user types. */
+export function resourceMessage(resource: Resource): string {
+  return resource.kind === 'repository'
+    ? `Repository · ${resource.owner}/${resource.repo}`
+    : `Organization · ${resource.org}`;
+}
 
 export function problemMessage(problem: Problem): string {
   switch (problem.kind) {
