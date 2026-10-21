@@ -6,6 +6,7 @@
 
 use std::future::{Future, IntoFuture};
 use std::io;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -82,6 +83,9 @@ async fn log_request(request: Request, next: Next) -> Response {
 
 /// Serves `app` until `shutdown` resolves. It then stops accepting connections, closes
 /// idle ones, and lets the requests in flight finish, for at most `grace`.
+///
+/// Each request carries the address it comes from, which tells visitors apart
+/// (FR-DATA-10).
 pub async fn serve(
     listener: TcpListener,
     app: Router,
@@ -89,6 +93,7 @@ pub async fn serve(
     grace: Duration,
 ) -> io::Result<()> {
     let (stopping, stopped) = oneshot::channel();
+    let app = app.into_make_service_with_connect_info::<SocketAddr>();
     let server = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             shutdown.await;
@@ -144,11 +149,12 @@ pub async fn shutdown_signal(grace: Duration) {
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
-    use std::net::{SocketAddr, TcpStream};
+    use std::net::TcpStream;
 
     use tokio::task::JoinHandle;
 
     use super::*;
+    use crate::visitors::Visitor;
 
     /// Serves an app whose one route takes `delay` to answer, until the returned sender
     /// is used or dropped.
@@ -163,6 +169,14 @@ mod tests {
                 "done"
             }),
         );
+        spawn(app, grace).await
+    }
+
+    /// Serves `app` on a port of its own, until the returned sender is used or dropped.
+    async fn spawn(
+        app: Router,
+        grace: Duration,
+    ) -> (SocketAddr, oneshot::Sender<()>, JoinHandle<io::Result<()>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (stop, stopped) = oneshot::channel::<()>();
@@ -200,6 +214,23 @@ mod tests {
         let response = in_flight.await.unwrap().unwrap();
         assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
         assert!(response.ends_with("\r\n\r\ndone"), "{response}");
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn requests_say_where_they_come_from() {
+        let app = Router::new().route(
+            "/",
+            get(|visitor: Visitor| async move { format!("{visitor:?}") }),
+        );
+        let (address, stop, server) = spawn(app, Duration::from_secs(10)).await;
+        let response = request(address).await.unwrap().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+        assert!(
+            response.ends_with("\r\n\r\nVisitor(127.0.0.1)"),
+            "{response}"
+        );
+        stop.send(()).unwrap();
         server.await.unwrap().unwrap();
     }
 

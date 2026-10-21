@@ -75,7 +75,10 @@ encryption_key = "CHANGE-ME"
 [limits]
 # Maximum number of repositories analyzed per organization.
 # org_repositories = 1000
-# Dashboard loads per visitor per hour that need a fetch from GitHub.
+# Dashboard loads per visitor per hour that need a fetch from GitHub. Loads
+# served from the cache don't count, and 0 serves visitors from the cache
+# only. While less than 10% of visitors' shared GitHub rate limit remains,
+# they are served from the cache only until it resets. Signing in lifts both.
 # visitor_fetches_per_hour = 30
 
 [ui]

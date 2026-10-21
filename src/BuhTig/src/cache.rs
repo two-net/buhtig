@@ -8,6 +8,9 @@
 //! [`Viewer`] decides both its credential and its scope, so the two cannot disagree, and
 //! no one is served data that another user's PAT fetched (FR-ACC-06).
 //!
+//! Visitors may fetch only so much from GitHub (FR-DATA-10, FR-DATA-11). Once they may not,
+//! they are served what the cache has, however old, as during an outage.
+//!
 //! Requests that miss the same data in the same scope at the same time wait for one fetch
 //! (FR-DATA-08). Those fetches, and the marks that limit refreshes (FR-DATA-07), are held
 //! in memory alone, which a restart may lose (NFR-REL-02).
@@ -29,9 +32,10 @@ use serde_json::Value;
 use tokio::sync::watch;
 use tracing::{debug, error, warn};
 
-use crate::config::{CacheConfig, Secret};
+use crate::config::{CacheConfig, LimitsConfig, Secret};
 use crate::entity::cache_entry::{self, Scope};
 use crate::github::{self, Credential, List, Path, Reply};
+use crate::visitors::{Held, Visitor, Visitors};
 
 /// FR-DATA-07: a dashboard may be refreshed at most once a minute.
 const REFRESH_INTERVAL: TimeDelta = TimeDelta::minutes(1);
@@ -43,8 +47,9 @@ type Clock = dyn Fn() -> DateTimeUtc + Sync;
 /// (FR-DATA-04).
 #[derive(Clone, Debug)]
 pub enum Viewer {
-    /// Someone who has not signed in: BuhTig's app credentials, and the shared cache.
-    Visitor,
+    /// Someone who has not signed in: BuhTig's app credentials, the shared cache, and the
+    /// limits on what visitors may fetch.
+    Visitor(Visitor),
     /// A signed-in user without a valid PAT: their sign-in credential (FR-PAT-06), which
     /// sees only public data (A-03), and the shared cache.
     SignedIn { sign_in: Secret<String> },
@@ -55,7 +60,7 @@ pub enum Viewer {
 impl Viewer {
     fn scope(&self) -> Scope {
         match self {
-            Viewer::Visitor | Viewer::SignedIn { .. } => Scope::Shared,
+            Viewer::Visitor(_) | Viewer::SignedIn { .. } => Scope::Shared,
             Viewer::TokenUser { user_id, .. } => Scope::User(*user_id),
         }
     }
@@ -63,7 +68,7 @@ impl Viewer {
     /// The token the viewer's requests carry, if any.
     fn token(&self) -> Option<&Secret<String>> {
         match self {
-            Viewer::Visitor => None,
+            Viewer::Visitor(_) => None,
             Viewer::SignedIn { sign_in } => Some(sign_in),
             Viewer::TokenUser { pat, .. } => Some(pat),
         }
@@ -90,9 +95,18 @@ pub struct Cached<T> {
     pub data: T,
     /// When GitHub last gave or confirmed the data (FR-DATA-06).
     pub fetched_at: DateTimeUtc,
-    /// Why newer data is missing, when GitHub failed and this is the most recent data
-    /// cached, however old (FR-DATA-05).
-    pub stale: Option<github::Error>,
+    /// Why newer data is missing, when this is the most recent data cached, however old.
+    pub stale: Option<Stale>,
+}
+
+/// Why GitHub was not asked for newer data, or had none.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Stale {
+    /// GitHub failed (FR-DATA-05).
+    GitHub(github::Error),
+    /// The viewer is a visitor who may not fetch from GitHub now, until they sign in
+    /// (FR-DATA-10, FR-DATA-11).
+    Held(Held),
 }
 
 /// Why the cache has no data for a request.
@@ -101,6 +115,9 @@ pub enum Error {
     /// GitHub had none, and nothing is cached. A rate limit says until when it holds
     /// (FR-DATA-05).
     GitHub(github::Error),
+    /// The viewer is a visitor who may not fetch from GitHub now, and nothing is cached
+    /// (FR-DATA-10, FR-DATA-11).
+    Held(Held),
     Database(DbErr),
 }
 
@@ -108,6 +125,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::GitHub(error) => error.fmt(f),
+            Error::Held(held) => held.fmt(f),
             Error::Database(error) => write!(f, "cannot read cached GitHub data: {error}"),
         }
     }
@@ -133,6 +151,8 @@ pub struct Cache {
     flights: Mutex<HashMap<(Scope, String), Watch>>,
     /// When each dashboard was last refreshed, by scope and lowercased dashboard path.
     refreshes: Mutex<HashMap<(Scope, String), DateTimeUtc>>,
+    /// How much visitors may still fetch from GitHub (FR-DATA-10, FR-DATA-11).
+    visitors: Visitors,
 }
 
 /// What to read from GitHub.
@@ -197,7 +217,12 @@ impl Landing {
     /// same from the cache, or from GitHub with its own credential.
     fn serves(&self, viewer: &Viewer) -> bool {
         let error = match &self.result {
-            Ok(Outcome::Data(cached)) => cached.stale.as_ref(),
+            Ok(Outcome::Data(cached)) => match &cached.stale {
+                None => None,
+                Some(Stale::GitHub(error)) => Some(error),
+                // Held results never land, and a hold is the one visitor's alone.
+                Some(Stale::Held(_)) => return false,
+            },
             Ok(Outcome::Computing) => None,
             Err(error) => Some(error),
         };
@@ -251,13 +276,19 @@ impl Drop for Lead<'_> {
 }
 
 impl Cache {
-    pub fn new(db: DatabaseConnection, github: Arc<github::Client>, config: &CacheConfig) -> Cache {
+    pub fn new(
+        db: DatabaseConnection,
+        github: Arc<github::Client>,
+        config: &CacheConfig,
+        limits: &LimitsConfig,
+    ) -> Cache {
         Cache {
             db,
             github,
             ttl: TimeDelta::from_std(config.ttl).unwrap_or(TimeDelta::MAX),
             flights: Mutex::default(),
             refreshes: Mutex::default(),
+            visitors: Visitors::new(limits.visitor_fetches_per_hour),
         }
     }
 
@@ -337,7 +368,7 @@ impl Cache {
         dashboard: &str,
         now: DateTimeUtc,
     ) -> Result<(), Refused> {
-        if matches!(viewer, Viewer::Visitor) {
+        if matches!(viewer, Viewer::Visitor(_)) {
             return Err(Refused::SignInRequired);
         }
         let id = (viewer.scope(), mark(dashboard));
@@ -357,8 +388,8 @@ impl Cache {
         Ok(())
     }
 
-    /// The data for `fetch`: from the cache while it is fresh, else from GitHub, else what
-    /// the cache has, however old.
+    /// The data for `fetch`: from the cache while it is fresh, else from GitHub if the
+    /// viewer may ask it, else what the cache has, however old.
     async fn lookup(
         &self,
         viewer: &Viewer,
@@ -385,7 +416,29 @@ impl Cache {
                                 stored: true,
                             }
                         }
-                        stored => self.fetch(viewer, fetch, &key, stored, clock).await,
+                        stored => {
+                            if let Viewer::Visitor(visitor) = viewer
+                                && let Err(held) = self.visitors.admit(
+                                    visitor,
+                                    dashboard,
+                                    self.github.visitor_rate_limit(),
+                                    clock(),
+                                )
+                            {
+                                // The hold is this visitor's alone, so it does not land:
+                                // the requests waiting for it start over, each to be let
+                                // through or held back on its own.
+                                drop(lead);
+                                debug!(key, "served a visitor from the cache only: {held}");
+                                return match stored {
+                                    Some(entry) => {
+                                        Ok(Outcome::Data(cached(entry, Some(Stale::Held(held)))))
+                                    }
+                                    None => Err(Error::Held(held)),
+                                };
+                            }
+                            self.fetch(viewer, fetch, &key, stored, clock).await
+                        }
                     };
                     return lead.land(landing).map_err(Error::GitHub);
                 }
@@ -531,7 +584,7 @@ impl Cache {
             return match stored {
                 Some(entry) => {
                     debug!(key, "served stale GitHub data from the cache: {error}");
-                    Ok(Outcome::Data(cached(entry, Some(error))))
+                    Ok(Outcome::Data(cached(entry, Some(Stale::GitHub(error)))))
                 }
                 None => Err(error),
             };
@@ -642,7 +695,7 @@ impl Cache {
     }
 }
 
-fn cached(entry: cache_entry::Model, stale: Option<github::Error>) -> Cached<Value> {
+fn cached(entry: cache_entry::Model, stale: Option<Stale>) -> Cached<Value> {
     Cached {
         data: entry.data,
         fetched_at: entry.fetched_at,
@@ -838,7 +891,12 @@ mod tests {
             &Secret::new("client-secret".to_owned()),
         ));
         Setup {
-            cache: Arc::new(Cache::new(db.clone(), github.clone(), &config(15))),
+            cache: Arc::new(Cache::new(
+                db.clone(),
+                github.clone(),
+                &config(15),
+                &limits(30),
+            )),
             db,
             github,
             stub,
@@ -898,6 +956,13 @@ mod tests {
         CacheConfig {
             ttl: Duration::from_secs(ttl_minutes * 60),
             retention: Duration::from_secs(30 * 24 * 60 * 60),
+        }
+    }
+
+    fn limits(visitor_fetches_per_hour: u32) -> LimitsConfig {
+        LimitsConfig {
+            org_repositories: 1000,
+            visitor_fetches_per_hour,
         }
     }
 
@@ -987,6 +1052,15 @@ mod tests {
         }
     }
 
+    /// A visitor who reaches BuhTig directly from a public address.
+    fn visitor() -> Viewer {
+        visitor_from("203.0.113.1")
+    }
+
+    fn visitor_from(address: &str) -> Viewer {
+        Viewer::Visitor(Visitor::of(address.parse().unwrap(), &HeaderMap::new()))
+    }
+
     fn path(segments: &[&str]) -> Path {
         Path::new(segments.iter().copied()).unwrap()
     }
@@ -1021,6 +1095,13 @@ mod tests {
         }
     }
 
+    fn held<T: fmt::Debug>(result: Result<Outcome<T>, Error>) -> Held {
+        match result {
+            Err(Error::Held(held)) => held,
+            other => panic!("not held: {other:?}"),
+        }
+    }
+
     /// A primary rate limit that resets in an hour, and when that is.
     fn rate_limited() -> (
         impl Fn(&Request<()>) -> Result<Response<Bytes>, github::Error>,
@@ -1050,7 +1131,7 @@ mod tests {
             Some(r#"W/"v1""#) => answer(304, &[], ""),
             _ => answer(200, &[("etag", r#"W/"v1""#)], r#"{"stars":1}"#),
         });
-        let first = data(setup.get(&Viewer::Visitor, &repo, at(0)).await);
+        let first = data(setup.get(&visitor(), &repo, at(0)).await);
         assert_eq!(
             first,
             Cached {
@@ -1061,14 +1142,11 @@ mod tests {
         );
 
         // Within the TTL.
-        assert_eq!(
-            data(setup.get(&Viewer::Visitor, &repo, at(14)).await),
-            first
-        );
+        assert_eq!(data(setup.get(&visitor(), &repo, at(14)).await), first);
         assert_eq!(setup.stub.requests().len(), 1);
 
         // After it, conditionally: GitHub confirms the data.
-        let confirmed = data(setup.get(&Viewer::Visitor, &repo, at(16)).await);
+        let confirmed = data(setup.get(&visitor(), &repo, at(16)).await);
         assert_eq!(
             (confirmed.data, confirmed.fetched_at),
             (json!({"stars": 1}), at(16))
@@ -1083,7 +1161,7 @@ mod tests {
 
         // Or GitHub has new data, which replaces the old.
         setup.answer(|_| answer(200, &[("etag", r#"W/"v2""#)], r#"{"stars":2}"#));
-        let changed = data(setup.get(&Viewer::Visitor, &repo, at(32)).await);
+        let changed = data(setup.get(&visitor(), &repo, at(32)).await);
         assert_eq!(changed.data, json!({"stars": 2}));
         let rows = setup.rows().await;
         assert_eq!(rows.len(), 1);
@@ -1093,12 +1171,13 @@ mod tests {
         );
 
         // A shorter TTL applies to what is already stored.
-        let shorter = Cache::new(setup.db.clone(), setup.github.clone(), &config(5));
-        let refetched = data(
-            shorter
-                .get_at(&Viewer::Visitor, DASHBOARD, &repo, at(38))
-                .await,
+        let shorter = Cache::new(
+            setup.db.clone(),
+            setup.github.clone(),
+            &config(5),
+            &limits(30),
         );
+        let refetched = data(shorter.get_at(&visitor(), DASHBOARD, &repo, at(38)).await);
         assert_eq!(refetched.fetched_at, at(38));
         assert_eq!(setup.stub.requests().len(), 4);
     }
@@ -1117,8 +1196,8 @@ mod tests {
         let public =
             json!({"full_name": "owner/repo", "private": false, "owner": {"login": "owner"}});
 
-        let visitor = data(setup.get(&Viewer::Visitor, &repo, at(0)).await);
-        assert_eq!(visitor.data, public);
+        let shared = data(setup.get(&visitor(), &repo, at(0)).await);
+        assert_eq!(shared.data, public);
         let rows = setup.rows().await;
         assert_eq!(
             (
@@ -1133,7 +1212,7 @@ mod tests {
         // A signed-in user is served the shared data.
         assert_eq!(
             data(setup.get(&signed_in("sign-in-bob"), &repo, at(1)).await),
-            visitor
+            shared
         );
         assert_eq!(setup.sent(), [APP]);
 
@@ -1156,10 +1235,7 @@ mod tests {
         let other = path(&["repos", "owner", "other"]);
         let fetched = data(setup.get(&signed_in("sign-in-bob"), &other, at(1)).await);
         assert_eq!(fetched.data, public);
-        assert_eq!(
-            data(setup.get(&Viewer::Visitor, &other, at(2)).await),
-            fetched
-        );
+        assert_eq!(data(setup.get(&visitor(), &other, at(2)).await), fetched);
         assert_eq!(
             setup.sent(),
             [APP, "Bearer pat-alice", "Bearer sign-in-bob"]
@@ -1184,7 +1260,7 @@ mod tests {
         );
 
         // Everyone else asks GitHub with their own credential, and is told it is not there.
-        for viewer in [Viewer::Visitor, signed_in("sign-in-bob"), setup.bob()] {
+        for viewer in [visitor(), signed_in("sign-in-bob"), setup.bob()] {
             assert_eq!(
                 github_error(setup.get(&viewer, &secret, at(1)).await),
                 github::Error::NotFound,
@@ -1229,14 +1305,14 @@ mod tests {
 
         for name in ["private", "fork"] {
             let repo = path(&["repos", "owner", name]);
-            for viewer in [Viewer::Visitor, signed_in("sign-in-bob")] {
+            for viewer in [visitor(), signed_in("sign-in-bob")] {
                 // GitHub gave it for this viewer's own credential.
                 let fetched = data(setup.get(&viewer, &repo, at(0)).await);
                 assert_eq!(fetched.data["name"], name);
             }
         }
         let repos = path(&["orgs", "org", "repos"]);
-        for viewer in [Viewer::Visitor, signed_in("sign-in-bob")] {
+        for viewer in [visitor(), signed_in("sign-in-bob")] {
             let list = data(
                 setup
                     .cache
@@ -1269,10 +1345,10 @@ mod tests {
         // What was cached while it was public goes once GitHub marks it private.
         let turned = path(&["repos", "owner", "turned"]);
         setup.answer(|_| answer(200, &[], r#"{"name":"turned","private":false}"#));
-        data(setup.get(&Viewer::Visitor, &turned, at(0)).await);
+        data(setup.get(&visitor(), &turned, at(0)).await);
         assert_eq!(setup.rows().await.len(), 2);
         setup.answer(|_| answer(200, &[], r#"{"name":"turned","private":true}"#));
-        data(setup.get(&Viewer::Visitor, &turned, at(16)).await);
+        data(setup.get(&visitor(), &turned, at(16)).await);
         assert_eq!(setup.rows().await, rows);
     }
 
@@ -1281,27 +1357,27 @@ mod tests {
         let setup = setup().await;
         let repo = path(&["repos", "owner", "repo"]);
         setup.answer(|_| answer(200, &[("etag", "e")], r#"{"stars":1}"#));
-        data(setup.get(&Viewer::Visitor, &repo, at(0)).await);
+        data(setup.get(&visitor(), &repo, at(0)).await);
         let stale = |error| Cached {
             data: json!({"stars": 1}),
             fetched_at: at(0),
-            stale: Some(error),
+            stale: Some(Stale::GitHub(error)),
         };
 
         // AC-09.
         setup.answer(|_| Err(github::Error::Unreachable("connection refused".to_owned())));
         assert_eq!(
-            data(setup.get(&Viewer::Visitor, &repo, at(16)).await),
+            data(setup.get(&visitor(), &repo, at(16)).await),
             stale(github::Error::Unreachable("connection refused".to_owned()))
         );
         setup.answer(|_| answer(200, &[], "not json"));
         assert_eq!(
-            data(setup.get(&Viewer::Visitor, &repo, at(16)).await),
+            data(setup.get(&visitor(), &repo, at(16)).await),
             stale(github::Error::Invalid("the body is not JSON".to_owned()))
         );
         setup.answer(|_| answer(502, &[], "<html>Bad gateway</html>"));
         assert_eq!(
-            data(setup.get(&Viewer::Visitor, &repo, at(17)).await),
+            data(setup.get(&visitor(), &repo, at(17)).await),
             stale(github::Error::Status {
                 status: 502,
                 message: None
@@ -1310,16 +1386,22 @@ mod tests {
         let (respond, until) = rate_limited();
         setup.answer(respond);
         assert_eq!(
-            data(setup.get(&Viewer::Visitor, &repo, at(18)).await),
+            data(setup.get(&visitor(), &repo, at(18)).await),
             stale(github::Error::RateLimited { until })
         );
 
         // With nothing cached, the error says when the rate limit lifts.
         let other = path(&["repos", "owner", "other"]);
         assert_eq!(
-            github_error(setup.get(&Viewer::Visitor, &other, at(19)).await),
+            github_error(setup.get(&signed_in("sign-in-bob"), &other, at(19)).await),
             github::Error::RateLimited { until }
         );
+        // A visitor is not let ask, since nothing of visitors' rate limit remains.
+        assert_eq!(
+            held(setup.get(&visitor(), &other, at(19)).await),
+            Held::Reserve { until }
+        );
+        assert_eq!(setup.stub.requests().len(), 6);
         let rows = setup.rows().await;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].fetched_at, at(0));
@@ -1330,7 +1412,7 @@ mod tests {
         let setup = setup().await;
         let repo = path(&["repos", "owner", "repo"]);
         setup.answer(|_| answer(200, &[], r#"{"stars":1}"#));
-        data(setup.get(&Viewer::Visitor, &repo, at(0)).await);
+        data(setup.get(&visitor(), &repo, at(0)).await);
         data(setup.get(&setup.alice(), &repo, at(0)).await);
 
         // A rejected token says nothing about the repository, and one user's 403 is
@@ -1361,7 +1443,7 @@ mod tests {
         // The repository went private: it is gone from the shared cache, and not served
         // from it even while GitHub is down.
         assert_eq!(
-            github_error(setup.get(&Viewer::Visitor, &repo, at(17)).await),
+            github_error(setup.get(&visitor(), &repo, at(17)).await),
             github::Error::NotFound
         );
         assert!(matches!(
@@ -1371,7 +1453,7 @@ mod tests {
         assert!(setup.rows().await.is_empty());
         setup.answer(|_| Err(github::Error::Unreachable("connection refused".to_owned())));
         assert!(matches!(
-            github_error(setup.get(&Viewer::Visitor, &repo, at(18)).await),
+            github_error(setup.get(&visitor(), &repo, at(18)).await),
             github::Error::Unreachable(_)
         ));
     }
@@ -1382,7 +1464,7 @@ mod tests {
         setup.answer(|_| answer(202, &[], "{}"));
         let stats = path(&["repos", "owner", "repo", "stats", "commit_activity"]);
         assert_eq!(
-            setup.get(&Viewer::Visitor, &stats, at(0)).await.unwrap(),
+            setup.get(&visitor(), &stats, at(0)).await.unwrap(),
             Outcome::Computing
         );
         assert!(setup.rows().await.is_empty());
@@ -1397,7 +1479,7 @@ mod tests {
 
         let mut gets = JoinSet::new();
         for _ in 0..10 {
-            gets.spawn(setup.spawn_get(Viewer::Visitor, &repo));
+            gets.spawn(setup.spawn_get(visitor(), &repo));
         }
         for result in gets.join_all().await {
             assert_eq!(data(result).data, json!({"stars": 1}));
@@ -1408,9 +1490,9 @@ mod tests {
         let other = path(&["repos", "owner", "other"]);
         let third = path(&["repos", "owner", "third"]);
         let mut gets = JoinSet::new();
-        gets.spawn(setup.spawn_get(Viewer::Visitor, &other));
+        gets.spawn(setup.spawn_get(visitor(), &other));
         gets.spawn(setup.spawn_get(setup.alice(), &other));
-        gets.spawn(setup.spawn_get(Viewer::Visitor, &third));
+        gets.spawn(setup.spawn_get(visitor(), &third));
         for result in gets.join_all().await {
             data(result);
         }
@@ -1426,7 +1508,7 @@ mod tests {
         // GitHub is down for everyone.
         setup.answer(|_| Err(github::Error::Unreachable("connection refused".to_owned())));
         let repo = path(&["repos", "owner", "repo"]);
-        let leader = tokio::spawn(setup.spawn_get(Viewer::Visitor, &repo));
+        let leader = tokio::spawn(setup.spawn_get(visitor(), &repo));
         tokio::time::sleep(Duration::from_millis(50)).await;
         let follower = setup
             .cache
@@ -1473,7 +1555,7 @@ mod tests {
         let repo = path(&["repos", "owner", "secret"]);
         let leader = tokio::spawn(setup.spawn_get(signed_in("sign-in-a"), &repo));
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let follower = setup.cache.get(&Viewer::Visitor, DASHBOARD, &repo).await;
+        let follower = setup.cache.get(&visitor(), DASHBOARD, &repo).await;
         assert_eq!(data(leader.await.unwrap()).data["name"], "secret");
         assert_eq!(github_error(follower), github::Error::NotFound);
         assert_eq!(setup.sent(), ["Bearer sign-in-a", APP]);
@@ -1488,10 +1570,10 @@ mod tests {
 
         let leader = tokio::spawn(tokio::time::timeout(
             Duration::from_millis(100),
-            setup.spawn_get(Viewer::Visitor, &repo),
+            setup.spawn_get(visitor(), &repo),
         ));
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let follower = setup.cache.get(&Viewer::Visitor, DASHBOARD, &repo).await;
+        let follower = setup.cache.get(&visitor(), DASHBOARD, &repo).await;
         assert!(
             leader.await.unwrap().is_err(),
             "the leader was not cancelled"
@@ -1511,10 +1593,10 @@ mod tests {
             _ => answer(200, &[("etag", "e")], r#"{"stars":1}"#),
         });
         assert_eq!(
-            cache.refresh_at(&Viewer::Visitor, DASHBOARD, at(0)),
+            cache.refresh_at(&visitor(), DASHBOARD, at(0)),
             Err(Refused::SignInRequired)
         );
-        data(setup.get(&Viewer::Visitor, &repo, at(0)).await);
+        data(setup.get(&visitor(), &repo, at(0)).await);
         data(setup.get(&setup.alice(), &repo, at(0)).await);
 
         // The shared data is asked for again, conditionally, though it is fresh. Alice's
@@ -1524,7 +1606,7 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            data(setup.get(&Viewer::Visitor, &repo, at(1)).await).fetched_at,
+            data(setup.get(&visitor(), &repo, at(1)).await).fetched_at,
             at(1)
         );
         assert_eq!(
@@ -1536,7 +1618,7 @@ mod tests {
             sent_header(&setup.stub.requests()[2].1, IF_NONE_MATCH),
             Some("e")
         );
-        data(setup.get(&Viewer::Visitor, &repo, at(1)).await);
+        data(setup.get(&visitor(), &repo, at(1)).await);
         assert_eq!(setup.stub.requests().len(), 3, "refreshed once");
 
         // Not again within the minute, by anyone in that scope.
@@ -1565,10 +1647,11 @@ mod tests {
         let setup = setup().await;
         setup.answer(|_| answer(200, &[], r#"[{"name":"a"},{"name":"b"},{"name":"c"}]"#));
         let repos = path(&["orgs", "org", "repos"]).query("sort", "pushed");
+        let visitor = visitor();
         let get_list = |limit, now| {
             setup
                 .cache
-                .get_list_at(&Viewer::Visitor, "/org", &repos, limit, now)
+                .get_list_at(&visitor, "/org", &repos, limit, now)
         };
 
         let two = data(get_list(2, at(0)).await);
@@ -1585,12 +1668,7 @@ mod tests {
         let five = data(get_list(5, at(1)).await);
         assert_eq!((five.data.items.len(), five.data.truncated), (3, false));
         // The same path read as one resource is cached apart.
-        let one = data(
-            setup
-                .cache
-                .get_at(&Viewer::Visitor, "/org", &repos, at(1))
-                .await,
-        );
+        let one = data(setup.cache.get_at(&visitor, "/org", &repos, at(1)).await);
         assert_eq!(one.data.as_array().map(Vec::len), Some(3));
         assert_eq!(setup.stub.requests().len(), 3);
         let keys: Vec<String> = setup
@@ -1619,6 +1697,128 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(data(get_list(2, at(2)).await).data, two.data);
+        assert_eq!(setup.stub.requests().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_visitor_over_the_limit_is_served_from_the_cache_only() {
+        let setup = setup().await;
+        setup.answer(|_| answer(200, &[], r#"{"stars":1}"#));
+        let limited = Cache::new(
+            setup.db.clone(),
+            setup.github.clone(),
+            &config(15),
+            &limits(2),
+        );
+        let cache = &limited;
+        let get = move |viewer: Viewer, name: &'static str, now: DateTimeUtc| async move {
+            let repo = path(&["repos", "owner", name]);
+            cache
+                .get_at(&viewer, &format!("/owner/{name}"), &repo, now)
+                .await
+        };
+
+        // Cached by a signed-in user, which costs no visitor anything.
+        data(get(signed_in("sign-in-bob"), "seeded", at(0)).await);
+
+        // A visitor loads two dashboards, each with more than one fetch.
+        for name in ["a", "b"] {
+            data(get(visitor(), name, at(1)).await);
+            let languages = path(&["repos", "owner", name, "languages"]);
+            let dashboard = format!("/owner/{name}");
+            data(
+                limited
+                    .get_at(&visitor(), &dashboard, &languages, at(2))
+                    .await,
+            );
+        }
+        assert_eq!(setup.stub.requests().len(), 5);
+
+        // A third is held back, until an hour after the first.
+        let until = Some(at(61));
+        assert_eq!(
+            held(get(visitor(), "c", at(3)).await),
+            Held::Quota { until }
+        );
+        // What is cached is served all the same: fresh, and older with its age.
+        assert_eq!(data(get(visitor(), "a", at(3)).await).stale, None);
+        let seeded = data(get(visitor(), "seeded", at(16)).await);
+        assert_eq!(
+            (seeded.fetched_at, seeded.stale),
+            (at(0), Some(Stale::Held(Held::Quota { until })))
+        );
+        assert_eq!(setup.stub.requests().len(), 5);
+        assert!(limited.flights().is_empty());
+
+        // Another visitor, and a signed-in user, still ask GitHub.
+        data(get(visitor_from("203.0.113.2"), "c", at(16)).await);
+        data(get(signed_in("sign-in-bob"), "d", at(16)).await);
+        assert_eq!(setup.stub.requests().len(), 7);
+
+        // An hour after the first load, the visitor may make another.
+        data(get(visitor(), "e", at(61)).await);
+        assert_eq!(setup.stub.requests().len(), 8);
+    }
+
+    #[tokio::test]
+    async fn visitors_are_served_from_the_cache_only_while_their_rate_limit_runs_low() {
+        let setup = setup().await;
+        // In real time, since the client drops readings that have reset.
+        let seconds = (ChronoUtc::now() + TimeDelta::hours(1)).timestamp();
+        let until = DateTime::from_timestamp(seconds, 0).unwrap();
+        let remaining = move |remaining: u32| {
+            move |_: &Request<()>| {
+                answer(
+                    200,
+                    &[
+                        ("x-ratelimit-limit", "5000"),
+                        ("x-ratelimit-remaining", &remaining.to_string()),
+                        ("x-ratelimit-reset", &seconds.to_string()),
+                    ],
+                    r#"{"stars":1}"#,
+                )
+            }
+        };
+        let repo = |name: &str| path(&["repos", "owner", name]);
+
+        // Exactly a tenth remaining is enough.
+        setup.answer(remaining(500));
+        data(setup.get(&visitor(), &repo("a"), at(0)).await);
+        data(setup.get(&visitor(), &repo("b"), at(0)).await);
+        // Less is not. Once a visitor is held back, no answer could tell of more.
+        setup.answer(remaining(499));
+        data(setup.get(&visitor(), &repo("c"), at(0)).await);
+        assert_eq!(setup.stub.requests().len(), 3);
+        let reserve = Held::Reserve { until };
+        assert_eq!(
+            held(setup.get(&visitor(), &repo("d"), at(1)).await),
+            reserve
+        );
+
+        // What is cached is served all the same: fresh, and older with its age.
+        assert_eq!(
+            data(setup.get(&visitor(), &repo("a"), at(1)).await).stale,
+            None
+        );
+        let stale = data(setup.get(&visitor(), &repo("a"), at(16)).await);
+        assert_eq!(
+            (stale.fetched_at, stale.stale),
+            (at(0), Some(Stale::Held(reserve)))
+        );
+        assert_eq!(setup.stub.requests().len(), 3);
+        assert!(setup.cache.flights().is_empty());
+
+        // Signed-in users ask GitHub with their own credential, and visitors are then
+        // served what they fetched.
+        data(
+            setup
+                .get(&signed_in("sign-in-bob"), &repo("d"), at(16))
+                .await,
+        );
+        assert_eq!(
+            data(setup.get(&visitor(), &repo("d"), at(17)).await).fetched_at,
+            at(16)
+        );
         assert_eq!(setup.stub.requests().len(), 4);
     }
 }

@@ -66,6 +66,15 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   `cache.ttl` before it asks GitHub again. While GitHub is unreachable or rate-limited,
   dashboards show the latest data they have, with its age. Data fetched with a user's
   personal access token is shown only to that user.
+- **Visitors:** each visitor may make `limits.visitor_fetches_per_hour` dashboard loads an
+  hour that need data from GitHub. Loads served from the cache don't count. While less
+  than 10% of visitors' shared GitHub rate limit remains, visitors see cached data only
+  until it resets. Signing in lifts both limits, since a signed-in user's requests count
+  against their own rate limit. Visitors are told apart by IP address, which BuhTig takes
+  from `X-Forwarded-For` only when the request comes from a loopback or private address,
+  such as a reverse proxy on the same host or network. Behind a proxy that connects from a
+  public address, such as a CDN, or that doesn't set `X-Forwarded-For`, all visitors share
+  one limit.
 - **Health:** `GET /-/health` answers `200 ok` while BuhTig can reach its database, and
   `503 unavailable` otherwise. During a database outage, pages show a short "try again"
   notice. BuhTig recovers on its own when the database is back.

@@ -6,6 +6,7 @@ mod github;
 mod health;
 mod housekeeping;
 mod ui;
+mod visitors;
 mod web;
 
 // The integration tests' PostgreSQL cluster, for unit tests that need a database.
