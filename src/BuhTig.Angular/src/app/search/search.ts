@@ -5,7 +5,7 @@ import {
   computed,
   inject,
   input,
-  signal,
+  linkedSignal,
   viewChild,
 } from '@angular/core';
 import { Router } from '@angular/router';
@@ -18,12 +18,14 @@ import { dashboardPath, isUnfinished, parse } from './parse';
  * recognizes as the user types (FR-SRCH-09), and opens its dashboard on Enter or "Show
  * dashboard" (SRS §4.1). `/` focuses it and Esc clears it (FR-SRCH-07). Its content goes
  * beside "Show dashboard", as the home page's "Surprise me" does (FR-SRCH-10).
+ *
+ * In a dashboard's header it is compact, and filled in with the dashboard's resource (UI-03).
  */
 @Component({
   selector: 'app-search',
   templateUrl: './search.html',
   styleUrl: './search.css',
-  host: { '(document:keydown)': 'focusOnSlash($event)' },
+  host: { '[class.compact]': 'compact()', '(document:keydown)': 'focusOnSlash($event)' },
 })
 export class Search {
   private readonly router = inject(Router);
@@ -32,22 +34,39 @@ export class Search {
 
   /** Whether to focus the input once it is shown, on desktop only (FR-SRCH-07). */
   readonly focusOnDesktop = input(false);
+  /** What the input holds until the user edits it, and again whenever this changes. */
+  readonly prefill = input('');
+  /**
+   * Whether it fits in a header (UI-03): without "Show dashboard", since Enter is enough, and
+   * with what it says below it laid over the page, so that the header keeps its height.
+   */
+  readonly compact = input(false);
 
-  protected readonly query = signal('');
+  protected readonly query = linkedSignal(() => this.prefill());
   /**
    * What the input names, or why it is wrong, shown below it as the user types (FR-SRCH-09).
-   * Nothing while it is empty or the beginning of a URL, so that typing one shows no error. It
-   * is worked out on each keystroke, well within 100 ms (NFR-PERF-06).
+   * Nothing while it is empty or the beginning of a URL, so that typing one shows no error,
+   * nor while it holds what it was filled in with, which the page shows already. It is worked
+   * out on each keystroke, well within 100 ms (NFR-PERF-06).
    */
   protected readonly hint = computed(() => {
+    if (this.query() === this.prefill()) {
+      return '';
+    }
     const parsed = parse(this.query());
     if (parsed.ok) {
       return resourceMessage(parsed.resource);
     }
     return isUnfinished(this.query()) ? '' : problemMessage(parsed.problem);
   });
-  /** Why the input opens no dashboard, shown in place of the hint once it is searched for. */
-  protected readonly message = signal<string | undefined>(undefined);
+  /**
+   * Why the input opens no dashboard, shown in place of the hint once it is searched for, until
+   * the input is edited or filled in anew.
+   */
+  protected readonly message = linkedSignal<string | undefined>(() => {
+    this.prefill();
+    return undefined;
+  });
   /** Counts edits and searches, so that an account lookup that ends after either is ignored. */
   private attempt = 0;
 

@@ -1,0 +1,5 @@
+@if (compact() === exact()) {
+  {{ exact() }}
+} @else {
+  <app-exact [value]="exact()">{{ compact() }}</app-exact>
+}

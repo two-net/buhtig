@@ -1,4 +1,15 @@
-<header><a routerLink="/">BuhTig</a></header>
+<header>
+  <a class="wordmark" routerLink="/">BuhTig</a>
+  <app-search [compact]="true" [prefill]="'github.com/' + name()" />
+  <app-account />
+</header>
 <main>
-  <h1>{{ name() }}</h1>
+  <div class="summary">
+    <h1>{{ name() }}</h1>
+    @if (fetchedAt(); as fetchedAt) {
+      <p>Updated <app-relative-time [value]="fetchedAt" /></p>
+    }
+  </div>
+  <!-- The widgets (#15 to #20), in two columns, or one on narrow screens (UI-05). -->
+  <div class="grid"></div>
 </main>

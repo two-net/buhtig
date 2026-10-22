@@ -98,4 +98,15 @@ describe('routes', () => {
     await harness.navigateByUrl('/angular');
     expect(heading()).toBe('angular');
   });
+
+  it('titles dashboards after their resource (UI-04)', async () => {
+    const harness = await RouterTestingHarness.create();
+    const title = () => TestBed.inject(Title).getTitle();
+    await harness.navigateByUrl('/vercel/next.js');
+    expect(title()).toBe('vercel/next.js · BuhTig');
+    await harness.navigateByUrl('/angular');
+    expect(title()).toBe('angular · BuhTig');
+    await harness.navigateByUrl('/');
+    expect(title()).toBe('BuhTig');
+  });
 });

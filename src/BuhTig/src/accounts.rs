@@ -12,16 +12,17 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 use tracing::error;
 
-use crate::cache::{self, Cache, Outcome, Viewer};
+use crate::cache::{self, Cache, Cached, Outcome, Viewer};
 use crate::github;
 use crate::visitors::Visitor;
 
 /// The longest account name GitHub allows.
 const MAX_LENGTH: usize = 39;
 
-/// `/-/api/accounts/{name}`: `{"type": "organization" | "user", "login": …}`, where `login`
-/// is the name as GitHub spells it, whatever case it was asked for in (FR-NAV-04). 404 if
-/// there is no such account.
+/// `/-/api/accounts/{name}`: `{"type": "organization" | "user", "login": …, "fetched_at": …}`,
+/// where `login` is the name as GitHub spells it, whatever case it was asked for in
+/// (FR-NAV-04), and `fetched_at` is when GitHub gave it, which an organization's dashboard
+/// shows (FR-DATA-06). 404 if there is no such account.
 ///
 /// A name that cannot be an account's is 400, without asking GitHub (FR-SRCH-04). Any
 /// other status means that BuhTig cannot tell now. The search box then opens the
@@ -43,8 +44,8 @@ pub async fn kind(
         Ok(Outcome::Data(cached)) => {
             let login = cached.data.get("login").and_then(Value::as_str);
             match (cached.data.get("type").and_then(Value::as_str), login) {
-                (Some("Organization"), Some(login)) => found("organization", login),
-                (Some("User"), Some(login)) => found("user", login),
+                (Some("Organization"), Some(login)) => found("organization", login, &cached),
+                (Some("User"), Some(login)) => found("user", login, &cached),
                 _ => status(StatusCode::BAD_GATEWAY),
             }
         }
@@ -75,10 +76,10 @@ pub fn is_account_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-fn found(kind: &str, login: &str) -> Response {
+fn found(kind: &str, login: &str, cached: &Cached<Value>) -> Response {
     (
         [(header::CACHE_CONTROL, "no-store")],
-        Json(json!({ "type": kind, "login": login })),
+        Json(json!({ "type": kind, "login": login, "fetched_at": cached.fetched_at_iso() })),
     )
         .into_response()
 }
@@ -92,6 +93,8 @@ mod tests {
     use std::time::Duration;
 
     use axum::http::HeaderMap;
+    use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
+    use sea_orm::sea_query::prelude::chrono::TimeDelta;
     use url::Url;
 
     use super::*;
@@ -142,7 +145,7 @@ mod tests {
     }
 
     /// The status and body of a visitor's request for `name`'s kind.
-    async fn ask(cache: &Arc<Cache>, name: &str) -> (StatusCode, String) {
+    async fn request(cache: &Arc<Cache>, name: &str) -> (StatusCode, String) {
         let visitor = Visitor::of("203.0.113.1".parse().unwrap(), &HeaderMap::new());
         let response = kind(State(cache.clone()), visitor, Path(name.to_owned())).await;
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
@@ -151,6 +154,26 @@ mod tests {
             .await
             .unwrap();
         (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    /// As [`request`], but with the time of fetching taken out of the body, since it is
+    /// the time the test ran.
+    async fn ask(cache: &Arc<Cache>, name: &str) -> (StatusCode, String) {
+        let (status, body) = request(cache, name).await;
+        if body.is_empty() {
+            return (status, body);
+        }
+        let mut body: Value = serde_json::from_str(&body).unwrap();
+        fetched_at(&body);
+        body.as_object_mut().unwrap().remove("fetched_at");
+        (status, body.to_string())
+    }
+
+    /// The time of fetching in `body`, which must be as JavaScript writes it.
+    fn fetched_at(body: &Value) -> DateTimeUtc {
+        let text = body["fetched_at"].as_str().unwrap();
+        assert!(text.ends_with('Z') && text.len() == 24, "{text}");
+        text.parse().unwrap()
     }
 
     #[tokio::test]
@@ -178,6 +201,19 @@ mod tests {
                 "https://api.github.com/users/octocat"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn the_time_of_fetching_is_the_caches() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let before = ChronoUtc::now() - TimeDelta::milliseconds(1);
+        let (_, first) = request(&cache, "acme").await;
+        let (_, again) = request(&cache, "acme").await;
+        let first = fetched_at(&serde_json::from_str(&first).unwrap());
+        assert_eq!(fetched_at(&serde_json::from_str(&again).unwrap()), first);
+        assert!(before <= first && first <= ChronoUtc::now(), "{first}");
+        assert_eq!(stub.urls(), ["https://api.github.com/users/acme"]);
     }
 
     #[tokio::test]

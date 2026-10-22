@@ -1,4 +1,4 @@
-import { Routes } from '@angular/router';
+import { ActivatedRouteSnapshot, Routes } from '@angular/router';
 import { About } from './about/about';
 import { Dashboard } from './dashboard/dashboard';
 import { Home } from './home/home';
@@ -17,6 +17,15 @@ export const routes: Routes = [
       { path: '**', component: NotFound, title: 'Page not found · BuhTig' },
     ],
   },
-  { path: ':owner/:repo', component: Dashboard },
-  { path: ':org', component: Dashboard },
+  { path: ':owner/:repo', component: Dashboard, title: dashboardTitle },
+  { path: ':org', component: Dashboard, title: dashboardTitle },
 ];
+
+/**
+ * "{owner}/{repo} · BuhTig" or "{org} · BuhTig" (UI-04), with the names as GitHub spells them
+ * once the dashboard has moved to its canonical URL (FR-NAV-04).
+ */
+function dashboardTitle(route: ActivatedRouteSnapshot): string {
+  const params = route.paramMap;
+  return `${params.get('org') ?? `${params.get('owner')}/${params.get('repo')}`} · BuhTig`;
+}

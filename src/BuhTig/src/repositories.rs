@@ -19,10 +19,12 @@ use crate::visitors::Visitor;
 /// The longest repository name GitHub allows.
 const MAX_LENGTH: usize = 100;
 
-/// `/-/api/repositories/{owner}/{repo}`: `{"name": "owner/repo"}`, the repository's name
-/// as GitHub spells it, whatever case it was asked for in (FR-NAV-04), and its new name if
-/// it was renamed or transferred, since the client follows GitHub's redirects (FR-NAV-05).
-/// 404 if there is no such repository, or if it is private (FR-ACC-05).
+/// `/-/api/repositories/{owner}/{repo}`: `{"name": "owner/repo", "fetched_at": …}`. The
+/// name is the repository's as GitHub spells it, whatever case it was asked for in
+/// (FR-NAV-04), and its new name if it was renamed or transferred, since the client follows
+/// GitHub's redirects (FR-NAV-05). `fetched_at` is when GitHub gave what BuhTig knows of the
+/// repository, which the dashboard shows (FR-DATA-06). 404 if there is no such repository,
+/// or if it is private (FR-ACC-05).
 ///
 /// Names that cannot be a repository's are 400, without asking GitHub (FR-SRCH-04). Any
 /// other status means that BuhTig cannot tell now. The dashboard then keeps its URL.
@@ -44,7 +46,7 @@ pub async fn name(
         Ok(Outcome::Data(cached)) => match cached.data.get("full_name").and_then(Value::as_str) {
             Some(name) => (
                 [(header::CACHE_CONTROL, "no-store")],
-                Json(json!({ "name": name })),
+                Json(json!({ "name": name, "fetched_at": cached.fetched_at_iso() })),
             )
                 .into_response(),
             None => status(StatusCode::BAD_GATEWAY),
@@ -82,6 +84,8 @@ mod tests {
     use std::time::Duration;
 
     use axum::http::HeaderMap;
+    use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
+    use sea_orm::sea_query::prelude::chrono::TimeDelta;
     use url::Url;
 
     use super::*;
@@ -139,7 +143,7 @@ mod tests {
     }
 
     /// The status and body of a visitor's request for `owner/repo`'s name.
-    async fn ask(cache: &Arc<Cache>, owner: &str, repo: &str) -> (StatusCode, String) {
+    async fn request(cache: &Arc<Cache>, owner: &str, repo: &str) -> (StatusCode, String) {
         let visitor = Visitor::of("203.0.113.1".parse().unwrap(), &HeaderMap::new());
         let names = Path((owner.to_owned(), repo.to_owned()));
         let response = name(State(cache.clone()), visitor, names).await;
@@ -149,6 +153,26 @@ mod tests {
             .await
             .unwrap();
         (status, String::from_utf8(body.to_vec()).unwrap())
+    }
+
+    /// As [`request`], but with the time of fetching taken out of the body, since it is
+    /// the time the test ran.
+    async fn ask(cache: &Arc<Cache>, owner: &str, repo: &str) -> (StatusCode, String) {
+        let (status, body) = request(cache, owner, repo).await;
+        if body.is_empty() {
+            return (status, body);
+        }
+        let mut body: Value = serde_json::from_str(&body).unwrap();
+        fetched_at(&body);
+        body.as_object_mut().unwrap().remove("fetched_at");
+        (status, body.to_string())
+    }
+
+    /// The time of fetching in `body`, which must be as JavaScript writes it.
+    fn fetched_at(body: &Value) -> DateTimeUtc {
+        let text = body["fetched_at"].as_str().unwrap();
+        assert!(text.ends_with('Z') && text.len() == 24, "{text}");
+        text.parse().unwrap()
     }
 
     #[tokio::test]
@@ -162,6 +186,19 @@ mod tests {
                 "{owner}/{repo}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn the_time_of_fetching_is_the_caches() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let before = ChronoUtc::now() - TimeDelta::milliseconds(1);
+        let (_, first) = request(&cache, "acme", "widget").await;
+        let (_, again) = request(&cache, "acme", "widget").await;
+        let first = fetched_at(&serde_json::from_str(&first).unwrap());
+        assert_eq!(fetched_at(&serde_json::from_str(&again).unwrap()), first);
+        assert!(before <= first && first <= ChronoUtc::now(), "{first}");
+        assert_eq!(stub.urls(), ["https://api.github.com/repos/acme/widget"]);
     }
 
     #[tokio::test]

@@ -278,4 +278,46 @@ describe('Search', () => {
       expect(navigate).not.toHaveBeenCalled();
     });
   });
+
+  describe("in a dashboard's header (UI-03)", () => {
+    beforeEach(async () => {
+      fixture.componentRef.setInput('compact', true);
+      fixture.componentRef.setInput('prefill', 'github.com/acme/widget');
+      await fixture.whenStable();
+    });
+
+    it("is filled in with the dashboard's resource, which it does not repeat below", () => {
+      expect(input().value).toBe('github.com/acme/widget');
+      expect(hint()).toBe('');
+    });
+
+    it('says what it recognizes once edited', async () => {
+      type('github.com/acme/gadget');
+      await fixture.whenStable();
+      expect(hint()).toBe('Repository · acme/gadget');
+      type('github.com/acme/widget');
+      await fixture.whenStable();
+      expect(hint()).toBe('');
+    });
+
+    it('has no "Show dashboard", and opens a dashboard as the form is submitted', async () => {
+      expect(element().querySelector('button')).toBeNull();
+      type('owner/repo');
+      element().querySelector('form')!.requestSubmit();
+      await fixture.whenStable();
+      expect(navigate).toHaveBeenCalledExactlyOnceWith('/owner/repo');
+    });
+
+    it('is filled in anew for another dashboard, without the last message', async () => {
+      type('octocat');
+      element().querySelector('form')!.requestSubmit();
+      http.expectOne('/-/api/accounts/octocat').flush({ type: 'user' });
+      await vi.waitFor(() => expect(message()).toBe(USER_MESSAGE));
+      fixture.componentRef.setInput('prefill', 'github.com/acme');
+      await fixture.whenStable();
+      expect(input().value).toBe('github.com/acme');
+      expect(message()).toBeUndefined();
+      expect(hint()).toBe('');
+    });
+  });
 });

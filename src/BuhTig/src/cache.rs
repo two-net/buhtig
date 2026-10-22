@@ -25,7 +25,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
-use sea_orm::sea_query::prelude::chrono::TimeDelta;
+use sea_orm::sea_query::prelude::chrono::{SecondsFormat, TimeDelta};
 use sea_orm::sea_query::{Expr, Func, OnConflict, Order};
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
@@ -99,6 +99,15 @@ pub struct Cached<T> {
     pub fetched_at: DateTimeUtc,
     /// Why newer data is missing, when this is the most recent data cached, however old.
     pub stale: Option<Stale>,
+}
+
+impl<T> Cached<T> {
+    /// `fetched_at` as the UI is told it (FR-DATA-06): in UTC to the millisecond, such as
+    /// `2026-10-22T12:00:00.123Z`, the format of JavaScript's `Date.toISOString`, which
+    /// every browser parses.
+    pub fn fetched_at_iso(&self) -> String {
+        self.fetched_at.to_rfc3339_opts(SecondsFormat::Millis, true)
+    }
 }
 
 /// Why GitHub was not asked for newer data, or had none.
@@ -1197,6 +1206,18 @@ mod tests {
             )
         };
         (respond, DateTime::from_timestamp(seconds, 0).unwrap())
+    }
+
+    #[test]
+    fn the_time_of_fetching_is_told_as_javascript_writes_it() {
+        let cached = |fetched_at| Cached {
+            data: (),
+            fetched_at,
+            stale: None,
+        };
+        assert_eq!(cached(at(3)).fetched_at_iso(), "2026-10-21T12:03:00.000Z");
+        let precise = at(0) + TimeDelta::nanoseconds(123_456_789);
+        assert_eq!(cached(precise).fetched_at_iso(), "2026-10-21T12:00:00.123Z");
     }
 
     #[tokio::test]

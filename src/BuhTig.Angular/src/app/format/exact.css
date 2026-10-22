@@ -1,0 +1,37 @@
+/* Underlined, as a hint that there is more to it. */
+:host {
+  position: relative;
+  text-decoration: underline dotted;
+  text-underline-offset: 0.2em;
+}
+
+/*
+ * Above the text, in the page's colors swapped, so that it stands out in both themes. Not laid
+ * out while hidden, so that one near the edge widens nothing. Its bottom border is the gap to
+ * the text, and part of it, so that the pointer can cross to it without leaving.
+ */
+[role='tooltip'] {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  z-index: 2;
+  translate: -50% 0;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 0.375rem solid transparent;
+  border-radius: 0.25rem;
+  background: var(--text) padding-box;
+  color: var(--background);
+  font-size: 0.875rem;
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+:host(:hover) [role='tooltip'],
+:host(:focus-visible) [role='tooltip'] {
+  display: block;
+}
+
+:host(.dismissed) [role='tooltip'] {
+  display: none;
+}

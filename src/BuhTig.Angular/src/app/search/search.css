@@ -46,3 +46,29 @@ p {
 #search-hint {
   color: var(--muted);
 }
+
+/* In a header (UI-03): the input alone, with what it says below it laid over the page. */
+:host(.compact) form {
+  position: relative;
+}
+
+:host(.compact) input {
+  padding: 0.5rem 1rem;
+}
+
+:host(.compact) .feedback {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  left: 0;
+  z-index: 1;
+  min-height: 0;
+}
+
+:host(.compact) p:not(:empty) {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--background);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.15);
+}
