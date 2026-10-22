@@ -6,6 +6,8 @@ mod entity;
 mod github;
 mod health;
 mod housekeeping;
+mod navigation;
+mod repositories;
 mod session;
 mod surprise;
 mod ui;

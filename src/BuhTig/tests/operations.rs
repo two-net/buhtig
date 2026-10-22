@@ -107,6 +107,11 @@ fn a_database_outage_is_reported_and_recovered_from_without_a_restart() {
     for internal in ["postgres", &db.database, "accepting connections", "Error"] {
         assert!(!page.contains(internal), "{internal:?} in {page}");
     }
+    // A GitHub link with BuhTig's host leads to its dashboard without the database
+    // (FR-NAV-02).
+    let link = running.get("/owner/repo/pull/42");
+    assert_status(&link, 308);
+    assert_eq!(header(&link, "location"), Some("/owner/repo"));
     // When the UI is built, its files need no database.
     let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../BuhTig.Angular/dist/BuhTig/browser");
     if ui.join("favicon.ico").is_file() {
