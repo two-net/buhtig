@@ -75,6 +75,12 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   such as a reverse proxy on the same host or network. Behind a proxy that connects from a
   public address, such as a CDN, or that doesn't set `X-Forwarded-For`, all visitors share
   one limit.
+- **URLs:** dashboards live at `/{owner}/{repo}` and `/{org}`, as on GitHub, so replacing
+  `github.com` with BuhTig's host in a GitHub link opens the matching dashboard. Deeper
+  paths, such as `/{owner}/{repo}/pull/42` or `/orgs/{org}/people`, redirect to it. A
+  dashboard switches to the names as GitHub spells them, and follows a repository that was
+  renamed or transferred. BuhTig's own pages are under `/-/`. What is under `/-/api/` serves
+  BuhTig's UI only; it is not a supported API and may change in any release.
 - **Health:** `GET /-/health` answers `200 ok` while BuhTig can reach its database, and
   `503 unavailable` otherwise. During a database outage, pages show a short "try again"
   notice. BuhTig recovers on its own when the database is back.

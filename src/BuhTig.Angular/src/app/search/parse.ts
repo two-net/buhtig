@@ -23,7 +23,11 @@ const SCHEMES = new Set(['http', 'https', 'ssh']);
  */
 const ACCOUNT = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,38}$/;
 
-/** A repository's name: up to 100 letters, digits, hyphens, underscores and periods. */
+/**
+ * A repository's name: up to 100 letters, digits, hyphens, underscores and periods, other than
+ * `.` and `..`, which `repository` turns away. The server checks the same rule, in
+ * `repositories.rs`.
+ */
 const REPOSITORY = /^[A-Za-z0-9._-]{1,100}$/;
 
 /** How the forms of SRS Table 4-1 begin, up to an organization's name, in lowercase. */

@@ -1,5 +1,7 @@
-//! Whether a GitHub account is an organization or a user. The search box asks before it
-//! opens an organization's dashboard, since BuhTig has none for users (FR-SRCH-06).
+//! Whether a GitHub account is an organization or a user, and how GitHub spells its name.
+//! The search box asks before it opens an organization's dashboard, since BuhTig has none
+//! for users (FR-SRCH-06). The dashboard asks so as to show the name as GitHub spells it
+//! (FR-NAV-04).
 
 use std::sync::Arc;
 
@@ -17,7 +19,8 @@ use crate::visitors::Visitor;
 /// The longest account name GitHub allows.
 const MAX_LENGTH: usize = 39;
 
-/// `/-/api/accounts/{name}`: `{"type": "organization"}` or `{"type": "user"}`, or 404 if
+/// `/-/api/accounts/{name}`: `{"type": "organization" | "user", "login": …}`, where `login`
+/// is the name as GitHub spells it, whatever case it was asked for in (FR-NAV-04). 404 if
 /// there is no such account.
 ///
 /// A name that cannot be an account's is 400, without asking GitHub (FR-SRCH-04). Any
@@ -37,11 +40,14 @@ pub async fn kind(
     // for the dashboard it leads to, so a visitor's load of that counts once (FR-DATA-10).
     let viewer = Viewer::Visitor(visitor);
     match cache.get(&viewer, &format!("/{name}"), &path).await {
-        Ok(Outcome::Data(cached)) => match cached.data.get("type").and_then(Value::as_str) {
-            Some("Organization") => found("organization"),
-            Some("User") => found("user"),
-            _ => status(StatusCode::BAD_GATEWAY),
-        },
+        Ok(Outcome::Data(cached)) => {
+            let login = cached.data.get("login").and_then(Value::as_str);
+            match (cached.data.get("type").and_then(Value::as_str), login) {
+                (Some("Organization"), Some(login)) => found("organization", login),
+                (Some("User"), Some(login)) => found("user", login),
+                _ => status(StatusCode::BAD_GATEWAY),
+            }
+        }
         Ok(Outcome::Computing) => status(StatusCode::BAD_GATEWAY),
         Err(cache::Error::GitHub(github::Error::NotFound)) => status(StatusCode::NOT_FOUND),
         Err(cache::Error::GitHub(_)) => status(StatusCode::BAD_GATEWAY),
@@ -60,7 +66,7 @@ pub async fn kind(
 /// hyphens, and Enterprise Managed Users have an underscore. None starts with a hyphen,
 /// which keeps `/-/` free for BuhTig's own pages (FR-NAV-03). The search box checks the
 /// same rule, in `search/parse.ts`.
-fn is_account_name(name: &str) -> bool {
+pub fn is_account_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_LENGTH
         && !name.starts_with('-')
@@ -69,10 +75,10 @@ fn is_account_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-fn found(kind: &str) -> Response {
+fn found(kind: &str, login: &str) -> Response {
     (
         [(header::CACHE_CONTROL, "no-store")],
-        Json(json!({ "type": kind })),
+        Json(json!({ "type": kind, "login": login })),
     )
         .into_response()
 }
@@ -94,15 +100,19 @@ mod tests {
     use crate::github::stub::{Stub, answer, client};
     use crate::test_cluster::cluster;
 
-    /// A stub GitHub with an organization `acme`, a user `octocat`, and a few odd answers.
+    /// A stub GitHub with an organization `Acme`, a user `octocat`, and a few odd answers.
+    /// Like GitHub, it ignores the case of names.
     fn github() -> Arc<Stub> {
-        Stub::new(|request| match request.uri().path() {
-            "/users/acme" => answer(200, &[], r#"{"login": "acme", "type": "Organization"}"#),
-            "/users/octocat" => answer(200, &[], r#"{"login": "octocat", "type": "User"}"#),
-            "/users/mannequin" => answer(200, &[], r#"{"login": "mannequin", "type": "?"}"#),
-            "/users/broken" => answer(500, &[], r#"{"message": "Server Error"}"#),
-            _ => answer(404, &[], r#"{"message": "Not Found"}"#),
-        })
+        Stub::new(
+            |request| match request.uri().path().to_ascii_lowercase().as_str() {
+                "/users/acme" => answer(200, &[], r#"{"login": "Acme", "type": "Organization"}"#),
+                "/users/octocat" => answer(200, &[], r#"{"login": "octocat", "type": "User"}"#),
+                "/users/mannequin" => answer(200, &[], r#"{"login": "mannequin", "type": "?"}"#),
+                "/users/nameless" => answer(200, &[], r#"{"type": "Organization"}"#),
+                "/users/broken" => answer(500, &[], r#"{"message": "Server Error"}"#),
+                _ => answer(404, &[], r#"{"message": "Not Found"}"#),
+            },
+        )
     }
 
     /// A cache on a database of its own, in front of `stub`, that lets each visitor make
@@ -148,20 +158,42 @@ mod tests {
         let stub = github();
         let cache = cache(&stub, 30).await;
         assert_eq!(
-            ask(&cache, "acme").await,
-            (StatusCode::OK, r#"{"type":"organization"}"#.to_owned())
+            ask(&cache, "Acme").await,
+            (
+                StatusCode::OK,
+                r#"{"login":"Acme","type":"organization"}"#.to_owned()
+            )
         );
         assert_eq!(
             ask(&cache, "octocat").await,
-            (StatusCode::OK, r#"{"type":"user"}"#.to_owned())
+            (
+                StatusCode::OK,
+                r#"{"login":"octocat","type":"user"}"#.to_owned()
+            )
         );
         assert_eq!(
             stub.urls(),
             [
-                "https://api.github.com/users/acme",
+                "https://api.github.com/users/Acme",
                 "https://api.github.com/users/octocat"
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn names_are_spelled_as_github_spells_them() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        for name in ["acme", "ACME"] {
+            assert_eq!(
+                ask(&cache, name).await,
+                (
+                    StatusCode::OK,
+                    r#"{"login":"Acme","type":"organization"}"#.to_owned()
+                ),
+                "{name}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -171,6 +203,7 @@ mod tests {
         assert_eq!(ask(&cache, "nobody").await.0, StatusCode::NOT_FOUND);
         assert_eq!(ask(&cache, "broken").await.0, StatusCode::BAD_GATEWAY);
         assert_eq!(ask(&cache, "mannequin").await.0, StatusCode::BAD_GATEWAY);
+        assert_eq!(ask(&cache, "nameless").await.0, StatusCode::BAD_GATEWAY);
     }
 
     #[tokio::test]

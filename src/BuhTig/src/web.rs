@@ -2,6 +2,10 @@
 //! page it shows while its database is unreachable (FR-DB-09), and how it stops
 //! (FR-OPS-05).
 //!
+//! Every path of BuhTig's own is under `/-/` (FR-NAV-03), and every other path is a
+//! dashboard's (SRS §4.2). What is under `/-/api/` serves BuhTig's UI alone. It is not a
+//! public API, and may change in any release (IF-06).
+//!
 //! TLS is terminated in front of BuhTig (A-06), so it serves plain HTTP.
 
 use std::future::{Future, IntoFuture};
@@ -14,7 +18,7 @@ use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -23,6 +27,8 @@ use tracing::{error, info, warn};
 use crate::accounts;
 use crate::cache::Cache;
 use crate::health::{self, Health};
+use crate::navigation;
+use crate::repositories;
 use crate::session;
 use crate::surprise;
 use crate::ui::{self, Ui};
@@ -38,6 +44,10 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>) -> Router {
             "/-/api/accounts/{name}",
             get(accounts::kind).with_state(cache.clone()),
         )
+        .route(
+            "/-/api/repositories/{owner}/{repo}",
+            get(repositories::name).with_state(cache.clone()),
+        )
         .route("/-/api/session", get(session::current))
         .route("/-/api/shortcuts", get(session::shortcuts))
         .route("/-/api/surprise", get(surprise::pick).with_state(cache))
@@ -47,17 +57,36 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>) -> Router {
         .layer(middleware::from_fn(log_request))
 }
 
-/// Every other path: a file of the UI, or else the app, which takes the path as its
-/// route (`/owner/repo`, `/-/about`, …).
+/// Every other path: a file of the UI, a redirect from a page beneath a dashboard to the
+/// dashboard, or else the app, which takes the path as its route (`/owner/repo`,
+/// `/-/about`, …).
 async fn page(State(health): State<Arc<Health>>, uri: Uri) -> Response {
     if let Some(asset) = ui::asset::<Ui>(uri.path()) {
         return asset;
+    }
+    // A GitHub link with BuhTig's host opens the dashboard (FR-NAV-02). That needs no
+    // database either.
+    if let Some(dashboard) = navigation::redirect(uri.path()) {
+        return moved(&dashboard);
     }
     // The files need no database, but the app does for nearly everything it shows.
     if !health.database_reachable().await {
         return unavailable();
     }
     ui::app::<Ui>()
+}
+
+/// The response to a request for a page beneath `dashboard`, or another path to it.
+///
+/// The redirect is permanent, so that links and previews take the dashboard's URL. Yet
+/// browsers check it again each time, so that a later release can give such pages their
+/// own place.
+fn moved(dashboard: &str) -> Response {
+    (
+        [(header::CACHE_CONTROL, "no-cache")],
+        Redirect::permanent(dashboard),
+    )
+        .into_response()
 }
 
 /// The response to a request that needs the database while it is unreachable.
