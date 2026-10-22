@@ -1,4 +1,4 @@
-import { provideHttpClient } from '@angular/common/http';
+import { HttpRequest, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { Title } from '@angular/platform-browser';
@@ -29,8 +29,10 @@ describe('Dashboard', () => {
   });
 
   afterEach(() => {
-    // Who is viewing is the header's own business, which these tests leave to it.
+    // Who is viewing is the header's own business, and the stat cards' figures theirs, which
+    // these tests leave to them.
     http.match('/-/api/session');
+    http.match(isStats);
     http.verify();
     vi.useRealTimers();
   });
@@ -39,7 +41,8 @@ describe('Dashboard', () => {
   const heading = () => page().querySelector('h1')?.textContent?.trim();
   const title = () => TestBed.inject(Title).getTitle();
   /** When the dashboard says its data was fetched, if it does. */
-  const updated = () => page().querySelector('.summary p');
+  const updated = () => page().querySelector('.updated');
+  const isStats = (request: HttpRequest<unknown>) => request.url.endsWith('/stats');
 
   /** The text that `element` shows, without the tooltips that hover and focus show. */
   function shown(element: Element): string | undefined {
@@ -231,5 +234,103 @@ describe('Dashboard', () => {
     await harness.navigateByUrl('/acme/gadget');
     expect(updated()).toBeNull();
     http.expectOne('/-/api/repositories/acme/gadget').flush({ name: 'acme/gadget' });
+  });
+
+  /** All that the server says of `Acme/Widget` for its header. */
+  const WIDGET = {
+    name: 'Acme/Widget',
+    fetched_at: '2026-10-22T12:00:00.000Z',
+    owner_avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4',
+    description: 'Widgets for everyone',
+    visibility: 'public',
+    archived: true,
+    template: false,
+    fork: true,
+    parent: 'Upstream/Widget',
+    topics: ['widgets'],
+    license: 'MIT License',
+    default_branch: 'main',
+    homepage: 'https://widget.example/',
+    created_at: '2015-03-01T10:00:00Z',
+    pushed_at: '2026-10-20T08:30:00Z',
+  };
+
+  it("heads a repository's dashboard with what the server says of it (FR-REPO-01)", async () => {
+    await open('/Acme/Widget', '/-/api/repositories/Acme/Widget', WIDGET);
+    const header = page().querySelector('app-repository-header')!;
+    expect(heading()).toBe('Acme/Widget');
+    expect(header.querySelector('img')!.getAttribute('src')).toBe(WIDGET.owner_avatar_url);
+    expect(header.querySelector('.description')?.textContent).toBe('Widgets for everyone');
+    expect(
+      [...header.querySelectorAll('.badge')].map((badge) => badge.textContent?.trim()),
+    ).toEqual(['Public', 'Archived', 'Fork of Upstream/Widget']);
+    expect(header.querySelector('a.badge')!.getAttribute('href')).toBe('/Upstream/Widget');
+    expect(header.querySelector('.updated')).not.toBeNull();
+  });
+
+  it('loads the stat cards at once, alongside the rest', async () => {
+    await harness.navigateByUrl('/acme/widget');
+    const stats = page().querySelector('app-repository-stats app-widget');
+    expect(stats?.classList.contains('wide')).toBe(true);
+    expect(stats?.querySelector('.skeleton')).not.toBeNull();
+    expect(http.match(isStats).map((request) => request.request.url)).toEqual([
+      '/-/api/repositories/acme/widget/stats',
+    ]);
+    http.expectOne('/-/api/repositories/acme/widget').flush({ name: 'acme/widget' });
+  });
+
+  it("loads the stat cards again under the repository's canonical name", async () => {
+    await harness.navigateByUrl('/ACME/Widget');
+    const first = http.expectOne('/-/api/repositories/ACME/Widget/stats');
+    http.expectOne('/-/api/repositories/ACME/Widget').flush({ name: 'Acme/Widget' });
+    await vi.waitFor(() => expect(router.url).toBe('/Acme/Widget'));
+    await harness.fixture.whenStable();
+    expect(first.cancelled).toBe(true);
+    http.expectOne('/-/api/repositories/Acme/Widget/stats');
+    http.expectOne('/-/api/repositories/Acme/Widget').flush(WIDGET);
+  });
+
+  it('shows nothing of an answer that names no such resource', async () => {
+    await open('/acme/widget', '/-/api/repositories/acme/widget', { ...WIDGET, name: '../evil' });
+    const header = page().querySelector('app-repository-header')!;
+    expect(heading()).toBe('acme/widget');
+    expect(header.querySelector('.description, .badge, img, dl')).toBeNull();
+  });
+
+  it('shows only what it can show safely (NFR-SEC-03)', async () => {
+    await open('/acme/widget', '/-/api/repositories/acme/widget', {
+      ...WIDGET,
+      name: 'acme/widget',
+      owner_avatar_url: 'http://avatars.example/u/1',
+      visibility: 'secret',
+      parent: '../evil',
+      homepage: 'javascript:alert(1)',
+      created_at: 'yesterday',
+    });
+    const header = page().querySelector('app-repository-header')!;
+    expect(header.querySelector('img, a.badge')).toBeNull();
+    expect(
+      [...header.querySelectorAll('.badge')].map((badge) => badge.textContent?.trim()),
+    ).toEqual(['Public', 'Archived', 'Fork']);
+    expect([...header.querySelectorAll('dt')].map((label) => label.textContent?.trim())).toEqual([
+      'License',
+      'Default branch',
+      'Last push',
+    ]);
+  });
+
+  it('forgets what it said of one repository as it moves to another', async () => {
+    await open('/Acme/Widget', '/-/api/repositories/Acme/Widget', WIDGET);
+    expect(page().querySelector('.description')).not.toBeNull();
+    await harness.navigateByUrl('/acme/gadget');
+    expect(heading()).toBe('acme/gadget');
+    expect(page().querySelector('.description, .badge')).toBeNull();
+    http.expectOne('/-/api/repositories/acme/gadget').flush({ name: 'acme/gadget' });
+  });
+
+  it("has neither a repository's head nor its stat cards for an organization", async () => {
+    await open('/acme', '/-/api/accounts/acme', { type: 'organization', login: 'acme' });
+    expect(page().querySelector('app-repository-header, app-repository-stats')).toBeNull();
+    expect(http.match(isStats)).toEqual([]);
   });
 });

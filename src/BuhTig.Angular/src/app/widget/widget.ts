@@ -45,6 +45,11 @@ export class Widget {
   readonly empty = input.required<string>();
   /** Whether it spans the grid's columns, as a row of stat cards does. */
   readonly wide = input(false);
+  /**
+   * Whether its heading is for assistive technology alone, as for a row of stat cards, whose
+   * labels say what they are.
+   */
+  readonly hideHeading = input(false);
 
   protected readonly content = contentChild.required(Loaded);
   protected readonly state = computed(() => this.content().loader().state());

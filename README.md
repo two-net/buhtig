@@ -61,7 +61,9 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   the environment, so a proxy that inspects TLS does not work. Visitors' requests carry
   the OAuth app's client ID and secret, which earn a higher rate limit than anonymous
   requests. GitHub ignores a client ID it does not know, so check `github.client_id` if
-  visitors run into the rate limit soon.
+  visitors run into the rate limit soon. Repository dashboards also count open pull
+  requests with GitHub's search API, which has a separate, much lower rate limit. When it
+  runs out, the stat cards show cached figures, or an error until it resets.
 - **Cache:** BuhTig keeps the GitHub data it shows in the database, and serves it for
   `cache.ttl` before it asks GitHub again. While GitHub is unreachable or rate-limited,
   dashboards show the latest data they have, with its age. Data fetched with a user's

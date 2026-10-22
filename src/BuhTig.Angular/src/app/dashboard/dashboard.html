@@ -4,12 +4,24 @@
   <app-account />
 </header>
 <main>
-  <div class="summary">
-    <h1>{{ name() }}</h1>
-    @if (fetchedAt(); as fetchedAt) {
-      <p>Updated <app-relative-time [value]="fetchedAt" /></p>
-    }
-  </div>
-  <!-- The widgets (#15 to #20), in two columns, or one on narrow screens (UI-05). -->
-  <div class="grid"></div>
+  @if (repository(); as repository) {
+    <app-repository-header
+      [name]="name()"
+      [repository]="summary()?.repository"
+      [fetchedAt]="summary()?.fetchedAt"
+    />
+    <!-- The widgets, in two columns, or one on narrow screens (UI-05). The rest are #16 and #17. -->
+    <div class="grid">
+      <app-repository-stats [owner]="repository.owner" [repo]="repository.repo" />
+    </div>
+  } @else {
+    <div class="summary">
+      <h1>{{ name() }}</h1>
+      @if (summary()?.fetchedAt; as fetchedAt) {
+        <p class="updated">Updated <app-relative-time [value]="fetchedAt" /></p>
+      }
+    </div>
+    <!-- The organization's widgets (#18 to #21), laid out as a repository's. -->
+    <div class="grid"></div>
+  }
 </main>

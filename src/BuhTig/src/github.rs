@@ -16,11 +16,6 @@
 //! GitHub failing never fails BuhTig (NFR-REL-01): every answer, however odd, becomes a
 //! [`Reply`] or an [`Error`] for the caller to degrade with (FR-DATA-05).
 
-#![allow(
-    dead_code,
-    reason = "the dashboards, sign-in and tokens that call GitHub are still to come (#15, #22, #23)"
-)]
-
 mod https;
 
 use std::collections::HashMap;

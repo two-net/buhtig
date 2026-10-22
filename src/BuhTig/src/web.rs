@@ -59,7 +59,11 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>, previews: Option<Previews>
         )
         .route(
             "/-/api/repositories/{owner}/{repo}",
-            get(repositories::name).with_state(cache.clone()),
+            get(repositories::summary).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/stats",
+            get(repositories::stats).with_state(cache.clone()),
         )
         .route("/-/api/session", get(session::current))
         .route("/-/api/shortcuts", get(session::shortcuts))

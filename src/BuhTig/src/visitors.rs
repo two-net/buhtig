@@ -11,11 +11,6 @@
 //! counters are held in memory alone (NFR-REL-02), and they keep hashes rather than
 //! addresses or dashboards, so that they are no record of who viewed what (NFR-PRIV-02).
 
-#![allow(
-    dead_code,
-    reason = "the dashboards that identify visitors are still to come (#14, #15)"
-)]
-
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{BuildHasher, RandomState};

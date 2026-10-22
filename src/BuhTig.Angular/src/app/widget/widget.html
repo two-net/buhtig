@@ -1,5 +1,5 @@
 <section [attr.aria-labelledby]="id" [attr.aria-busy]="state().status === 'loading'">
-  <h2 [id]="id">{{ heading() }}</h2>
+  <h2 [id]="id" [class.visually-hidden]="hideHeading()">{{ heading() }}</h2>
   @switch (state().status) {
     @case ('loading') {
       <!-- A placeholder of about the content's size, so that little moves once it is there. -->

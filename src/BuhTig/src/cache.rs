@@ -17,7 +17,7 @@
 
 #![allow(
     dead_code,
-    reason = "the dashboards that read through the cache are still to come (#14, #15)"
+    reason = "sign-in, tokens and the widgets that read lists are still to come (#16 to #23)"
 )]
 
 use std::collections::HashMap;
@@ -170,16 +170,24 @@ pub struct Cache {
 #[derive(Clone, Copy)]
 enum Fetch<'a> {
     One(&'a Path),
-    List { path: &'a Path, limit: usize },
+    /// One resource that may not exist, such as a repository's latest release: GitHub's
+    /// "not found" is then an answer, cached as any other, rather than an error.
+    Optional(&'a Path),
+    List {
+        path: &'a Path,
+        limit: usize,
+    },
 }
 
 impl Fetch<'_> {
-    /// The `resource_key` of its cache entries, such as `/repos/owner/repo/languages`, or
+    /// The `resource_key` of its cache entries, such as `/repos/owner/repo/languages`,
+    /// `/repos/owner/repo/releases/latest optional` for a resource that may not exist, or
     /// `/orgs/org/repos?sort=pushed limit=1000` for a list. A path has no spaces, since
-    /// they are percent-encoded, so the two kinds of key cannot meet.
+    /// they are percent-encoded, so the kinds of key cannot meet.
     fn key(&self) -> String {
         match self {
             Fetch::One(path) => path.to_string(),
+            Fetch::Optional(path) => format!("{path} optional"),
             Fetch::List { path, limit } => format!("{path} limit={limit}"),
         }
     }
@@ -188,6 +196,7 @@ impl Fetch<'_> {
     fn holds(&self, data: &Value) -> bool {
         match self {
             Fetch::One(_) => true,
+            Fetch::Optional(_) => data.get("found").is_some_and(Value::is_boolean),
             Fetch::List { .. } => {
                 data.get("items").is_some_and(Value::is_array)
                     && data.get("truncated").is_some_and(Value::is_boolean)
@@ -203,6 +212,14 @@ impl Fetch<'_> {
     ) -> Result<Reply<Value>, github::Error> {
         match self {
             Fetch::One(path) => github.get(credential, path, etag).await,
+            Fetch::Optional(path) => match github.get(credential, path, etag).await {
+                Err(github::Error::NotFound) => Ok(Reply::Fresh {
+                    data: optional_value(None),
+                    etag: None,
+                    redirected: false,
+                }),
+                reply => Ok(reply?.map(|data| optional_value(Some(data)))),
+            },
             Fetch::List { path, limit } => Ok(github
                 .get_list(credential, path, *limit, etag)
                 .await?
@@ -319,6 +336,25 @@ impl Cache {
             .await
     }
 
+    /// One resource that may not exist, for a dashboard, as [`Cache::get`]: `None` when
+    /// GitHub says it is not found, such as the latest release of a repository that has
+    /// none. That answer is cached too, so that asking costs GitHub nothing while it is
+    /// fresh (FR-DATA-03).
+    ///
+    /// Only for resources under one that the caller has found, such as a repository's:
+    /// GitHub's "not found" is also its answer for what is private to the viewer
+    /// (FR-ACC-05). Every viewer in a scope gets the same answer, so caching it tells no
+    /// one anything that GitHub would not.
+    pub async fn get_optional(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+    ) -> Result<Outcome<Option<Value>>, Error> {
+        self.optional(viewer, dashboard, path, &ChronoUtc::now)
+            .await
+    }
+
     /// Up to `limit` items of a list, for a dashboard, as [`Cache::get`].
     pub async fn get_list(
         &self,
@@ -392,6 +428,36 @@ impl Cache {
         Ok(entry
             .map(|entry| entry.data)
             .filter(|data| !marks_private(data)))
+    }
+
+    async fn optional(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+        clock: &Clock,
+    ) -> Result<Outcome<Option<Value>>, Error> {
+        let fetch = Fetch::Optional(path);
+        match self.lookup(viewer, dashboard, fetch, clock).await? {
+            Outcome::Computing => Ok(Outcome::Computing),
+            Outcome::Data(Cached {
+                data,
+                fetched_at,
+                stale,
+            }) => {
+                // `lookup` only returns data that `fetch.holds`.
+                let data = value_optional(data).ok_or_else(|| {
+                    Error::GitHub(github::Error::Invalid(
+                        "a cached optional resource is not one".to_owned(),
+                    ))
+                })?;
+                Ok(Outcome::Data(Cached {
+                    data,
+                    fetched_at,
+                    stale,
+                }))
+            }
+        }
     }
 
     async fn list(
@@ -847,6 +913,24 @@ fn strip_permissions(data: &mut Value) {
     }
 }
 
+/// How a resource that may not exist is stored.
+fn optional_value(data: Option<Value>) -> Value {
+    match data {
+        Some(data) => serde_json::json!({ "found": true, "data": data }),
+        None => serde_json::json!({ "found": false }),
+    }
+}
+
+fn value_optional(value: Value) -> Option<Option<Value>> {
+    let Value::Object(mut object) = value else {
+        return None;
+    };
+    match object.get("found")?.as_bool()? {
+        true => Some(Some(object.remove("data")?)),
+        false => Some(None),
+    }
+}
+
 /// How a list is stored.
 fn list_value(list: List) -> Value {
     serde_json::json!({ "items": list.items, "truncated": list.truncated })
@@ -1000,6 +1084,17 @@ mod tests {
         ) -> Result<Outcome<Value>, Error> {
             self.lookup(viewer, dashboard, Fetch::One(path), &move || now)
                 .await
+        }
+
+        /// [`Cache::get_optional`] at `now`.
+        async fn get_optional_at(
+            &self,
+            viewer: &Viewer,
+            dashboard: &str,
+            path: &Path,
+            now: DateTimeUtc,
+        ) -> Result<Outcome<Option<Value>>, Error> {
+            self.optional(viewer, dashboard, path, &move || now).await
         }
 
         /// [`Cache::get_list`] at `now`.
@@ -1795,6 +1890,76 @@ mod tests {
             .unwrap();
         assert_eq!(data(get_list(2, at(2)).await).data, two.data);
         assert_eq!(setup.stub.requests().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn what_may_not_exist_is_cached_found_or_not() {
+        let setup = setup().await;
+        let latest = path(&["repos", "owner", "repo", "releases", "latest"]);
+        setup.answer(|_| answer(404, &[], r#"{"message":"Not Found"}"#));
+        let get_optional = |viewer: Viewer, now| {
+            let cache = setup.cache.clone();
+            let latest = latest.clone();
+            async move {
+                cache
+                    .get_optional_at(&viewer, DASHBOARD, &latest, now)
+                    .await
+            }
+        };
+
+        // Not found is an answer, served from the cache while it is fresh.
+        let missing = data(get_optional(visitor(), at(0)).await);
+        assert_eq!((missing.data, missing.fetched_at), (None, at(0)));
+        assert_eq!(data(get_optional(visitor(), at(14)).await).data, None);
+        assert_eq!(setup.stub.requests().len(), 1);
+        let rows = setup.rows().await;
+        assert_eq!(
+            (rows[0].resource_key.as_str(), rows[0].data.clone()),
+            (
+                "/repos/owner/repo/releases/latest optional",
+                json!({"found": false})
+            )
+        );
+
+        // The same path read as one resource is cached apart, and not found is its error.
+        assert_eq!(
+            github_error(setup.get(&visitor(), &latest, at(14)).await),
+            github::Error::NotFound
+        );
+        assert_eq!(setup.stub.requests().len(), 2);
+
+        // Once it exists, it replaces the answer that it did not.
+        setup.answer(|_| answer(200, &[("etag", "e")], r#"{"tag_name":"v1"}"#));
+        let found = data(get_optional(visitor(), at(16)).await);
+        assert_eq!(found.data, Some(json!({"tag_name": "v1"})));
+        let rows = setup.rows().await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (rows[0].data.clone(), rows[0].etag.as_deref()),
+            (
+                json!({"found": true, "data": {"tag_name": "v1"}}),
+                Some("e")
+            )
+        );
+
+        // Other failures are no answer: the latest data is served with its age, and
+        // without any, the failure is the caller's.
+        setup.answer(|_| answer(500, &[], r#"{"message":"Server Error"}"#));
+        let stale = data(get_optional(visitor(), at(32)).await);
+        assert_eq!(
+            (stale.data, stale.fetched_at),
+            (Some(json!({"tag_name": "v1"})), at(16))
+        );
+        assert!(matches!(
+            github_error(get_optional(setup.alice(), at(32)).await),
+            github::Error::Status { status: 500, .. }
+        ));
+
+        // What is marked private stays out of the shared cache, found as it is.
+        setup.answer(|_| answer(200, &[], r#"{"tag_name":"v2","private":true}"#));
+        let private = data(get_optional(signed_in("sign-in-bob"), at(48)).await);
+        assert_eq!(private.data.unwrap()["tag_name"], "v2");
+        assert!(setup.rows().await.is_empty());
     }
 
     #[tokio::test]

@@ -9,7 +9,7 @@ import { Loaded, Widget } from './widget';
 @Component({
   imports: [Loaded, Widget],
   template: `
-    <app-widget heading="Releases" empty="No releases yet." [wide]="true">
+    <app-widget heading="Releases" empty="No releases yet." [wide]="true" [hideHeading]="true">
       <ng-template [appLoaded]="releases" let-releases>
         <ul>
           @for (release of releases; track release) {
@@ -86,6 +86,10 @@ describe('Widget', () => {
     expect(section(releases()).getAttribute('aria-labelledby')).toBe(heading.id);
     expect(section(languages()).querySelector('h2')!.id).not.toBe(heading.id);
     expect(widgets().map((widget) => widget.classList.contains('wide'))).toEqual([true, false]);
+    // A heading may be for assistive technology alone.
+    expect(
+      widgets().map((widget) => widget.querySelector('h2')!.classList.contains('visually-hidden')),
+    ).toEqual([true, false]);
     await answer([], []);
   });
 
@@ -93,7 +97,7 @@ describe('Widget', () => {
     for (const widget of widgets()) {
       expect(section(widget).getAttribute('aria-busy')).toBe('true');
       expect(widget.querySelector('.skeleton')).not.toBeNull();
-      expect(widget.querySelector('.visually-hidden')?.textContent?.trim()).toBe(LOADING);
+      expect(widget.querySelector('p.visually-hidden')?.textContent?.trim()).toBe(LOADING);
     }
     await answer(['v2.0.0', 'v1.0.0'], ['TypeScript', 'CSS']);
     expect(section(releases()).getAttribute('aria-busy')).toBe('false');
