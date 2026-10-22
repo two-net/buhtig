@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Title } from '@angular/platform-browser';
 import { Router, provideRouter, withComponentInputBinding } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
@@ -47,6 +47,27 @@ describe('routes', () => {
     input.value = 'https://github.com/owner/repo/tree/main';
     input.dispatchEvent(new Event('input'));
     page.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    await vi.waitFor(() => expect(TestBed.inject(Router).url).toBe('/owner/repo'));
+    await harness.fixture.whenStable();
+    expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe('owner/repo');
+  });
+
+  it('offers a surprise beside "Show dashboard" on the home page (UI-02, FR-SRCH-10)', async () => {
+    const harness = await RouterTestingHarness.create('/');
+    TestBed.inject(HttpTestingController)
+      .expectOne('/-/api/surprise')
+      .flush({ name: 'owner/repo' });
+    await harness.fixture.whenStable();
+    const buttons = [
+      ...harness.routeNativeElement!.querySelectorAll<HTMLButtonElement>(
+        'form[role="search"] button',
+      ),
+    ];
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+      'Show dashboard',
+      'Surprise me',
+    ]);
+    buttons[1].click();
     await vi.waitFor(() => expect(TestBed.inject(Router).url).toBe('/owner/repo'));
     await harness.fixture.whenStable();
     expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe('owner/repo');

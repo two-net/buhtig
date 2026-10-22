@@ -16,7 +16,8 @@ import { dashboardPath, isUnfinished, parse } from './parse';
 /**
  * The search box: one input that takes a GitHub repository or organization URL, says what it
  * recognizes as the user types (FR-SRCH-09), and opens its dashboard on Enter or "Show
- * dashboard" (SRS §4.1). `/` focuses it and Esc clears it (FR-SRCH-07).
+ * dashboard" (SRS §4.1). `/` focuses it and Esc clears it (FR-SRCH-07). Its content goes
+ * beside "Show dashboard", as the home page's "Surprise me" does (FR-SRCH-10).
  */
 @Component({
   selector: 'app-search',
