@@ -7,6 +7,7 @@ mod github;
 mod health;
 mod housekeeping;
 mod session;
+mod surprise;
 mod ui;
 mod visitors;
 mod web;

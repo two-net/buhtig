@@ -24,6 +24,7 @@ use crate::accounts;
 use crate::cache::Cache;
 use crate::health::{self, Health};
 use crate::session;
+use crate::surprise;
 use crate::ui::{self, Ui};
 
 /// The page shown in place of BuhTig's own while its database is unreachable. It says
@@ -35,10 +36,11 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>) -> Router {
         .route("/-/health", get(health::check))
         .route(
             "/-/api/accounts/{name}",
-            get(accounts::kind).with_state(cache),
+            get(accounts::kind).with_state(cache.clone()),
         )
         .route("/-/api/session", get(session::current))
         .route("/-/api/shortcuts", get(session::shortcuts))
+        .route("/-/api/surprise", get(surprise::pick).with_state(cache))
         .fallback(get(page))
         .with_state(health)
         // Outermost, so that every response is logged, whichever part answered.

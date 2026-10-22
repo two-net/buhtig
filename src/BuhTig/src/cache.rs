@@ -26,8 +26,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
 use sea_orm::sea_query::prelude::chrono::TimeDelta;
-use sea_orm::sea_query::{Expr, OnConflict};
-use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set};
+use sea_orm::sea_query::{Expr, Func, OnConflict, Order};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 use serde_json::Value;
 use tokio::sync::watch;
 use tracing::{debug, error, warn};
@@ -329,6 +331,35 @@ impl Cache {
     /// be one that the caller has checked.
     pub fn refresh(&self, viewer: &Viewer, dashboard: &str) -> Result<(), Refused> {
         self.refresh_at(viewer, dashboard, ChronoUtc::now())
+    }
+
+    /// The name of a repository picked at random from the shared cache, which holds only
+    /// public ones (FR-DATA-04), or `None` while it holds none (FR-SRCH-10).
+    ///
+    /// Only repositories read whole count, as their dashboards read them, however old: not
+    /// those that only appear in a list. The name is `full_name`, as GitHub returns it
+    /// (FR-NAV-04), whatever case the path was asked for in.
+    pub async fn random_repository(&self) -> Result<Option<String>, DbErr> {
+        // Here alone: `ExprTrait` gives `String` methods that shadow those of `str`, such
+        // as `matches`.
+        use sea_orm::sea_query::ExprTrait;
+        use sea_orm::sea_query::extension::postgres::PgExpr;
+
+        use cache_entry::Column;
+
+        let name = Expr::col(Column::Data).cast_json_field("full_name");
+        cache_entry::Entity::find()
+            .select_only()
+            .expr(name.clone())
+            .filter(Column::Scope.eq(Scope::Shared.key()))
+            // `/repos/{owner}/{repo}`, and not what is under it, such as its languages.
+            .filter(Column::ResourceKey.like("/repos/%/%"))
+            .filter(Column::ResourceKey.not_like("/repos/%/%/%"))
+            .filter(name.is_not_null())
+            .order_by(Func::random(), Order::Asc)
+            .into_tuple()
+            .one(&self.db)
+            .await
     }
 
     async fn list(
@@ -802,6 +833,7 @@ fn value_list(value: Value) -> Option<List> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::future::Future;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, Instant};
@@ -809,8 +841,8 @@ mod tests {
     use axum::body::Bytes;
     use axum::http::header::{AUTHORIZATION, IF_NONE_MATCH};
     use axum::http::{HeaderMap, Request, Response};
+    use sea_orm::ActiveModelTrait;
     use sea_orm::sea_query::prelude::chrono::DateTime;
-    use sea_orm::{ActiveModelTrait, QueryOrder};
     use serde_json::json;
     use tokio::task::JoinSet;
     use url::Url;
@@ -1709,6 +1741,66 @@ mod tests {
             .unwrap();
         assert_eq!(data(get_list(2, at(2)).await).data, two.data);
         assert_eq!(setup.stub.requests().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn a_random_repository_is_a_public_one_read_whole() {
+        let setup = setup().await;
+        let cache = &setup.cache;
+        let store = |scope, key: &'static str, data: Value| async move {
+            cache.store(scope, key, &data, None, at(0)).await;
+        };
+        assert_eq!(cache.random_repository().await.unwrap(), None);
+
+        // Not an account, part of a repository, a list, or a repository that only a token
+        // user may see.
+        store(
+            Scope::Shared,
+            "/users/acme",
+            json!({"login": "acme", "type": "Organization"}),
+        )
+        .await;
+        store(
+            Scope::Shared,
+            "/repos/owner/repo/languages",
+            json!({"Rust": 100}),
+        )
+        .await;
+        store(
+            Scope::Shared,
+            "/orgs/acme/repos?sort=pushed limit=1000",
+            json!({"items": [{"full_name": "acme/widget"}], "truncated": false}),
+        )
+        .await;
+        store(
+            Scope::User(setup.alice),
+            "/repos/owner/secret",
+            json!({"full_name": "owner/secret", "private": true}),
+        )
+        .await;
+        assert_eq!(cache.random_repository().await.unwrap(), None);
+
+        // Each repository may come up, named as GitHub names it.
+        store(
+            Scope::Shared,
+            "/repos/Owner/Repo",
+            json!({"full_name": "owner/repo", "private": false}),
+        )
+        .await;
+        store(
+            Scope::Shared,
+            "/repos/acme/widget",
+            json!({"full_name": "acme/widget", "private": false}),
+        )
+        .await;
+        let mut names = HashSet::new();
+        for _ in 0..64 {
+            names.insert(cache.random_repository().await.unwrap().unwrap());
+        }
+        assert_eq!(
+            names,
+            HashSet::from(["owner/repo".to_owned(), "acme/widget".to_owned()])
+        );
     }
 
     #[tokio::test]
