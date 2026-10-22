@@ -9,6 +9,28 @@
 use crate::accounts::is_account_name;
 use crate::repositories::is_repository_name;
 
+/// A dashboard, by the names in its path, in their case.
+#[derive(Debug, PartialEq)]
+pub enum Dashboard<'a> {
+    Repository { owner: &'a str, repo: &'a str },
+    Organization { org: &'a str },
+}
+
+/// The dashboard whose own path `path` is, such as `/owner/repo` or `/org` (FR-NAV-01).
+/// `None` for any other path, including those that [`redirect`] leads to a dashboard.
+pub fn dashboard_at(path: &str) -> Option<Dashboard<'_>> {
+    if dashboard(path).as_deref() != Some(path) {
+        return None;
+    }
+    // A dashboard's own path is `/` and one or two checked names.
+    let mut names = path.strip_prefix('/')?.split('/');
+    match (names.next(), names.next()) {
+        (Some(owner), Some(repo)) => Some(Dashboard::Repository { owner, repo }),
+        (Some(org), None) => Some(Dashboard::Organization { org }),
+        _ => None,
+    }
+}
+
 /// The dashboard that `path` leads to when it is not that dashboard's own path, such as
 /// `/owner/repo` for `/owner/repo/pull/42` or `/org` for `/orgs/org/people` (FR-NAV-02).
 /// `None` for a dashboard's own path, and for any path that does not begin with names that
@@ -116,6 +138,33 @@ mod tests {
             "/-/auth/callback",
         ] {
             assert_eq!(redirect(path), None, "{path}");
+        }
+    }
+
+    #[test]
+    fn dashboards_are_known_by_their_own_paths() {
+        assert_eq!(
+            dashboard_at("/Owner/next.js"),
+            Some(Dashboard::Repository {
+                owner: "Owner",
+                repo: "next.js"
+            })
+        );
+        assert_eq!(
+            dashboard_at("/acme"),
+            Some(Dashboard::Organization { org: "acme" })
+        );
+        for path in [
+            "/",
+            "",
+            "/-/about",
+            "/owner/repo/",
+            "/owner/repo.git",
+            "/owner/repo/issues",
+            "/orgs/acme",
+            "/evil.example/x",
+        ] {
+            assert_eq!(dashboard_at(path), None, "{path}");
         }
     }
 

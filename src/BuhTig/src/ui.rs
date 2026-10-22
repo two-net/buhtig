@@ -58,11 +58,15 @@ pub fn asset<A: RustEmbed>(path: &str) -> Option<Response> {
     )
 }
 
-/// The app's page, whatever the route. Browsers check for a new one on every load, so
-/// that they pick up the bundles of a new release.
-pub fn app<A: RustEmbed>() -> Response {
+/// The app's page, whatever the route, with `head`, such as a link preview's tags, at the
+/// end of its `<head>`. Browsers check for a new one on every load, so that they pick up
+/// the bundles of a new release.
+pub fn app<A: RustEmbed>(head: Option<&str>) -> Response {
     let body = match A::get(INDEX) {
-        Some(file) => Body::from(file.data),
+        Some(file) => match head.and_then(|head| with_head(&file.data, head)) {
+            Some(page) => Body::from(page),
+            None => Body::from(file.data),
+        },
         None => Body::from(NOT_BUILT),
     };
     (
@@ -73,6 +77,13 @@ pub fn app<A: RustEmbed>() -> Response {
         body,
     )
         .into_response()
+}
+
+/// `page` with `head` added just before its `</head>`, or `None` if it has none.
+fn with_head(page: &[u8], head: &str) -> Option<Vec<u8>> {
+    const END: &[u8] = b"</head>";
+    let at = page.windows(END.len()).position(|window| window == END)?;
+    Some([&page[..at], head.as_bytes(), &page[at..]].concat())
 }
 
 /// Whether a file's name carries a hash of its contents, as Angular names its bundles
@@ -162,20 +173,40 @@ mod tests {
 
     #[tokio::test]
     async fn every_route_gets_the_index() {
-        let (status, content_type, cache, body) = parts(app::<Built>()).await;
+        let (status, content_type, cache, body) = parts(app::<Built>(None)).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(content_type, "text/html; charset=utf-8");
         assert_eq!(cache, "no-cache");
-        assert!(body.contains("<title>Fixture</title>"), "{body}");
+        assert_eq!(
+            body,
+            "<!doctype html>\n<head><title>Fixture</title></head>\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn what_is_added_to_the_head_ends_it() {
+        let (status, _, cache, body) = parts(app::<Built>(Some("<meta name=\"x\">"))).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(cache, "no-cache");
+        assert_eq!(
+            body,
+            "<!doctype html>\n<head><title>Fixture</title><meta name=\"x\"></head>\n"
+        );
+    }
+
+    #[test]
+    fn a_page_without_a_head_gets_nothing_added() {
+        assert_eq!(with_head(b"<title>x</title>", "<meta>"), None);
     }
 
     #[tokio::test]
     async fn a_build_without_the_ui_says_how_to_build_it() {
         assert!(asset::<NotBuilt>("/main-ABCDEFGH.js").is_none());
-        let (status, content_type, _, body) = parts(app::<NotBuilt>()).await;
+        let (status, content_type, _, body) = parts(app::<NotBuilt>(Some("<meta>"))).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(content_type, "text/html; charset=utf-8");
         assert!(body.contains("npm ci &amp;&amp; npm run build"), "{body}");
+        assert!(!body.contains("<meta>"), "{body}");
     }
 
     #[test]

@@ -362,6 +362,29 @@ impl Cache {
             .await
     }
 
+    /// One resource, for a dashboard, as the shared cache holds it while it is fresh,
+    /// without asking GitHub: public data (FR-DATA-04) that anyone may be shown, as in a
+    /// link preview (FR-NAV-06). Nothing is fetched, so no visitor's load counts.
+    pub async fn fresh_shared(&self, dashboard: &str, path: &Path) -> Result<Option<Value>, Error> {
+        self.shared(dashboard, path, &ChronoUtc::now).await
+    }
+
+    async fn shared(
+        &self,
+        dashboard: &str,
+        path: &Path,
+        clock: &Clock,
+    ) -> Result<Option<Value>, Error> {
+        let fetch = Fetch::One(path);
+        let entry = self
+            .fresh(Scope::Shared, &fetch.key(), fetch, dashboard, clock)
+            .await?;
+        // As a safeguard: nothing marked private is stored there in the first place.
+        Ok(entry
+            .map(|entry| entry.data)
+            .filter(|data| !marks_private(data)))
+    }
+
     async fn list(
         &self,
         viewer: &Viewer,
@@ -981,6 +1004,16 @@ mod tests {
         ) -> Result<Outcome<List>, Error> {
             self.list(viewer, dashboard, path, limit, &move || now)
                 .await
+        }
+
+        /// [`Cache::fresh_shared`] at `now`.
+        async fn fresh_shared_at(
+            &self,
+            dashboard: &str,
+            path: &Path,
+            now: DateTimeUtc,
+        ) -> Option<Value> {
+            self.shared(dashboard, path, &move || now).await.unwrap()
         }
     }
 
@@ -1801,6 +1834,59 @@ mod tests {
             names,
             HashSet::from(["owner/repo".to_owned(), "acme/widget".to_owned()])
         );
+    }
+
+    #[tokio::test]
+    async fn fresh_shared_data_is_read_without_asking_github() {
+        let setup = setup().await;
+        let cache = &setup.cache;
+        let repo = path(&["repos", "owner", "repo"]);
+        let public = json!({"full_name": "owner/repo", "private": false});
+        cache
+            .store(Scope::Shared, "/repos/owner/repo", &public, None, at(0))
+            .await;
+        assert_eq!(
+            cache.fresh_shared_at(DASHBOARD, &repo, at(14)).await,
+            Some(public)
+        );
+        assert_eq!(cache.fresh_shared_at(DASHBOARD, &repo, at(15)).await, None);
+        // Nor once the dashboard was refreshed since.
+        assert_eq!(
+            cache.refresh_at(&signed_in("sign-in-bob"), DASHBOARD, at(5)),
+            Ok(())
+        );
+        assert_eq!(cache.fresh_shared_at(DASHBOARD, &repo, at(10)).await, None);
+
+        // What only a token user may see, or what is marked private, is never read.
+        cache
+            .store(
+                Scope::User(setup.alice),
+                "/repos/owner/secret",
+                &json!({"full_name": "owner/secret", "private": false}),
+                None,
+                at(0),
+            )
+            .await;
+        cache
+            .store(
+                Scope::Shared,
+                "/repos/owner/leak",
+                &json!({"full_name": "owner/leak", "visibility": "internal"}),
+                None,
+                at(0),
+            )
+            .await;
+        for name in ["secret", "leak", "missing"] {
+            let resource = path(&["repos", "owner", name]);
+            assert_eq!(
+                cache
+                    .fresh_shared_at(&format!("/owner/{name}"), &resource, at(1))
+                    .await,
+                None,
+                "{name}"
+            );
+        }
+        assert_eq!(setup.stub.urls(), Vec::<String>::new());
     }
 
     #[tokio::test]

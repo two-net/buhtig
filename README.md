@@ -81,6 +81,10 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   dashboard switches to the names as GitHub spells them, and follows a repository that was
   renamed or transferred. BuhTig's own pages are under `/-/`. What is under `/-/api/` serves
   BuhTig's UI only; it is not a supported API and may change in any release.
+- **Link previews:** in public mode, a link to a dashboard unfurls in chat tools with the
+  repository's or organization's name and its description on GitHub, if someone opened the
+  dashboard within `cache.ttl`. Previews show only public data from the shared cache, and
+  BuhTig never asks GitHub for one. In private mode, links have no preview.
 - **Health:** `GET /-/health` answers `200 ok` while BuhTig can reach its database, and
   `503 unavailable` otherwise. During a database outage, pages show a short "try again"
   notice. BuhTig recovers on its own when the database is back.

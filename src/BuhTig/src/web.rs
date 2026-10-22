@@ -28,6 +28,7 @@ use crate::accounts;
 use crate::cache::Cache;
 use crate::health::{self, Health};
 use crate::navigation;
+use crate::preview::Previews;
 use crate::repositories;
 use crate::session;
 use crate::surprise;
@@ -37,7 +38,19 @@ use crate::ui::{self, Ui};
 /// what happened and what to do (NFR-UX-06), and nothing about why (NFR-SEC-09).
 const UNAVAILABLE: &str = include_str!("unavailable.html");
 
-pub fn router(health: Arc<Health>, cache: Arc<Cache>) -> Router {
+/// What serving the app's page takes.
+#[derive(Clone)]
+struct Pages {
+    health: Arc<Health>,
+    /// Link previews of dashboards (FR-NAV-06), unless there are none to give.
+    previews: Option<Arc<Previews>>,
+}
+
+pub fn router(health: Arc<Health>, cache: Arc<Cache>, previews: Option<Previews>) -> Router {
+    let pages = Pages {
+        health: health.clone(),
+        previews: previews.map(Arc::new),
+    };
     Router::new()
         .route("/-/health", get(health::check))
         .route(
@@ -51,7 +64,7 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>) -> Router {
         .route("/-/api/session", get(session::current))
         .route("/-/api/shortcuts", get(session::shortcuts))
         .route("/-/api/surprise", get(surprise::pick).with_state(cache))
-        .fallback(get(page))
+        .fallback(get(page).with_state(pages))
         .with_state(health)
         // Outermost, so that every response is logged, whichever part answered.
         .layer(middleware::from_fn(log_request))
@@ -59,8 +72,8 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>) -> Router {
 
 /// Every other path: a file of the UI, a redirect from a page beneath a dashboard to the
 /// dashboard, or else the app, which takes the path as its route (`/owner/repo`,
-/// `/-/about`, …).
-async fn page(State(health): State<Arc<Health>>, uri: Uri) -> Response {
+/// `/-/about`, …). A dashboard's page carries its link preview, if it has one.
+async fn page(State(pages): State<Pages>, uri: Uri) -> Response {
     if let Some(asset) = ui::asset::<Ui>(uri.path()) {
         return asset;
     }
@@ -70,10 +83,14 @@ async fn page(State(health): State<Arc<Health>>, uri: Uri) -> Response {
         return moved(&dashboard);
     }
     // The files need no database, but the app does for nearly everything it shows.
-    if !health.database_reachable().await {
+    if !pages.health.database_reachable().await {
         return unavailable();
     }
-    ui::app::<Ui>()
+    let preview = match &pages.previews {
+        Some(previews) => previews.of(uri.path()).await,
+        None => None,
+    };
+    ui::app::<Ui>(preview.map(|preview| preview.tags()).as_deref())
 }
 
 /// The response to a request for a page beneath `dashboard`, or another path to it.

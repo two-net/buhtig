@@ -7,6 +7,7 @@ mod github;
 mod health;
 mod housekeeping;
 mod navigation;
+mod preview;
 mod repositories;
 mod session;
 mod surprise;
@@ -32,8 +33,9 @@ use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
 use crate::cache::Cache;
-use crate::config::{Config, LogLevel};
+use crate::config::{AccessMode, Config, LogLevel};
 use crate::health::Health;
+use crate::preview::Previews;
 
 /// Where the config file is read from unless `--config` says otherwise (FR-CFG-01).
 const DEFAULT_CONFIG_PATH: &str = "BuhTig.toml";
@@ -135,8 +137,16 @@ async fn serve(config: Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let cache = Cache::new(db.clone(), Arc::new(github), &config.cache, &config.limits);
-    let app = web::router(Arc::new(Health::new(db.clone())), Arc::new(cache));
+    let cache = Arc::new(Cache::new(
+        db.clone(),
+        Arc::new(github),
+        &config.cache,
+        &config.limits,
+    ));
+    // FR-NAV-06. In private mode, visitors see no dashboard (FR-ACC-03), nor a preview.
+    let previews = (config.access.mode == AccessMode::Public)
+        .then(|| Previews::new(cache.clone(), config.server.public_url.clone()));
+    let app = web::router(Arc::new(Health::new(db.clone())), cache, previews);
 
     let listen = config.server.listen;
     let listener = match tokio::net::TcpListener::bind(listen).await {
