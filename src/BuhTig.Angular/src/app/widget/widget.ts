@@ -9,7 +9,7 @@ import {
   input,
 } from '@angular/core';
 import { Loader } from './load';
-import { FAILED, LOADING } from './messages';
+import { COMPUTING, FAILED, LOADING } from './messages';
 
 /**
  * A widget's content, as `<ng-template [appLoaded]="loader" let-data>`, given the data once it
@@ -30,7 +30,8 @@ let count = 0;
 /**
  * One of a dashboard's widgets, in its grid (UI-05): a heading, then its content, or a
  * placeholder while it loads, a message when there is nothing to show, or a message and "Try
- * again" when loading failed (FR-REPO-09).
+ * again" when loading failed (FR-REPO-09). While GitHub is still computing its data, it says so
+ * over the placeholder (FR-REPO-10).
  */
 @Component({
   selector: 'app-widget',
@@ -53,12 +54,17 @@ export class Widget {
 
   protected readonly content = contentChild.required(Loaded);
   protected readonly state = computed(() => this.content().loader().state());
+  protected readonly busy = computed(() => {
+    const status = this.state().status;
+    return status === 'loading' || status === 'computing';
+  });
   protected readonly data = computed(() => {
     const state = this.state();
     return state.status === 'ready' ? state.data : undefined;
   });
   protected readonly id = `widget-${count++}`;
   protected readonly loading = LOADING;
+  protected readonly computing = COMPUTING;
   protected readonly failed = FAILED;
 
   protected retry(): void {

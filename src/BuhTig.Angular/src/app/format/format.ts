@@ -55,3 +55,22 @@ export function exactTime(time: Date, locale?: string, timeZone?: string): strin
     timeZone,
   }).format(time);
 }
+
+/**
+ * The day a week starts on, such as "Oct 26, 2025". GitHub's weeks start at midnight UTC, so
+ * the day is told in UTC, lest it be the day before in the browser's time zone.
+ */
+export function weekDate(start: Date, locale?: string): string {
+  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' }).format(start);
+}
+
+/** The month of a day in UTC, in short, such as "Oct", as a chart's axis shows it. */
+export function monthLabel(day: Date, locale?: string): string {
+  return new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(day);
+}
+
+/** A share of a whole, such as "62.4%", or "<0.1%" for a share too small to show so. */
+export function percent(share: number, locale?: string): string {
+  const format = new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 });
+  return share > 0 && share < 0.001 ? `<${format.format(0.001)}` : format.format(share);
+}

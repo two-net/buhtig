@@ -2,8 +2,9 @@ import { HttpClient, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Component, inject, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { load } from './load';
-import { FAILED, LOADING } from './messages';
+import { map } from 'rxjs';
+import { Computing, load } from './load';
+import { COMPUTING, FAILED, LOADING } from './messages';
 import { Loaded, Widget } from './widget';
 
 @Component({
@@ -149,5 +150,58 @@ describe('Widget', () => {
     await fixture.whenStable();
     expect(releases().querySelector('li')?.textContent?.trim()).toBe('v3.0.0');
     expect(languages().querySelector('.languages')?.textContent).toBe('Rust');
+  });
+});
+
+@Component({
+  imports: [Loaded, Widget],
+  template: `
+    <app-widget heading="Commit activity" empty="No commits in the last year.">
+      <ng-template [appLoaded]="activity" let-activity>
+        <p class="activity">{{ activity.join(', ') }}</p>
+      </ng-template>
+    </app-widget>
+  `,
+})
+class Statistic {
+  private readonly http = inject(HttpClient);
+
+  readonly activity = load(() =>
+    this.http.get<number[]>('/activity/acme/widget', { observe: 'response' }).pipe(
+      map((response) => {
+        if (response.status === 202) {
+          throw new Computing();
+        }
+        return response.body!;
+      }),
+    ),
+  );
+}
+
+describe('Widget of a statistic', () => {
+  let fixture: ComponentFixture<Statistic>;
+  let http: HttpTestingController;
+
+  beforeEach(async () => {
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    http = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(Statistic);
+    await fixture.whenStable();
+  });
+
+  afterEach(() => {
+    http.verify();
+  });
+
+  it('says while GitHub is still computing it, over the placeholder (FR-REPO-10)', async () => {
+    http.expectOne('/activity/acme/widget').flush(null, { status: 202, statusText: 'Accepted' });
+    await fixture.whenStable();
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('.message')?.textContent?.trim()).toBe(COMPUTING);
+    expect(element.querySelector('.skeleton')).not.toBeNull();
+    expect(element.querySelector('section')?.getAttribute('aria-busy')).toBe('true');
+    expect(element.querySelector('.activity, button')).toBeNull();
   });
 });

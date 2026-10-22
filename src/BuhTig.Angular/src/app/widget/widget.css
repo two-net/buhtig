@@ -47,6 +47,10 @@ h2 {
   color: var(--muted);
 }
 
+.message + .skeleton {
+  margin-top: 0.75rem;
+}
+
 /* Shaped as "Surprise me": plain, beside no primary action of its own (UI-01). */
 button {
   margin-top: 0.75rem;

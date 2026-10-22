@@ -10,9 +10,12 @@
       [repository]="summary()?.repository"
       [fetchedAt]="summary()?.fetchedAt"
     />
-    <!-- The widgets, in two columns, or one on narrow screens (UI-05). The rest are #16 and #17. -->
+    <!-- The widgets, in two columns, or one on narrow screens (UI-05). The rest are #17. -->
     <div class="grid">
       <app-repository-stats [owner]="repository.owner" [repo]="repository.repo" />
+      <app-repository-activity [owner]="repository.owner" [repo]="repository.repo" />
+      <app-repository-languages [owner]="repository.owner" [repo]="repository.repo" />
+      <app-repository-contributors [owner]="repository.owner" [repo]="repository.repo" />
     </div>
   } @else {
     <div class="summary">

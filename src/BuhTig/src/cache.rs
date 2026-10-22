@@ -17,7 +17,7 @@
 
 #![allow(
     dead_code,
-    reason = "sign-in, tokens and the widgets that read lists are still to come (#16 to #23)"
+    reason = "sign-in, tokens and the widgets that read lists are still to come (#17 to #23)"
 )]
 
 use std::collections::HashMap;

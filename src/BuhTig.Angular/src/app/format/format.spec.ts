@@ -1,4 +1,12 @@
-import { compactNumber, exactNumber, exactTime, relativeTime } from './format';
+import {
+  compactNumber,
+  exactNumber,
+  exactTime,
+  monthLabel,
+  percent,
+  relativeTime,
+  weekDate,
+} from './format';
 
 /** `text` with plain spaces, as ICU versions differ on which spaces locales use. */
 const plain = (text: string) => text.replace(/\s/g, ' ');
@@ -84,5 +92,25 @@ describe('format', () => {
     const time = new Date('2026-10-21T12:03:00Z');
     expect(plain(exactTime(time, 'en-US', 'UTC'))).toBe('Oct 21, 2026, 12:03 PM');
     expect(plain(exactTime(time, 'de-DE', 'Europe/Berlin'))).toBe('21.10.2026, 14:03');
+  });
+
+  it("tells the day a week starts on, and its month, in GitHub's time zone", () => {
+    const sunday = new Date('2025-10-26T00:00:00Z');
+    expect(plain(weekDate(sunday, 'en-US'))).toBe('Oct 26, 2025');
+    expect(plain(weekDate(sunday, 'de-DE'))).toBe('26.10.2025');
+    expect(monthLabel(sunday, 'en-US')).toBe('Oct');
+    expect(monthLabel(new Date('2025-11-01T00:00:00Z'), 'en-US')).toBe('Nov');
+  });
+
+  it('shows shares of a whole in percent, for the locale', () => {
+    expect([0.624, 0.5, 1, 0.001, 0.0004, 0].map((share) => percent(share, 'en-US'))).toEqual([
+      '62.4%',
+      '50%',
+      '100%',
+      '0.1%',
+      '<0.1%',
+      '0%',
+    ]);
+    expect(plain(percent(0.624, 'de-DE'))).toBe('62,4 %');
   });
 });

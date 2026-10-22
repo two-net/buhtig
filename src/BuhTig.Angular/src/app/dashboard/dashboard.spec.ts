@@ -29,10 +29,10 @@ describe('Dashboard', () => {
   });
 
   afterEach(() => {
-    // Who is viewing is the header's own business, and the stat cards' figures theirs, which
+    // Who is viewing is the header's own business, and each widget's data its own, which
     // these tests leave to them.
     http.match('/-/api/session');
-    http.match(isStats);
+    http.match(isWidget);
     http.verify();
     vi.useRealTimers();
   });
@@ -42,7 +42,11 @@ describe('Dashboard', () => {
   const title = () => TestBed.inject(Title).getTitle();
   /** When the dashboard says its data was fetched, if it does. */
   const updated = () => page().querySelector('.updated');
-  const isStats = (request: HttpRequest<unknown>) => request.url.endsWith('/stats');
+  /** Whether `request` is for a widget's data, such as `/-/api/repositories/owner/repo/stats`. */
+  const isWidget = (request: HttpRequest<unknown>) =>
+    /^\/-\/api\/repositories\/[^/]+\/[^/]+\/[^/]+$/.test(request.url);
+  /** The repository's widgets, in the order of the grid. */
+  const WIDGETS = ['stats', 'commit-activity', 'languages', 'contributors'];
 
   /** The text that `element` shows, without the tooltips that hover and focus show. */
   function shown(element: Element): string | undefined {
@@ -268,25 +272,40 @@ describe('Dashboard', () => {
     expect(header.querySelector('.updated')).not.toBeNull();
   });
 
-  it('loads the stat cards at once, alongside the rest', async () => {
+  it('loads its widgets at once, alongside the rest, with the stat cards first', async () => {
     await harness.navigateByUrl('/acme/widget');
-    const stats = page().querySelector('app-repository-stats app-widget');
-    expect(stats?.classList.contains('wide')).toBe(true);
-    expect(stats?.querySelector('.skeleton')).not.toBeNull();
-    expect(http.match(isStats).map((request) => request.request.url)).toEqual([
-      '/-/api/repositories/acme/widget/stats',
+    const widgets = [...page().querySelectorAll('.grid > * > app-widget')];
+    expect(widgets.map((widget) => widget.parentElement!.tagName.toLowerCase())).toEqual([
+      'app-repository-stats',
+      'app-repository-activity',
+      'app-repository-languages',
+      'app-repository-contributors',
     ]);
+    expect(widgets.map((widget) => widget.classList.contains('wide'))).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
+    for (const widget of widgets) {
+      expect(widget.querySelector('.skeleton')).not.toBeNull();
+    }
+    expect(http.match(isWidget).map((request) => request.request.url)).toEqual(
+      WIDGETS.map((part) => `/-/api/repositories/acme/widget/${part}`),
+    );
     http.expectOne('/-/api/repositories/acme/widget').flush({ name: 'acme/widget' });
   });
 
-  it("loads the stat cards again under the repository's canonical name", async () => {
+  it("loads its widgets again under the repository's canonical name", async () => {
     await harness.navigateByUrl('/ACME/Widget');
-    const first = http.expectOne('/-/api/repositories/ACME/Widget/stats');
+    const first = WIDGETS.map((part) => http.expectOne(`/-/api/repositories/ACME/Widget/${part}`));
     http.expectOne('/-/api/repositories/ACME/Widget').flush({ name: 'Acme/Widget' });
     await vi.waitFor(() => expect(router.url).toBe('/Acme/Widget'));
     await harness.fixture.whenStable();
-    expect(first.cancelled).toBe(true);
-    http.expectOne('/-/api/repositories/Acme/Widget/stats');
+    expect(first.map((request) => request.cancelled)).toEqual(WIDGETS.map(() => true));
+    for (const part of WIDGETS) {
+      http.expectOne(`/-/api/repositories/Acme/Widget/${part}`);
+    }
     http.expectOne('/-/api/repositories/Acme/Widget').flush(WIDGET);
   });
 
@@ -328,9 +347,9 @@ describe('Dashboard', () => {
     http.expectOne('/-/api/repositories/acme/gadget').flush({ name: 'acme/gadget' });
   });
 
-  it("has neither a repository's head nor its stat cards for an organization", async () => {
+  it("has neither a repository's head nor its widgets for an organization", async () => {
     await open('/acme', '/-/api/accounts/acme', { type: 'organization', login: 'acme' });
-    expect(page().querySelector('app-repository-header, app-repository-stats')).toBeNull();
-    expect(http.match(isStats)).toEqual([]);
+    expect(page().querySelector('app-repository-header, app-widget')).toBeNull();
+    expect(http.match(isWidget)).toEqual([]);
   });
 });

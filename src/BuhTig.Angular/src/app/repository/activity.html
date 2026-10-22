@@ -1,0 +1,50 @@
+<app-widget heading="Commit activity" empty="No commits in the last year.">
+  <ng-template [appLoaded]="activity">
+    @if (chart(); as chart) {
+      <p class="caption">{{ caption() }}</p>
+      <!-- Stretched to the widget's width, so that the labels are outside it, unstretched. -->
+      <svg
+        role="img"
+        [attr.aria-label]="chart.description"
+        [attr.viewBox]="'0 0 ' + chart.width + ' ' + height"
+        preserveAspectRatio="none"
+        (pointerleave)="pointed.set(undefined)"
+      >
+        <line
+          class="baseline"
+          x1="0"
+          [attr.x2]="chart.width"
+          [attr.y1]="height"
+          [attr.y2]="height"
+          vector-effect="non-scaling-stroke"
+        />
+        @for (bar of chart.bars; track bar.column) {
+          @if (bar.height > 0) {
+            <rect
+              class="bar"
+              [class.pointed]="pointed() === bar.week"
+              [attr.x]="bar.column + offset"
+              [attr.y]="height - bar.height"
+              [attr.width]="barWidth"
+              [attr.height]="bar.height"
+            />
+          }
+          <!-- The whole column, so that a week without commits can be pointed at too. -->
+          <rect
+            class="column"
+            [attr.x]="bar.column"
+            y="0"
+            [attr.width]="columnWidth"
+            [attr.height]="height"
+            (pointerenter)="pointed.set(bar.week)"
+          />
+        }
+      </svg>
+      <div class="months" aria-hidden="true">
+        @for (month of chart.months; track month.at) {
+          <span [style.left.%]="month.at">{{ month.label }}</span>
+        }
+      </div>
+    }
+  </ng-template>
+</app-widget>
