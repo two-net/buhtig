@@ -4,7 +4,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { Session } from '../session/session';
 import { Account } from './account';
-import { ENDED } from './messages';
+import { ENDED, TOKEN_INVALID, tokenExpires } from './messages';
 
 describe('Account', () => {
   let fixture: ComponentFixture<Account>;
@@ -144,5 +144,62 @@ describe('Account', () => {
     await fixture.whenStable();
     expect(menu()).toBeNull();
     outside.remove();
+  });
+
+  describe("the note about the user's token", () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const note = () => element().querySelector<HTMLElement>('.note');
+
+    /** A token that is `status`, and expires `inMs` from now, if ever. */
+    function token(status: string, inMs?: number) {
+      return {
+        type: 'classic',
+        last_four: 'abcd',
+        scopes: ['repo'],
+        expires_at: inMs === undefined ? null : new Date(Date.now() + inMs).toISOString(),
+        status,
+        last_validated_at: '2026-10-20T12:00:00.000Z',
+      };
+    }
+
+    it('asks to replace a token that GitHub no longer accepts (FR-PAT-07)', async () => {
+      await answer({ user: MONA, token: token('invalid') });
+      expect(note()!.textContent).toContain(TOKEN_INVALID);
+      const link = note()!.querySelector('a')!;
+      expect(link.textContent?.trim()).toBe('Replace it in Settings');
+      expect(link.getAttribute('href')).toBe('/-/settings');
+    });
+
+    it('reminds the user from 7 days before their token expires (FR-PAT-10)', async () => {
+      await answer({ user: MONA, token: token('valid', 3 * DAY + 60 * 60 * 1000) });
+      expect(note()!.textContent).toContain(tokenExpires('in 3 days'));
+    });
+
+    it('says nothing of a token that expires later, or never', async () => {
+      await answer({ user: MONA, token: token('valid', 8 * DAY) });
+      expect(note()).toBeNull();
+      TestBed.inject(Session).setToken(null);
+      await fixture.whenStable();
+      expect(note()).toBeNull();
+    });
+
+    it('is put away with a click elsewhere, for the rest of the visit', async () => {
+      await answer({ user: MONA, token: token('invalid') });
+      note()!.click();
+      await fixture.whenStable();
+      expect(note()).not.toBeNull();
+      document.body.click();
+      await fixture.whenStable();
+      expect(note()).toBeNull();
+      expect(TestBed.inject(Session).tokenNoted()).toBe(true);
+    });
+
+    it('gives way to the menu', async () => {
+      await answer({ user: MONA, token: token('invalid') });
+      avatar()!.click();
+      await fixture.whenStable();
+      expect(note()).toBeNull();
+      expect(menu()).not.toBeNull();
+    });
   });
 });

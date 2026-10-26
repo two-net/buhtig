@@ -81,6 +81,16 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   `security.encryption_key` changes. BuhTig sets two cookies: the session's, and one that
   keeps a sign-in's state for 10 minutes. Both are `Secure`, unless `server.public_url` is
   `http://localhost`.
+- **Personal access tokens:** a signed-in user may save one personal access token in
+  Settings, so that their dashboards include the private repositories and organization
+  data it can see. No one needs one. BuhTig asks GitHub about each token before it saves
+  it, and saves it only if it is valid and belongs to the signed-in user. Each client may
+  have 10 tokens checked a minute. Tokens are stored encrypted with
+  `security.encryption_key`, and are never shown or logged. When the key changes, users are
+  signed out and asked to enter their tokens again. A token that GitHub stops accepting,
+  as when it is revoked or expires, is marked invalid: the user's requests go with their
+  sign-in again, and BuhTig asks them to replace the token. Replacing or removing a token
+  deletes the data cached with it at once.
 - **Organizations:** an organization's dashboard reads up to `limits.org_repositories` of
   its repositories, those pushed to most recently, 100 per request to GitHub. A larger
   organization's figures cover only those, and its dashboard says so. Its members widget
@@ -90,7 +100,8 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
 - **Cache:** BuhTig keeps the GitHub data it shows in the database, and serves it for
   `cache.ttl` before it asks GitHub again. While GitHub is unreachable or rate-limited,
   dashboards show the latest data they have, with its age. Data fetched with a user's
-  personal access token is shown only to that user.
+  personal access token is shown only to that user. When an organization requires single
+  sign-on, or doesn't accept a user's token, the dashboard says so and how to fix it.
 - **Visitors:** each visitor may make `limits.visitor_fetches_per_hour` dashboard loads an
   hour that need data from GitHub. Loads served from the cache don't count. While less
   than 10% of visitors' shared GitHub rate limit remains, visitors see cached data only

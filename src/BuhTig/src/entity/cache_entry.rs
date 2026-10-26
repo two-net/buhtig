@@ -19,6 +19,12 @@ pub struct Model {
     pub user_id: Option<i64>,
     #[sea_orm(belongs_to, from = "user_id", to = "id", on_delete = "Cascade")]
     pub user: BelongsTo<Option<super::user::Entity>>,
+    /// The PAT that fetched the data, or none for the shared cache. Removing or replacing
+    /// the PAT deletes its row, and so its data with it (FR-PAT-05). Data that a fetch with
+    /// it brings back afterwards cannot be stored.
+    pub credential_id: Option<i64>,
+    #[sea_orm(belongs_to, from = "credential_id", to = "id", on_delete = "Cascade")]
+    pub credential: BelongsTo<Option<super::credential::Entity>>,
     #[sea_orm(column_type = "JsonBinary")]
     pub data: Json,
     /// Also updated when GitHub confirms that the data is unchanged (FR-DATA-09):

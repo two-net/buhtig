@@ -62,7 +62,8 @@ const OPEN_PULLS: &str = "is:pr is:open";
 /// repository a fork was forked from. What GitHub does not say, or says in a form BuhTig
 /// does not show, is `null`: links are only to `http` and `https` URLs, and avatars only
 /// from `https` ones (NFR-SEC-03). 404 if there is no such repository, or if it is private
-/// (FR-ACC-05).
+/// (FR-ACC-05). 403 when GitHub keeps it from the viewer's credential, with why, as
+/// [`denied`] tells it (FR-PAT-08).
 ///
 /// Names that cannot be a repository's are 400, without asking GitHub (FR-SRCH-04). Any
 /// other status means that BuhTig cannot tell now. The dashboard then keeps its URL.
@@ -74,10 +75,14 @@ pub async fn summary(
     if !is_account_name(&owner) || !is_repository_name(&repo) {
         return status(StatusCode::BAD_REQUEST);
     }
-    // A token user will read with their PAT, which may see private repositories (#23).
+    // A token user reads with their PAT, which may see private repositories (FR-PAT-06).
     // The repository is read for its dashboard, so a visitor's load of that counts once
     // (FR-DATA-10).
-    let cached = match repository(&cache, &viewer, &owner, &repo).await {
+    let result = read(&cache, &viewer, &owner, &repo).await;
+    if let Some(denied) = denied(&viewer, &result) {
+        return denied;
+    }
+    let cached = match data(result) {
         Ok(cached) => cached,
         Err(code) => return status(code),
     };
@@ -451,8 +456,53 @@ async fn repository(
     owner: &str,
     repo: &str,
 ) -> Result<Cached<Value>, StatusCode> {
+    data(read(cache, viewer, owner, repo).await)
+}
+
+/// What the cache has of the repository `owner/repo` for the viewer.
+async fn read(
+    cache: &Cache,
+    viewer: &Viewer,
+    owner: &str,
+    repo: &str,
+) -> Result<Outcome<Value>, cache::Error> {
     let path = github::Path::new(["repos", owner, repo]).expect("names are neither empty nor dots");
-    data(cache.get(viewer, &format!("/{owner}/{repo}"), &path).await)
+    cache.get(viewer, &format!("/{owner}/{repo}"), &path).await
+}
+
+/// The answer for a resource that GitHub keeps from the viewer's credential, rather than
+/// hides, so that the dashboard can say how to get access (FR-PAT-08): 403 with
+///
+/// - `{"denied": "sso", "url": …}` when an organization requires the credential to be
+///   authorized for its single sign-on, with where to do so if GitHub says, or `null`;
+/// - `{"denied": "token"}` when GitHub refuses a token user's PAT, as when an organization
+///   has not approved it, or forbids tokens that live as long.
+///
+/// `None` for any other result.
+pub(crate) fn denied<T>(
+    viewer: &Viewer,
+    result: &Result<Outcome<T>, cache::Error>,
+) -> Option<Response> {
+    let body = match result {
+        Err(cache::Error::GitHub(github::Error::SsoRequired { url })) => {
+            let url = url.as_deref().map(Value::from);
+            json!({ "denied": "sso", "url": page(url.as_ref()) })
+        }
+        Err(cache::Error::GitHub(github::Error::Forbidden { .. }))
+            if matches!(viewer, Viewer::TokenUser { .. }) =>
+        {
+            json!({ "denied": "token" })
+        }
+        _ => return None,
+    };
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(body),
+        )
+            .into_response(),
+    )
 }
 
 /// The data the cache had, or the status that says why it had none: 202 while GitHub is
@@ -1964,5 +2014,91 @@ mod tests {
             );
         }
         assert_eq!(stub.urls(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn access_github_keeps_from_the_viewers_credential_is_explained() {
+        let stub = Stub::new(|request| match request.uri().path() {
+            "/repos/acme/sso" => answer(
+                403,
+                &[(
+                    "x-github-sso",
+                    "required; url=https://github.com/orgs/acme/sso?authorization_request=abc",
+                )],
+                "",
+            ),
+            "/repos/acme/elsewhere" => answer(
+                403,
+                &[("x-github-sso", "required; url=https://evil.example/sso")],
+                "",
+            ),
+            "/repos/acme/policy" => answer(
+                403,
+                &[],
+                r#"{"message": "The 'acme' organization forbids access via a fine-grained personal access tokens if the token's lifetime is greater than 366 days."}"#,
+            ),
+            _ => answer(404, &[], r#"{"message": "Not Found"}"#),
+        });
+        let cache = cache(&stub, 30).await;
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let signed_in = Viewer::SignedIn {
+            user_id: 1,
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let token_user = Viewer::TokenUser {
+            user_id: 1,
+            credential_id: 1,
+            pat: Secret::new("pat".to_owned()),
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let ask = async |viewer: &Viewer, repo: &str| {
+            let names = Path(("acme".to_owned(), repo.to_owned()));
+            let response = summary(State(cache.clone()), viewer.clone(), names).await;
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+        };
+
+        // Single sign-on, with where to authorize the credential, if that is on GitHub.
+        for viewer in [&visitor, &token_user] {
+            assert_eq!(
+                ask(viewer, "sso").await,
+                (
+                    StatusCode::FORBIDDEN,
+                    json!({
+                        "denied": "sso",
+                        "url": "https://github.com/orgs/acme/sso?authorization_request=abc"
+                    })
+                )
+            );
+        }
+        assert_eq!(
+            ask(&token_user, "elsewhere").await,
+            (
+                StatusCode::FORBIDDEN,
+                json!({ "denied": "sso", "url": null })
+            )
+        );
+
+        // A PAT that the organization does not let in.
+        assert_eq!(
+            ask(&token_user, "policy").await,
+            (StatusCode::FORBIDDEN, json!({ "denied": "token" }))
+        );
+        // Without one, there is no token to explain.
+        assert_eq!(
+            ask(&signed_in, "policy").await,
+            (StatusCode::BAD_GATEWAY, Value::Null)
+        );
+        // Nor is there anything to explain about what is not found.
+        assert_eq!(
+            ask(&token_user, "missing").await,
+            (StatusCode::NOT_FOUND, Value::Null)
+        );
     }
 }

@@ -419,7 +419,7 @@ mod tests {
     fn auth(stub: &Arc<Stub>, db: DatabaseConnection, allowed_users: &[&str]) -> Arc<Auth> {
         let sessions = Sessions::new(
             db,
-            Sealer::new(b"a secret of at least thirty-two bytes"),
+            Arc::new(Sealer::new(b"a secret of at least thirty-two bytes")),
             Settings {
                 idle_timeout: Duration::from_secs(7 * 24 * 60 * 60),
                 max_age: Duration::from_secs(30 * 24 * 60 * 60),

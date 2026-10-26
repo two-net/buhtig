@@ -10,6 +10,9 @@
       [repository]="summary()?.repository"
       [fetchedAt]="summary()?.fetchedAt"
     />
+    @if (summary()?.denied; as denied) {
+      <app-denied [denied]="denied" />
+    }
     <!-- The widgets, in two columns, or one on narrow screens (UI-05). -->
     <div class="grid">
       <app-repository-stats [owner]="repository.owner" [repo]="repository.repo" />
@@ -26,6 +29,9 @@
       [organization]="summary()?.organization"
       [fetchedAt]="summary()?.fetchedAt"
     />
+    @if (summary()?.denied; as denied) {
+      <app-denied [denied]="denied" />
+    }
     <!-- Laid out as a repository's. -->
     <div class="grid">
       <app-organization-stats [org]="organization.org" />

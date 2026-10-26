@@ -6,7 +6,12 @@
 //! visitor or a signed-in user, is shared: anyone may be served it, so it must hold only
 //! public information. Data fetched with a PAT is private to that user. A request's
 //! [`Viewer`] decides both its credential and its scope, so the two cannot disagree, and
-//! no one is served data that another user's PAT fetched (FR-ACC-06).
+//! no one is served data that another user's PAT fetched (FR-ACC-06). Each private entry
+//! names the PAT that fetched it, and goes when the PAT does (FR-PAT-05).
+//!
+//! Once GitHub rejects a token user's PAT, it is marked invalid, and their requests go with
+//! their sign-in credential instead, starting with the one that met the rejection
+//! (FR-PAT-07).
 //!
 //! Visitors may fetch only so much from GitHub (FR-DATA-10, FR-DATA-11). Once they may not,
 //! they are served what the cache has, however old, as during an outage.
@@ -15,10 +20,7 @@
 //! (FR-DATA-08). Those fetches, and the marks that limit refreshes (FR-DATA-07), are held
 //! in memory alone, which a restart may lose (NFR-REL-02).
 
-#![allow(
-    dead_code,
-    reason = "tokens and refreshing are still to come (#23, #24)"
-)]
+#![allow(dead_code, reason = "refreshing is still to come (#24)")]
 
 use std::collections::HashMap;
 use std::fmt;
@@ -29,16 +31,17 @@ use sea_orm::sea_query::prelude::chrono::{SecondsFormat, TimeDelta};
 use sea_orm::sea_query::{Expr, Func, OnConflict, Order};
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+    SqlErr,
 };
 use serde_json::Value;
 use tokio::sync::watch;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::{CacheConfig, LimitsConfig, Secret};
 use crate::entity::cache_entry::{self, Scope};
 use crate::github::{self, Credential, List, Path, Reply};
-use crate::session;
 use crate::visitors::{Held, Visitor, Visitors};
+use crate::{session, tokens};
 
 /// FR-DATA-07: a dashboard may be refreshed at most once a minute.
 const REFRESH_INTERVAL: TimeDelta = TimeDelta::minutes(1);
@@ -59,8 +62,15 @@ pub enum Viewer {
         user_id: i64,
         sign_in: Secret<String>,
     },
-    /// A token user: their PAT, and their private cache. `user_id` is their `users.id`.
-    TokenUser { user_id: i64, pat: Secret<String> },
+    /// A token user: their PAT, and their private cache. `user_id` is their `users.id`, and
+    /// `credential_id` their PAT's. Their sign-in credential takes over once GitHub rejects
+    /// the PAT (FR-PAT-07).
+    TokenUser {
+        user_id: i64,
+        credential_id: i64,
+        pat: Secret<String>,
+        sign_in: Secret<String>,
+    },
 }
 
 impl Viewer {
@@ -84,6 +94,15 @@ impl Viewer {
         self.token()
             .cloned()
             .map_or(Credential::Visitor, Credential::Token)
+    }
+
+    /// The PAT that the viewer's requests carry, if any: the one that what they fetch is
+    /// private to.
+    fn pat(&self) -> Option<i64> {
+        match self {
+            Viewer::TokenUser { credential_id, .. } => Some(*credential_id),
+            Viewer::Visitor(_) | Viewer::SignedIn { .. } => None,
+        }
     }
 }
 
@@ -631,9 +650,37 @@ impl Cache {
         Ok(())
     }
 
+    /// The data for `fetch`, as [`Cache::lookup_as`] has it for the viewer. Once GitHub
+    /// rejects a token user's PAT, which is then marked invalid, it is what their sign-in
+    /// credential gets instead (FR-PAT-07).
+    async fn lookup(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        fetch: Fetch<'_>,
+        clock: &Clock,
+    ) -> Result<Outcome<Value>, Error> {
+        let result = self.lookup_as(viewer, dashboard, fetch, clock).await;
+        match (result, viewer) {
+            (
+                Err(Error::GitHub(github::Error::BadCredentials)),
+                Viewer::TokenUser {
+                    user_id, sign_in, ..
+                },
+            ) => {
+                let signed_in = Viewer::SignedIn {
+                    user_id: *user_id,
+                    sign_in: sign_in.clone(),
+                };
+                self.lookup_as(&signed_in, dashboard, fetch, clock).await
+            }
+            (result, _) => result,
+        }
+    }
+
     /// The data for `fetch`: from the cache while it is fresh, else from GitHub if the
     /// viewer may ask it, else what the cache has, however old.
-    async fn lookup(
+    async fn lookup_as(
         &self,
         viewer: &Viewer,
         dashboard: &str,
@@ -762,14 +809,33 @@ impl Cache {
         let now = clock();
         let etag = stored.as_ref().and_then(|entry| entry.etag.as_deref());
         let reply = fetch.send(&self.github, &viewer.credential(), etag).await;
-        if let (Err(github::Error::BadCredentials), Viewer::SignedIn { user_id, .. }) =
-            (&reply, viewer)
-        {
-            // GitHub no longer takes the credential the user signed in with, as when they
-            // revoke BuhTig's access: they must sign in again (FR-AUTH-09).
-            if let Err(error) = session::end_all(&self.db, *user_id).await {
-                error!("cannot sign out a user whose sign-in GitHub rejected: {error}");
+        match (&reply, viewer) {
+            (Err(github::Error::BadCredentials), Viewer::SignedIn { user_id, .. }) => {
+                // GitHub no longer takes the credential the user signed in with, as when
+                // they revoke BuhTig's access: they must sign in again (FR-AUTH-09).
+                if let Err(error) = session::end_all(&self.db, *user_id).await {
+                    error!("cannot sign out a user whose sign-in GitHub rejected: {error}");
+                }
             }
+            (
+                Err(github::Error::BadCredentials),
+                Viewer::TokenUser {
+                    user_id,
+                    credential_id,
+                    ..
+                },
+            ) => {
+                // GitHub no longer takes the user's PAT, as when it was revoked or has
+                // expired: they must replace it (FR-PAT-07).
+                info!(
+                    user_id,
+                    "GitHub rejected a personal access token; it is marked invalid"
+                );
+                if let Err(error) = tokens::invalidate(&self.db, *credential_id).await {
+                    error!("cannot mark a personal access token invalid: {error}");
+                }
+            }
+            _ => {}
         }
         let mut stored_data = true;
         let result = match reply {
@@ -794,7 +860,7 @@ impl Cache {
                     if scope == Scope::Shared {
                         strip_permissions(&mut data);
                     }
-                    self.store(scope, key, &data, etag, now).await;
+                    self.store(scope, viewer.pat(), key, &data, etag, now).await;
                 }
                 debug!(key, "fetched GitHub data");
                 Ok(Outcome::Data(Cached {
@@ -871,10 +937,13 @@ impl Cache {
         Ok(entry.filter(|entry| fetch.holds(&entry.data)))
     }
 
-    /// Stores data fetched at `now`. A failure is only logged: the data is still served.
+    /// Stores data fetched at `now`, with the PAT `pat` if it is private. A failure is only
+    /// logged: the data is still served. So it is when the PAT has been replaced or removed
+    /// since, whose data must not be kept (FR-PAT-05).
     async fn store(
         &self,
         scope: Scope,
+        pat: Option<i64>,
         key: &str,
         data: &Value,
         etag: Option<String>,
@@ -886,6 +955,7 @@ impl Cache {
             scope: Set(scope.key()),
             resource_key: Set(key.to_owned()),
             user_id: Set(scope.user_id()),
+            credential_id: Set(pat),
             data: Set(data.clone()),
             fetched_at: Set(now),
             expires_at: Set(expiry(now, self.ttl)),
@@ -905,8 +975,21 @@ impl Cache {
             )
             .exec(&self.db)
             .await;
-        if let Err(error) = result {
-            error!(key, "cannot cache GitHub data: {error}");
+        match result {
+            Ok(_) => {}
+            Err(error)
+                if pat.is_some()
+                    && matches!(
+                        error.sql_err(),
+                        Some(SqlErr::ForeignKeyConstraintViolation(_))
+                    ) =>
+            {
+                debug!(
+                    key,
+                    "did not cache data fetched with a personal access token that is gone"
+                );
+            }
+            Err(error) => error!(key, "cannot cache GitHub data: {error}"),
         }
     }
 
@@ -1092,7 +1175,7 @@ mod tests {
     use super::*;
     use crate::config::DatabaseConfig;
     use crate::db;
-    use crate::entity::user;
+    use crate::entity::{credential, user};
     use crate::github::stub::{Stub, answer};
     use crate::github::{Sending, Transport};
     use crate::test_cluster::cluster;
@@ -1106,7 +1189,7 @@ mod tests {
     type Answer = dyn Fn(&Request<Bytes>) -> Result<Response<Bytes>, github::Error> + Send + Sync;
 
     /// A cache on a database of its own, in front of a stub GitHub that answers as the
-    /// test says, with Alice and Bob as users.
+    /// test says, with Alice and Bob as users who have each saved a PAT.
     struct Setup {
         cache: Arc<Cache>,
         db: DatabaseConnection,
@@ -1116,6 +1199,9 @@ mod tests {
         delay: Arc<AtomicU64>,
         alice: i64,
         bob: i64,
+        /// Their PATs' rows.
+        alice_pat: i64,
+        bob_pat: i64,
     }
 
     /// Sends requests on to the stub after `delay` milliseconds, so that they overlap.
@@ -1147,6 +1233,8 @@ mod tests {
         db::migrate(&db).await.unwrap();
         let alice = add_user(&db, 1, "alice").await;
         let bob = add_user(&db, 2, "bob").await;
+        let alice_pat = add_pat(&db, alice).await;
+        let bob_pat = add_pat(&db, bob).await;
 
         let respond: Arc<Mutex<Box<Answer>>> =
             Arc::new(Mutex::new(Box::new(|_| answer(200, &[], "{}"))));
@@ -1178,6 +1266,8 @@ mod tests {
             delay,
             alice,
             bob,
+            alice_pat,
+            bob_pat,
         }
     }
 
@@ -1191,6 +1281,21 @@ mod tests {
             )),
             created_at: Set(at(0)),
             last_sign_in_at: Set(at(0)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+        .id
+    }
+
+    /// Saves a PAT for the user `user_id`, as far as the cache needs: its row.
+    async fn add_pat(db: &DatabaseConnection, user_id: i64) -> i64 {
+        credential::ActiveModel {
+            user_id: Set(user_id),
+            kind: Set(credential::Kind::Pat),
+            encrypted_value: Set(vec![1, 2, 3]),
+            status: Set(Some(credential::PatStatus::Valid)),
             ..Default::default()
         }
         .insert(db)
@@ -1324,14 +1429,18 @@ mod tests {
         fn alice(&self) -> Viewer {
             Viewer::TokenUser {
                 user_id: self.alice,
+                credential_id: self.alice_pat,
                 pat: Secret::new("pat-alice".to_owned()),
+                sign_in: Secret::new("sign-in-alice".to_owned()),
             }
         }
 
         fn bob(&self) -> Viewer {
             Viewer::TokenUser {
                 user_id: self.bob,
+                credential_id: self.bob_pat,
                 pat: Secret::new("pat-bob".to_owned()),
+                sign_in: Secret::new("sign-in-bob".to_owned()),
             }
         }
 
@@ -1808,18 +1917,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_rejected_pat_is_marked_invalid_and_the_sign_in_credential_takes_over() {
+        let setup = setup().await;
+        let repo = path(&["repos", "owner", "repo"]);
+        // What Alice's PAT fetched while GitHub took it.
+        setup.answer(|_| {
+            answer(
+                200,
+                &[],
+                r#"{"full_name": "owner/secret", "private": true}"#,
+            )
+        });
+        data(
+            setup
+                .get(&setup.alice(), &path(&["repos", "owner", "secret"]), at(0))
+                .await,
+        );
+        data(setup.get(&setup.bob(), &repo, at(0)).await);
+        assert_eq!(setup.rows().await.len(), 2);
+
+        // GitHub no longer takes it: the same request gets what her sign-in credential does.
+        setup.answer(|request| match header(request, AUTHORIZATION) {
+            Some("Bearer pat-alice") => answer(401, &[], r#"{"message":"Bad credentials"}"#),
+            _ => answer(200, &[], r#"{"full_name": "owner/repo", "private": false}"#),
+        });
+        let (log, _guard) = capture_log();
+        let public = data(setup.get(&setup.alice(), &repo, at(1)).await);
+        assert_eq!(public.data["full_name"], "owner/repo");
+        assert_eq!(
+            setup.sent()[2..],
+            ["Bearer pat-alice", "Bearer sign-in-alice"]
+        );
+        let log = String::from_utf8(log.lock().unwrap().clone()).unwrap();
+        assert!(
+            log.contains("GitHub rejected a personal access token"),
+            "{log}"
+        );
+
+        // Her PAT is marked invalid, and what it fetched is gone. What she got instead went
+        // to the shared cache. Bob's PAT and private cache are as they were.
+        let statuses: Vec<_> = credential::Entity::find()
+            .order_by_asc(credential::Column::UserId)
+            .all(&setup.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|pat| (pat.id, pat.status))
+            .collect();
+        assert_eq!(
+            statuses,
+            [
+                (setup.alice_pat, Some(credential::PatStatus::Invalid)),
+                (setup.bob_pat, Some(credential::PatStatus::Valid))
+            ]
+        );
+        let rows: Vec<_> = setup
+            .rows()
+            .await
+            .into_iter()
+            .map(|row| (row.scope, row.credential_id))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (Scope::User(setup.bob).key(), Some(setup.bob_pat)),
+                (Scope::Shared.key(), None)
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn a_rejected_sign_in_signs_the_user_out_everywhere() {
-        use crate::entity::{credential, session};
+        use crate::entity::session;
 
         let setup = setup().await;
-        for (user_id, kind) in [
-            (setup.bob, credential::Kind::SignIn),
-            (setup.bob, credential::Kind::Pat),
-            (setup.alice, credential::Kind::SignIn),
-        ] {
+        for user_id in [setup.bob, setup.alice] {
             credential::ActiveModel {
                 user_id: Set(user_id),
-                kind: Set(kind),
+                kind: Set(credential::Kind::SignIn),
                 encrypted_value: Set(vec![1, 2, 3]),
                 ..Default::default()
             }
@@ -1856,8 +2031,8 @@ mod tests {
             github::Error::BadCredentials
         );
 
-        // Bob's sessions and sign-in credential are gone, and his PAT is his to replace
-        // (#23). Alice is still signed in.
+        // Bob's sessions and sign-in credential are gone, and his PAT stays for when he signs
+        // in again. Alice is still signed in.
         let sessions: Vec<_> = session::Entity::find()
             .all(&setup.db)
             .await
@@ -1873,10 +2048,11 @@ mod tests {
             .into_iter()
             .map(|credential| (credential.user_id, credential.kind))
             .collect();
-        credentials.sort_by_key(|(user_id, _)| *user_id);
+        credentials.sort_by_key(|(user_id, kind)| (*user_id, *kind == credential::Kind::SignIn));
         assert_eq!(
             credentials,
             [
+                (setup.alice, credential::Kind::Pat),
                 (setup.alice, credential::Kind::SignIn),
                 (setup.bob, credential::Kind::Pat)
             ]
@@ -2371,8 +2547,9 @@ mod tests {
     async fn a_random_repository_is_a_public_one_read_whole() {
         let setup = setup().await;
         let cache = &setup.cache;
-        let store = |scope, key: &'static str, data: Value| async move {
-            cache.store(scope, key, &data, None, at(0)).await;
+        let store = |scope: Scope, key: &'static str, data: Value| async move {
+            let pat = scope.user_id().map(|_| setup.alice_pat);
+            cache.store(scope, pat, key, &data, None, at(0)).await;
         };
         assert_eq!(cache.random_repository().await.unwrap(), None);
 
@@ -2434,7 +2611,14 @@ mod tests {
         let repo = path(&["repos", "owner", "repo"]);
         let public = json!({"full_name": "owner/repo", "private": false});
         cache
-            .store(Scope::Shared, "/repos/owner/repo", &public, None, at(0))
+            .store(
+                Scope::Shared,
+                None,
+                "/repos/owner/repo",
+                &public,
+                None,
+                at(0),
+            )
             .await;
         assert_eq!(
             cache.fresh_shared_at(DASHBOARD, &repo, at(14)).await,
@@ -2452,6 +2636,7 @@ mod tests {
         cache
             .store(
                 Scope::User(setup.alice),
+                Some(setup.alice_pat),
                 "/repos/owner/secret",
                 &json!({"full_name": "owner/secret", "private": false}),
                 None,
@@ -2461,6 +2646,7 @@ mod tests {
         cache
             .store(
                 Scope::Shared,
+                None,
                 "/repos/owner/leak",
                 &json!({"full_name": "owner/leak", "visibility": "internal"}),
                 None,

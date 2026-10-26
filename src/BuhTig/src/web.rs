@@ -18,7 +18,7 @@ use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Extension, Router};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -34,6 +34,7 @@ use crate::preview::Previews;
 use crate::repositories;
 use crate::session::{self, Sessions};
 use crate::surprise;
+use crate::tokens::{self, Tokens};
 use crate::ui::{self, Ui};
 
 /// The page shown in place of BuhTig's own while its database is unreachable. It says
@@ -56,6 +57,7 @@ pub fn router(
     previews: Option<Previews>,
     sessions: Arc<Sessions>,
     auth: Arc<Auth>,
+    tokens: Arc<Tokens>,
 ) -> Router {
     let pages = Pages {
         health: health.clone(),
@@ -142,6 +144,10 @@ pub fn router(
         )
         .route("/-/api/session", get(session::current))
         .route("/-/api/shortcuts", get(session::shortcuts))
+        .route(
+            "/-/api/token",
+            put(tokens::save).delete(tokens::remove).with_state(tokens),
+        )
         .route("/-/api/surprise", get(surprise::pick).with_state(cache))
         .fallback(get(page).with_state(pages))
         .with_state(health)

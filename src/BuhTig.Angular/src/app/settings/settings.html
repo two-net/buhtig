@@ -1,0 +1,91 @@
+<header class="page-header">
+  <a routerLink="/">BuhTig</a>
+  <app-account />
+</header>
+<main class="prose">
+  <h1>Settings</h1>
+  @if (user() === null) {
+    <p>{{ SIGN_IN_FIRST }}</p>
+    <p><a class="button primary" [href]="signIn">Sign in</a></p>
+  } @else if (user()) {
+    <section aria-labelledby="token-heading">
+      <h2 id="token-heading">Personal access token</h2>
+      <p>{{ TOKEN_PURPOSE }}</p>
+      <p>{{ TOKEN_HANDLING }}</p>
+      <p>
+        {{ TOKEN_ADVICE }}
+        <a href="https://github.com/settings/personal-access-tokens/new">{{ CREATE_TOKEN }}</a>
+      </p>
+
+      @if (token(); as token) {
+        @if (token.status === 'invalid') {
+          <p class="problem">{{ TOKEN_INVALID }}</p>
+        }
+        <dl class="token">
+          <dt>Type</dt>
+          <dd>{{ TYPE_LABELS[token.type] }}</dd>
+          <dt>Ends in</dt>
+          <dd>
+            <code>…{{ token.lastFour }}</code>
+          </dd>
+          @if (token.type === 'classic') {
+            <dt>Scopes</dt>
+            <dd>{{ token.scopes?.length ? token.scopes!.join(', ') : NO_SCOPES }}</dd>
+          } @else {
+            <dt>Permissions</dt>
+            <dd>{{ PERMISSIONS_UNKNOWN }}</dd>
+          }
+          <dt>Expires</dt>
+          <dd>{{ expiry(token) }}</dd>
+          @if (token.lastValidatedAt; as validated) {
+            <dt>Last checked with GitHub</dt>
+            <dd><app-relative-time [value]="validated" /></dd>
+          }
+        </dl>
+        @if (!replacing()) {
+          <div class="actions">
+            <button type="button" [disabled]="busy()" (click)="replacing.set(true)">
+              Replace token
+            </button>
+            <button type="button" [disabled]="busy()" (click)="remove()">Remove token</button>
+          </div>
+        }
+      }
+
+      @if (entering()) {
+        <form novalidate (submit)="save($event)">
+          <label for="token-input">{{ token() ? 'New token' : 'Token' }}</label>
+          <input
+            #input
+            id="token-input"
+            type="password"
+            name="token"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            [value]="draft()"
+            [attr.aria-invalid]="problem() ? 'true' : null"
+            [attr.aria-describedby]="problem() ? 'token-problem' : null"
+            (input)="draft.set(input.value)"
+          />
+          <div class="actions">
+            <button type="submit" class="primary" [disabled]="busy()">Save token</button>
+            @if (replacing()) {
+              <button type="button" (click)="cancel()">Cancel</button>
+            }
+          </div>
+        </form>
+      }
+
+      <!-- Always there, so that assistive technology announces what changes. -->
+      <p class="done" role="status">{{ done() }}</p>
+      @if (problem(); as problem) {
+        <p id="token-problem" class="problem" role="alert">{{ problem }}</p>
+      }
+
+      <p>
+        <a href="https://github.com/settings/tokens">{{ MANAGE_TOKENS }}</a>
+      </p>
+    </section>
+  }
+</main>

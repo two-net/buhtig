@@ -38,7 +38,7 @@ const LOAD: TimeDelta = TimeDelta::minutes(2);
 
 /// Who a visitor's request comes from: their IP address, or for IPv6 its /64, which one
 /// subscriber usually has to themselves.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Visitor(IpAddr);
 
 impl Visitor {

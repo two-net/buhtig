@@ -1,4 +1,4 @@
-import { HttpClient, HttpStatusCode } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpStatusCode } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, map, of } from 'rxjs';
 import { Resource, dashboardPath, parse } from '../search/parse';
@@ -18,7 +18,16 @@ export interface Summary {
   repository: Repository | undefined;
   /** What an organization's header shows, unless the resource is none, or the answer names none. */
   organization: Organization | undefined;
+  /** Why GitHub keeps the resource from the viewer's credential, when it does (FR-PAT-08). */
+  denied: Denied | undefined;
 }
+
+/**
+ * Why GitHub keeps a resource from the viewer's credential (FR-PAT-08): an organization requires
+ * it to be authorized for single sign-on, at `url` if GitHub says where, or does not let the
+ * user's personal access token in, as when it requires owners to approve fine-grained tokens.
+ */
+export type Denied = { reason: 'sso'; url: string | undefined } | { reason: 'token' };
 
 /** What a repository's header shows of it (FR-REPO-01). What GitHub does not say is left out. */
 export interface Repository {
@@ -462,9 +471,21 @@ export class Resources {
             organization !== undefined && path !== undefined
               ? organizationHeader(organization)
               : undefined,
+          denied: undefined,
         };
       }),
-      catchError(() => of(undefined)),
+      catchError((error: unknown) => {
+        const denied = deniedBy(error);
+        return of(
+          denied && {
+            path: undefined,
+            fetchedAt: undefined,
+            repository: undefined,
+            organization: undefined,
+            denied,
+          },
+        );
+      }),
     );
   }
 
@@ -714,6 +735,24 @@ export class Resources {
         return response.body as T;
       }),
     );
+  }
+}
+
+/** Why GitHub keeps a resource from the viewer, if `error` is the server's word that it does. */
+function deniedBy(error: unknown): Denied | undefined {
+  if (!(error instanceof HttpErrorResponse) || error.status !== HttpStatusCode.Forbidden) {
+    return undefined;
+  }
+  const answer: { denied?: unknown; url?: string | null } | null = error.error;
+  switch (answer?.denied) {
+    case 'sso': {
+      const url = link(answer.url, ['https:']);
+      return { reason: 'sso', url: url && new URL(url).host === 'github.com' ? url : undefined };
+    }
+    case 'token':
+      return { reason: 'token' };
+    default:
+      return undefined;
   }
 }
 

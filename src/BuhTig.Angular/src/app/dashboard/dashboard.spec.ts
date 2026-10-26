@@ -7,6 +7,13 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import type { MockInstance } from 'vitest';
 import { routes } from '../app.routes';
 import { exactTime, relativeTime } from '../format/format';
+import {
+  AUTHORIZE_SSO,
+  AUTHORIZE_TOKEN,
+  SSO_REQUIRED,
+  THEN_RELOAD,
+  TOKEN_REFUSED,
+} from './messages';
 
 describe('Dashboard', () => {
   let harness: RouterTestingHarness;
@@ -134,6 +141,37 @@ describe('Dashboard', () => {
       // Away and back, so that the dashboard asks again.
       await harness.navigateByUrl('/-/about');
     }
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('says how to get access that GitHub keeps from the viewer (FR-PAT-08)', async () => {
+    const denied = async (url: string, request: string, body: object | null) => {
+      await harness.navigateByUrl(url);
+      http.expectOne(request).flush(body, { status: 403, statusText: 'Forbidden' });
+      await harness.fixture.whenStable();
+      const notice = page().querySelector('app-denied [role="alert"]');
+      return notice && [shown(notice), notice.querySelector('a')?.getAttribute('href')];
+    };
+
+    const sso = 'https://github.com/orgs/acme/sso?authorization_request=abc';
+    expect(
+      await denied('/acme/widget', '/-/api/repositories/acme/widget', { denied: 'sso', url: sso }),
+    ).toEqual([`${SSO_REQUIRED} ${AUTHORIZE_SSO}, ${THEN_RELOAD}`, sso]);
+    // Under the resource's head.
+    expect(page().querySelector('app-repository-header + app-denied')).not.toBeNull();
+    expect(
+      await denied('/acme', '/-/api/organizations/acme', {
+        denied: 'sso',
+        url: 'https://evil.example/sso',
+      }),
+    ).toEqual([
+      `${SSO_REQUIRED} ${AUTHORIZE_TOKEN}, ${THEN_RELOAD}`,
+      'https://github.com/settings/tokens',
+    ]);
+    expect(
+      await denied('/acme/other', '/-/api/repositories/acme/other', { denied: 'token' }),
+    ).toEqual([`${TOKEN_REFUSED} Replace it in Settings`, '/-/settings']);
+    expect(await denied('/acme/plain', '/-/api/repositories/acme/plain', null)).toBeNull();
     expect(navigate).not.toHaveBeenCalled();
   });
 

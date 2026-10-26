@@ -34,7 +34,8 @@
 }
 
 .menu,
-.ended {
+.ended,
+.note {
   position: absolute;
   top: calc(100% + 0.25rem);
   right: 0;
@@ -52,7 +53,8 @@
   padding: 0.5rem 1rem;
 }
 
-.ended {
+.ended,
+.note {
   width: max-content;
   max-width: min(18rem, calc(100vw - 2rem));
   margin: 0;

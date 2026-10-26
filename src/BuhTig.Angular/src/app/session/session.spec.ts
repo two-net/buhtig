@@ -1,7 +1,7 @@
 import { HttpClient, provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
-import { Session, noticeSignOut, signInUrl } from './session';
+import { Session, Token, noticeSignOut, signInUrl, token } from './session';
 
 describe('Session', () => {
   let http: HttpTestingController;
@@ -57,6 +57,78 @@ describe('Session', () => {
     answer('/-/api/shortcuts', 401);
     expect(session.user()).toBeNull();
     expect(session.ended()).toBe(false);
+  });
+
+  const CLASSIC = {
+    type: 'classic',
+    last_four: 'abcd',
+    scopes: ['repo', 'read:org'],
+    expires_at: '2026-11-25T12:00:00.000Z',
+    status: 'valid',
+    last_validated_at: '2026-10-26T09:30:00.000Z',
+  };
+
+  it("knows the user's token once the server says, but never the token itself (FR-PAT-04)", () => {
+    expect(session.token()).toBeUndefined();
+    http.expectOne('/-/api/session').flush({ user: MONA, token: CLASSIC });
+    expect(session.token()).toEqual<Token>({
+      type: 'classic',
+      lastFour: 'abcd',
+      scopes: ['repo', 'read:org'],
+      expiresAt: new Date('2026-11-25T12:00:00Z'),
+      status: 'valid',
+      lastValidatedAt: new Date('2026-10-26T09:30:00Z'),
+    });
+  });
+
+  it('knows of no token for a user without one, or a visitor', () => {
+    http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+    expect(session.token()).toBeNull();
+  });
+
+  it('reads a fine-grained token, and one that GitHub no longer accepts (FR-PAT-07)', () => {
+    http.expectOne('/-/api/session');
+    expect(
+      token({
+        type: 'fine_grained',
+        last_four: 'wxyz',
+        scopes: null,
+        expires_at: null,
+        status: 'invalid',
+        last_validated_at: 'not a time',
+      }),
+    ).toEqual<Token>({
+      type: 'fine_grained',
+      lastFour: 'wxyz',
+      scopes: undefined,
+      expiresAt: undefined,
+      status: 'invalid',
+      lastValidatedAt: undefined,
+    });
+    expect(token({ ...CLASSIC, scopes: ['repo', 7] })?.scopes).toEqual(['repo']);
+    expect(token({ ...CLASSIC, status: 'odd' })?.status).toBe('invalid');
+  });
+
+  it('takes note of a token saved or removed in Settings', () => {
+    http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+    const saved = token(CLASSIC)!;
+    session.setToken(saved);
+    expect(session.token()).toEqual(saved);
+    session.setToken(null);
+    expect(session.token()).toBeNull();
+  });
+
+  it('forgets the token of a user signed out while the page was open', () => {
+    http.expectOne('/-/api/session').flush({ user: MONA, token: CLASSIC });
+    session.end();
+    expect(session.token()).toBeNull();
+  });
+
+  it('remembers for the visit that the user put away the note about their token', () => {
+    http.expectOne('/-/api/session');
+    expect(session.tokenNoted()).toBe(false);
+    session.dismissTokenNote();
+    expect(session.tokenNoted()).toBe(true);
   });
 
   it('starts sign-in with the page to return to (FR-AUTH-05)', () => {

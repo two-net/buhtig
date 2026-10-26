@@ -84,7 +84,9 @@ describe('routes', () => {
     );
     await harness.navigateByUrl('/-/privacy');
     expect([heading(), title()]).toEqual(['Privacy', 'Privacy · BuhTig']);
-    for (const path of ['/-/settings', '/-/auth/sign-in', '/-']) {
+    await harness.navigateByUrl('/-/settings');
+    expect([heading(), title()]).toEqual(['Settings', 'Settings · BuhTig']);
+    for (const path of ['/-/auth/sign-in', '/-']) {
       await harness.navigateByUrl(path);
       expect([heading(), title()], path).toEqual(['Page not found', 'Page not found · BuhTig']);
     }

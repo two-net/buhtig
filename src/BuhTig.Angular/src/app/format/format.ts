@@ -47,6 +47,25 @@ export function relativeTime(time: Date, now: number, locale?: string): string {
   return format.format(-Math.floor(days / 365), 'year');
 }
 
+/**
+ * How long after `now` a time is, in the largest whole unit up to days, such as "in 5 hours",
+ * "tomorrow" or "in 6 days". Under a minute, or earlier than `now`, it is "now".
+ */
+export function timeUntil(time: Date, now: number, locale?: string): string {
+  const format = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
+  const until = time.getTime() - now;
+  if (until < MINUTE_MS) {
+    return format.format(0, 'second');
+  }
+  if (until < HOUR_MS) {
+    return format.format(Math.floor(until / MINUTE_MS), 'minute');
+  }
+  if (until < DAY_MS) {
+    return format.format(Math.floor(until / HOUR_MS), 'hour');
+  }
+  return format.format(Math.floor(until / DAY_MS), 'day');
+}
+
 /** A time in full, such as "Oct 21, 2026, 12:03 PM", in the browser's time zone. */
 export function exactTime(time: Date, locale?: string, timeZone?: string): string {
   return new Intl.DateTimeFormat(locale, {

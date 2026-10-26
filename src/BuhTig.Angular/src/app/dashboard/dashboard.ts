@@ -3,6 +3,7 @@ import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
 import { Router, RouterLink } from '@angular/router';
 import { map, switchMap } from 'rxjs';
 import { Account } from '../account/account';
+import { DeniedNotice } from './denied';
 import { OrganizationCreated } from '../organization/created';
 import { OrganizationHeader } from '../organization/header';
 import { OrganizationLanguages } from '../organization/languages';
@@ -37,12 +38,14 @@ import { Resources, Summary } from './resources';
  * repository table (FR-ORG-03), and its members (FR-ORG-07).
  *
  * Once it knows how GitHub spells the names, it moves there, in place of the URL it was opened
- * at (FR-NAV-04, FR-NAV-05).
+ * at (FR-NAV-04, FR-NAV-05). When GitHub keeps the resource from the viewer's credential, it
+ * says why, and how to get access (FR-PAT-08).
  */
 @Component({
   selector: 'app-dashboard',
   imports: [
     Account,
+    DeniedNotice,
     OrganizationCreated,
     OrganizationHeader,
     OrganizationLanguages,

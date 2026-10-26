@@ -15,6 +15,8 @@ mod preview;
 mod repositories;
 mod session;
 mod surprise;
+mod throttle;
+mod tokens;
 mod ui;
 mod visitors;
 mod web;
@@ -43,6 +45,7 @@ use crate::crypto::Sealer;
 use crate::health::Health;
 use crate::preview::Previews;
 use crate::session::Sessions;
+use crate::tokens::Tokens;
 
 /// Where the config file is read from unless `--config` says otherwise (FR-CFG-01).
 const DEFAULT_CONFIG_PATH: &str = "BuhTig.toml";
@@ -153,9 +156,11 @@ async fn serve(config: Config) -> ExitCode {
     // FR-NAV-06. In private mode, visitors see no dashboard (FR-ACC-03), nor a preview.
     let previews = (config.access.mode == AccessMode::Public)
         .then(|| Previews::new(cache.clone(), config.server.public_url.clone()));
+    // One for sign-in credentials and PATs alike (DR-03).
+    let sealer = Arc::new(Sealer::new(config.security.encryption_key.expose()));
     let sessions = Arc::new(Sessions::new(
         db.clone(),
-        Sealer::new(config.security.encryption_key.expose()),
+        sealer.clone(),
         session::Settings {
             idle_timeout: config.auth.session_idle_timeout,
             max_age: config.auth.session_max_age,
@@ -163,6 +168,7 @@ async fn serve(config: Config) -> ExitCode {
             secure: config.server.public_url.scheme() == "https",
         },
     ));
+    let tokens = Arc::new(Tokens::new(db.clone(), sealer, github.clone()));
     let auth = Arc::new(Auth::new(
         sessions.clone(),
         github,
@@ -174,6 +180,7 @@ async fn serve(config: Config) -> ExitCode {
         previews,
         sessions,
         auth,
+        tokens,
     );
 
     let listen = config.server.listen;

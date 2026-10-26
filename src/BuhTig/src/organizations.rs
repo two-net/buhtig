@@ -19,10 +19,10 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::accounts::is_account_name;
-use crate::cache::{Cache, Cached, Viewer};
+use crate::cache::{self, Cache, Cached, Outcome, Viewer};
 use crate::github::{self, List};
 use crate::repositories::{
-    data, is_repository_name, link, page, respond, status, text, visibility,
+    data, denied, is_repository_name, link, page, respond, status, text, visibility,
 };
 
 /// FR-ORG-04: the languages the chart names. The rest are "Other".
@@ -71,7 +71,9 @@ const REPOSITORY_FIELDS: [&str; 13] = [
 /// organizations often write it. `verified` is whether GitHub has verified it. What GitHub
 /// does not say, or says in a form BuhTig does not show, is `null`: links are only to `http`
 /// and `https` URLs, and avatars only from `https` ones (NFR-SEC-03). 404 if there is no such
-/// organization, as for a user's account (FR-SRCH-06), or if it is private (FR-ACC-05).
+/// organization, as for a user's account (FR-SRCH-06), or if it is private (FR-ACC-05). 403
+/// when GitHub keeps it from the viewer's credential, with why, as [`denied`] tells it
+/// (FR-PAT-08).
 ///
 /// Names that cannot be an account's are 400, without asking GitHub (FR-SRCH-04). Any other
 /// status means that BuhTig cannot tell now. The dashboard then keeps its URL.
@@ -80,9 +82,16 @@ pub async fn summary(
     viewer: Viewer,
     Path(org): Path<String>,
 ) -> Response {
-    // A token user will read with their PAT (#23). The organization is read for its
+    // A token user reads with their PAT (FR-PAT-06). The organization is read for its
     // dashboard, so a visitor's load of that counts once (FR-DATA-10).
-    let cached = match organization(&cache, &viewer, &org).await {
+    if !is_account_name(&org) {
+        return status(StatusCode::BAD_REQUEST);
+    }
+    let result = read(&cache, &viewer, &org).await;
+    if let Some(denied) = denied(&viewer, &result) {
+        return denied;
+    }
+    let cached = match data(result) {
         Ok(cached) => cached,
         Err(code) => return status(code),
     };
@@ -353,8 +362,14 @@ async fn organization(
     if !is_account_name(org) {
         return Err(StatusCode::BAD_REQUEST);
     }
+    data(read(cache, viewer, org).await)
+}
+
+/// What the cache has of the organization `org` for the viewer. `org` must be an account
+/// name.
+async fn read(cache: &Cache, viewer: &Viewer, org: &str) -> Result<Outcome<Value>, cache::Error> {
     let path = github::Path::new(["orgs", org]).expect("an account name is neither empty nor dots");
-    data(cache.get(viewer, &format!("/{org}"), &path).await)
+    cache.get(viewer, &format!("/{org}"), &path).await
 }
 
 /// The organization's login, as GitHub spells it, if it can be an account's.
@@ -1510,7 +1525,9 @@ mod tests {
         };
         let token_user = Viewer::TokenUser {
             user_id: 1,
+            credential_id: 1,
             pat: Secret::new("pat".to_owned()),
+            sign_in: Secret::new("sign-in".to_owned()),
         };
         for viewer in [visitor, signed_in] {
             assert_eq!(
@@ -1575,5 +1592,38 @@ mod tests {
             );
         }
         assert_eq!(stub.urls(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn an_organization_github_keeps_from_the_viewer_is_explained() {
+        let stub = Stub::new(|request| match request.uri().path() {
+            "/orgs/acme" => answer(
+                403,
+                &[(
+                    "x-github-sso",
+                    "required; url=https://github.com/orgs/acme/sso?authorization_request=abc",
+                )],
+                "",
+            ),
+            _ => answer(404, &[], r#"{"message": "Not Found"}"#),
+        });
+        let cache = cache(&stub, 30, 1000).await;
+        let (status, body) = ask(&cache, Api::Summary, "acme").await;
+        assert_eq!(
+            (status, body),
+            (
+                StatusCode::FORBIDDEN,
+                json!({
+                    "denied": "sso",
+                    "url": "https://github.com/orgs/acme/sso?authorization_request=abc"
+                })
+            )
+        );
+        // Names that cannot be an account's are still refused before GitHub is asked.
+        assert_eq!(
+            ask(&cache, Api::Summary, "-acme").await.0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(stub.urls(), ["https://api.github.com/orgs/acme"]);
     }
 }

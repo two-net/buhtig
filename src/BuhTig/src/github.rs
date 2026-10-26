@@ -41,7 +41,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
-use sea_orm::sea_query::prelude::chrono::{DateTime, TimeDelta};
+use sea_orm::sea_query::prelude::chrono::{DateTime, NaiveDateTime, TimeDelta};
 use serde_json::Value;
 use tracing::{debug, error, warn};
 use url::Url;
@@ -179,6 +179,18 @@ pub struct List {
     /// Whether the list goes on past the limit, so that the dashboard can say that its
     /// figures cover only part of it (FR-ORG-08).
     pub truncated: bool,
+}
+
+/// What GitHub tells of a token when it is used (FR-PAT-04).
+#[derive(Debug, PartialEq)]
+pub struct TokenInfo {
+    /// The user the token belongs to, as `GET /user` describes them.
+    pub user: Value,
+    /// The scopes of a classic token. GitHub reports none for a fine-grained token, whose
+    /// permissions it does not tell.
+    pub scopes: Option<Vec<String>>,
+    /// When the token expires, unless it never does.
+    pub expires_at: Option<DateTimeUtc>,
 }
 
 /// One reading of a rate limit.
@@ -529,6 +541,31 @@ impl Client {
         })
     }
 
+    /// Who `token` belongs to, and what else GitHub tells of it as it answers: a classic
+    /// token's scopes, and when the token expires (FR-PAT-02, FR-PAT-04). A token that
+    /// GitHub does not take, as one revoked or expired, is [`Error::BadCredentials`].
+    pub async fn inspect(&self, token: &Secret<String>) -> Result<TokenInfo, Error> {
+        let user = Path::new(["user"]).expect("user is neither empty nor dots");
+        let answer = self
+            .fetch(&Credential::Token(token.clone()), user.0, None)
+            .await?;
+        let scopes = header(&answer.headers, "x-oauth-scopes").map(|scopes| {
+            scopes
+                .split(',')
+                .map(str::trim)
+                .filter(|scope| !scope.is_empty())
+                .map(str::to_owned)
+                .collect()
+        });
+        let expires_at =
+            header(&answer.headers, "github-authentication-token-expiration").and_then(expiration);
+        Ok(TokenInfo {
+            user: answer.json()?,
+            scopes,
+            expires_at,
+        })
+    }
+
     /// The latest reading of the rate limit that visitors' requests share, which GitHub
     /// counts per OAuth app (FR-DATA-11). `None` until a request has been made, and once
     /// that reading has reset: the full limit is then available.
@@ -835,6 +872,21 @@ fn rate_limit(headers: &HeaderMap) -> Option<RateLimit> {
         remaining: text("x-ratelimit-remaining")?.parse().ok()?,
         reset: DateTime::from_timestamp(text("x-ratelimit-reset")?.parse().ok()?, 0)?,
     })
+}
+
+/// When a token expires, as GitHub's `GitHub-Authentication-Token-Expiration` header says,
+/// such as `2026-11-25 12:00:00 UTC` or `2026-11-25 05:00:00 -0700`.
+fn expiration(value: &str) -> Option<DateTimeUtc> {
+    const FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+    let value = value.trim();
+    match value.strip_suffix(" UTC") {
+        Some(utc) => NaiveDateTime::parse_from_str(utc, FORMAT)
+            .ok()
+            .map(|at| at.and_utc()),
+        None => DateTime::parse_from_str(value, &format!("{FORMAT} %z"))
+            .ok()
+            .map(|at| at.to_utc()),
+    }
 }
 
 /// Whether a 403 is a rate limit: a primary one leaves nothing remaining, and a secondary
@@ -1877,6 +1929,73 @@ mod tests {
         let printed = format!("{secret:?} {error} {error:?} {:?}", stub.requests());
         for leaked in ["ghp_secret", "client-secret", &APP["Basic ".len()..]] {
             assert!(!printed.contains(leaked), "{leaked:?} in {printed}");
+        }
+    }
+
+    #[tokio::test]
+    async fn tokens_are_inspected_as_github_describes_them() {
+        let stub = Stub::new(|request| {
+            assert_eq!(request.uri(), "https://api.github.com/user");
+            match authorization(request) {
+                Some("Bearer ghp_classic") => answer(
+                    200,
+                    &[
+                        ("x-oauth-scopes", "repo, read:org"),
+                        (
+                            "github-authentication-token-expiration",
+                            "2026-11-25 12:00:00 UTC",
+                        ),
+                    ],
+                    r#"{"id": 583231, "login": "Mona"}"#,
+                ),
+                Some("Bearer ghp_unscoped") => {
+                    answer(200, &[("x-oauth-scopes", "")], r#"{"id": 583231}"#)
+                }
+                Some("Bearer github_pat_fine") => answer(
+                    200,
+                    &[(
+                        "github-authentication-token-expiration",
+                        "2026-11-25 05:00:00 -0700",
+                    )],
+                    r#"{"id": 583231}"#,
+                ),
+                _ => answer(401, &[], r#"{"message":"Bad credentials"}"#),
+            }
+        });
+        let client = client(&stub);
+        let inspect = async |token: &str| client.inspect(&Secret::new(token.to_owned())).await;
+        let noon = "2026-11-25T12:00:00Z".parse::<DateTimeUtc>().unwrap();
+
+        let classic = inspect("ghp_classic").await.unwrap();
+        assert_eq!(classic.user["login"], "Mona");
+        assert_eq!(
+            classic.scopes,
+            Some(vec!["repo".to_owned(), "read:org".to_owned()])
+        );
+        assert_eq!(classic.expires_at, Some(noon));
+
+        let unscoped = inspect("ghp_unscoped").await.unwrap();
+        assert_eq!((unscoped.scopes, unscoped.expires_at), (Some(vec![]), None));
+
+        let fine_grained = inspect("github_pat_fine").await.unwrap();
+        assert_eq!(
+            (fine_grained.scopes, fine_grained.expires_at),
+            (None, Some(noon))
+        );
+
+        assert_eq!(inspect("ghp_revoked").await, Err(Error::BadCredentials));
+    }
+
+    #[test]
+    fn expirations_that_cannot_be_read_are_unknown() {
+        for odd in [
+            "",
+            "soon",
+            "2026-11-25",
+            "2026-11-25 12:00:00",
+            "2026-13-01 00:00:00 UTC",
+        ] {
+            assert_eq!(expiration(odd), None, "{odd:?}");
         }
     }
 }

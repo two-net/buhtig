@@ -27,6 +27,10 @@
         </li>
       </ul>
     </div>
+  } @else if (tokenNote(); as note) {
+    <p class="note" role="status">
+      {{ note }} <a routerLink="/-/settings">{{ REPLACE_TOKEN }}</a>
+    </p>
   }
 } @else if (user() === null) {
   <a class="sign-in" [href]="signIn()">Sign in</a>

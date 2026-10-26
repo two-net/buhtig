@@ -4,6 +4,7 @@ import { Dashboard } from './dashboard/dashboard';
 import { Home } from './home/home';
 import { NotFound } from './not-found/not-found';
 import { Privacy } from './privacy/privacy';
+import { Settings } from './settings/settings';
 import { SignInFailed } from './sign-in/failed';
 import { NotAllowed } from './sign-in/not-allowed';
 
@@ -16,6 +17,7 @@ export const routes: Routes = [
     children: [
       { path: 'about', component: About, title: 'About · BuhTig' },
       { path: 'privacy', component: Privacy, title: 'Privacy · BuhTig' },
+      { path: 'settings', component: Settings, title: 'Settings · BuhTig' },
       // Where sign-in ends when it does not sign the user in (FR-AUTH-08).
       { path: 'not-allowed', component: NotAllowed, title: 'Not allowed · BuhTig' },
       { path: 'sign-in-failed', component: SignInFailed, title: 'Sign-in failed · BuhTig' },

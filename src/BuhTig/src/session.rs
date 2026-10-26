@@ -14,6 +14,11 @@
 //! `security.encryption_key` changed (DR-03). So is a user whom `access.allowed_users` no
 //! longer lists (FR-AUTH-08).
 //!
+//! A signed-in user's requests carry their PAT while they have a valid one, and their
+//! sign-in credential otherwise (FR-PAT-06). A PAT that has expired, or cannot be decrypted
+//! because `security.encryption_key` changed, is marked invalid as it is found, for the user
+//! to replace (DR-03, [`crate::tokens`]).
+//!
 //! Pins and history come with #25.
 
 use std::collections::BTreeSet;
@@ -38,8 +43,9 @@ use crate::cache::Viewer;
 use crate::config::Secret;
 use crate::cookies;
 use crate::crypto::{self, Sealer};
-use crate::entity::credential::{self, Kind};
+use crate::entity::credential::{self, Kind, PatStatus};
 use crate::entity::{session, user};
+use crate::tokens;
 use crate::visitors::Visitor;
 
 /// The session cookie, which every request of BuhTig's carries.
@@ -63,7 +69,7 @@ pub struct Settings {
 
 pub struct Sessions {
     db: DatabaseConnection,
-    sealer: Sealer,
+    sealer: Arc<Sealer>,
     settings: Settings,
 }
 
@@ -76,14 +82,19 @@ pub struct Profile {
     pub avatar_url: String,
 }
 
-/// A signed-in user, and the credential they signed in with.
+/// A signed-in user, the credential they signed in with, and their PAT.
 pub struct SignedIn {
     pub user: user::Model,
     pub sign_in: Secret<String>,
+    /// Their PAT's row, if they have saved one, which tells what Settings shows of it.
+    pub pat: Option<credential::Model>,
+    /// Their PAT itself, while it is valid (FR-PAT-06).
+    pub token: Option<Secret<String>>,
 }
 
 impl Sessions {
-    pub fn new(db: DatabaseConnection, sealer: Sealer, settings: Settings) -> Sessions {
+    /// Sessions whose credentials `sealer` seals, as it does PATs ([`crate::tokens`]).
+    pub fn new(db: DatabaseConnection, sealer: Arc<Sealer>, settings: Settings) -> Sessions {
         Sessions {
             db,
             sealer,
@@ -235,18 +246,18 @@ impl Sessions {
             end_all(&self.db, user.id).await?;
             return Ok(None);
         }
-        let credential = credential::Entity::find()
+        let credentials = credential::Entity::find()
             .filter(credential::Column::UserId.eq(user.id))
-            .filter(credential::Column::Kind.eq(Kind::SignIn))
-            .one(&self.db)
+            .all(&self.db)
             .await?;
-        let sign_in = credential
-            .as_ref()
-            .and_then(|credential| {
-                self.sealer
-                    .open(&credential.encrypted_value, &sign_in_context(user.id))
-            })
-            .and_then(|token| String::from_utf8(token).ok());
+        let of_kind = |kind| {
+            credentials
+                .iter()
+                .find(|credential| credential.kind == kind)
+        };
+        let credential = of_kind(Kind::SignIn);
+        let sign_in =
+            credential.and_then(|credential| self.open(credential, &sign_in_context(user.id)));
         let Some(sign_in) = sign_in else {
             // Missing only if the user was signed out everywhere since the read above.
             if credential.is_some() {
@@ -259,6 +270,18 @@ impl Sessions {
             end_all(&self.db, user.id).await?;
             return Ok(None);
         };
+        let mut pat = of_kind(Kind::Pat).cloned();
+        let token = match pat.as_mut() {
+            Some(pat) if pat.status == Some(PatStatus::Valid) => {
+                let token = self.usable(pat, user.id, now);
+                if token.is_none() {
+                    tokens::invalidate(&self.db, pat.id).await?;
+                    pat.status = Some(PatStatus::Invalid);
+                }
+                token
+            }
+            _ => None,
+        };
         if session.last_used_at + TOUCH_INTERVAL <= now {
             session::Entity::update_many()
                 .col_expr(session::Column::LastUsedAt, Expr::value(now))
@@ -268,8 +291,42 @@ impl Sessions {
         }
         Ok(Some(SignedIn {
             user,
-            sign_in: Secret::new(sign_in),
+            sign_in,
+            pat,
+            token,
         }))
+    }
+
+    /// The token that `credential` holds, if it opens for `context`.
+    fn open(&self, credential: &credential::Model, context: &[u8]) -> Option<Secret<String>> {
+        let token = self.sealer.open(&credential.encrypted_value, context)?;
+        String::from_utf8(token).ok().map(Secret::new)
+    }
+
+    /// The PAT `pat` of the user `user_id`, which is marked valid, unless it has expired or
+    /// cannot be decrypted: it is then of no more use, until the user replaces it.
+    fn usable(
+        &self,
+        pat: &credential::Model,
+        user_id: i64,
+        now: DateTimeUtc,
+    ) -> Option<Secret<String>> {
+        if pat.expires_at.is_some_and(|expires_at| expires_at <= now) {
+            info!(
+                user_id,
+                "a personal access token expired; it is marked invalid"
+            );
+            return None;
+        }
+        let token = self.open(pat, &tokens::context(user_id));
+        if token.is_none() {
+            info!(
+                user_id,
+                "a personal access token cannot be decrypted, as after a change of \
+                 security.encryption_key; it is marked invalid"
+            );
+        }
+        token
     }
 
     /// Whether a session has ended (FR-AUTH-06), as housekeeping tells: past its
@@ -343,9 +400,22 @@ impl<S: Send + Sync> FromRequestParts<S> for Viewer {
             .await
             .map_err(IntoResponse::into_response)?;
         match sessions.resolve(&parts.headers).await {
-            Ok(Some(signed_in)) => Ok(Viewer::SignedIn {
-                user_id: signed_in.user.id,
-                sign_in: signed_in.sign_in,
+            Ok(Some(SignedIn {
+                user,
+                sign_in,
+                pat,
+                token,
+            })) => Ok(match pat.zip(token) {
+                Some((pat, token)) => Viewer::TokenUser {
+                    user_id: user.id,
+                    credential_id: pat.id,
+                    pat: token,
+                    sign_in,
+                },
+                None => Viewer::SignedIn {
+                    user_id: user.id,
+                    sign_in,
+                },
             }),
             Ok(None) => Visitor::from_request_parts(parts, state)
                 .await
@@ -359,23 +429,28 @@ impl<S: Send + Sync> FromRequestParts<S> for Viewer {
     }
 }
 
-/// `/-/api/session`: `{"user": null}` for a visitor. For a signed-in user, `{"user":
-/// {"login": …, "name": … or null, "avatar_url": …}}`, as GitHub described them when they
-/// last signed in.
+/// `/-/api/session`: `{"user": null, "token": null}` for a visitor. For a signed-in user,
+/// `{"user": {"login": …, "name": … or null, "avatar_url": …}, "token": … or null}`: the
+/// user as GitHub described them when they last signed in, and what Settings shows of their
+/// PAT, as [`tokens::describe`] gives it, if they have saved one.
 pub async fn current(
     Extension(sessions): Extension<Arc<Sessions>>,
     headers: HeaderMap,
 ) -> Response {
     match sessions.resolve(&headers).await {
         Ok(signed_in) => {
-            let user = signed_in.map(|SignedIn { user, .. }| {
+            let user = signed_in.as_ref().map(|SignedIn { user, .. }| {
                 json!({
                     "login": user.login,
                     "name": user.name,
                     "avatar_url": user.avatar_url,
                 })
             });
-            respond(json!({ "user": user }))
+            let token = signed_in
+                .as_ref()
+                .and_then(|signed_in| signed_in.pat.as_ref())
+                .map(tokens::describe);
+            respond(json!({ "user": user, "token": token }))
         }
         Err(error) => {
             error!("cannot read the session: {error}");
@@ -463,7 +538,7 @@ mod tests {
     }
 
     fn sessions(db: &DatabaseConnection, key: &[u8], settings: Settings) -> Sessions {
-        Sessions::new(db.clone(), Sealer::new(key), settings)
+        Sessions::new(db.clone(), Arc::new(Sealer::new(key)), settings)
     }
 
     fn mona() -> Profile {
@@ -873,7 +948,10 @@ mod tests {
         let shortcuts =
             async |headers| parts(shortcuts(Extension(sessions.clone()), headers).await).await;
 
-        assert_eq!(current(HeaderMap::new()).await, ok(r#"{"user":null}"#));
+        assert_eq!(
+            current(HeaderMap::new()).await,
+            ok(r#"{"token":null,"user":null}"#)
+        );
         assert_eq!(
             shortcuts(HeaderMap::new()).await,
             (
@@ -885,12 +963,138 @@ mod tests {
         assert_eq!(
             current(carrying(&cookie)).await,
             ok(
-                r#"{"user":{"avatar_url":"https://avatars.githubusercontent.com/u/583231","login":"Mona","name":"Mona Lisa"}}"#
+                r#"{"token":null,"user":{"avatar_url":"https://avatars.githubusercontent.com/u/583231","login":"Mona","name":"Mona Lisa"}}"#
             )
         );
         assert_eq!(
             shortcuts(carrying(&cookie)).await,
             ok(r#"{"pins":[],"recent":[]}"#)
         );
+    }
+
+    /// Saves a classic PAT, sealed as `sealed`, for the user `user_id`.
+    async fn save_pat(
+        db: &DatabaseConnection,
+        user_id: i64,
+        sealed: Vec<u8>,
+        expires_at: Option<DateTimeUtc>,
+    ) -> credential::Model {
+        use crate::entity::credential::PatType;
+        use sea_orm::ActiveModelTrait;
+
+        credential::Entity::delete_many()
+            .filter(credential::Column::Kind.eq(Kind::Pat))
+            .exec(db)
+            .await
+            .unwrap();
+        credential::ActiveModel {
+            user_id: Set(user_id),
+            kind: Set(Kind::Pat),
+            encrypted_value: Set(sealed),
+            pat_type: Set(Some(PatType::Classic)),
+            last_four: Set(Some("mona".to_owned())),
+            scopes: Set(Some(json!(["repo"]))),
+            expires_at: Set(expires_at),
+            status: Set(Some(PatStatus::Valid)),
+            last_validated_at: Set(Some(at(0))),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap()
+    }
+
+    async fn pat_status(db: &DatabaseConnection) -> Option<PatStatus> {
+        credential::Entity::find()
+            .filter(credential::Column::Kind.eq(Kind::Pat))
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+            .status
+    }
+
+    #[tokio::test]
+    async fn a_valid_pat_is_what_the_users_requests_carry() {
+        let db = database().await;
+        let cookie = sessions(&db, KEY, settings(&[]))
+            .sign_in(mona(), &token("gho_mona"), &HeaderMap::new())
+            .await
+            .unwrap();
+        let user_id = user::Entity::find().one(&db).await.unwrap().unwrap().id;
+        let sealed = Sealer::new(KEY).seal(b"ghp_mona", &tokens::context(user_id));
+        let pat = save_pat(&db, user_id, sealed, None).await;
+
+        match viewer(sessions(&db, KEY, settings(&[])), carrying(&cookie))
+            .await
+            .unwrap()
+        {
+            Viewer::TokenUser {
+                user_id: signed_in,
+                credential_id,
+                pat: token,
+                sign_in,
+            } => {
+                assert_eq!((signed_in, credential_id), (user_id, pat.id));
+                assert_eq!(
+                    (token.expose().as_str(), sign_in.expose().as_str()),
+                    ("ghp_mona", "gho_mona")
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+
+        // The UI is told what Settings shows of it, and never the token.
+        let sessions = Arc::new(sessions(&db, KEY, settings(&[])));
+        let (status, _, body) = parts(current(Extension(sessions), carrying(&cookie)).await).await;
+        assert_eq!(status, StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["token"], tokens::describe(&pat));
+        assert_eq!(body["token"]["last_four"], "mona");
+        assert!(!body.to_string().contains("ghp_mona"));
+    }
+
+    #[tokio::test]
+    async fn pats_that_expired_or_cannot_be_decrypted_are_marked_invalid() {
+        let db = database().await;
+        let sessions = sessions(&db, KEY, settings(&[]));
+        let cookie = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        let user_id = user::Entity::find().one(&db).await.unwrap().unwrap().id;
+        let resolve = async |minutes| {
+            sessions
+                .resolve_at(&carrying(&cookie), at(minutes))
+                .await
+                .unwrap()
+                .expect("still signed in")
+        };
+        let sealed = || Sealer::new(KEY).seal(b"ghp_mona", &tokens::context(user_id));
+
+        // Until it expires, the PAT is used.
+        save_pat(&db, user_id, sealed(), Some(at(10))).await;
+        assert_eq!(resolve(9).await.token.unwrap().expose(), "ghp_mona");
+        // Then it is not, and the user is asked to replace it.
+        let expired = resolve(10).await;
+        assert!(expired.token.is_none());
+        assert_eq!(expired.pat.unwrap().status, Some(PatStatus::Invalid));
+        assert_eq!(pat_status(&db).await, Some(PatStatus::Invalid));
+        assert!(resolve(11).await.token.is_none());
+
+        // DR-03: sealed with another key, or for another row, it cannot be decrypted.
+        for sealed in [
+            Sealer::new(b"another secret of thirty-two bytes")
+                .seal(b"ghp_mona", &tokens::context(user_id)),
+            Sealer::new(KEY).seal(b"ghp_mona", &tokens::context(user_id + 1)),
+        ] {
+            save_pat(&db, user_id, sealed, None).await;
+            let undecryptable = resolve(20).await;
+            assert!(undecryptable.token.is_none());
+            assert_eq!(undecryptable.pat.unwrap().status, Some(PatStatus::Invalid));
+            assert_eq!(pat_status(&db).await, Some(PatStatus::Invalid));
+        }
+        // The user stays signed in with the credential they signed in with.
+        assert_eq!(resolve(21).await.sign_in.expose(), "gho_mona");
     }
 }

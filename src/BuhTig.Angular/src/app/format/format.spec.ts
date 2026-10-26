@@ -5,6 +5,7 @@ import {
   monthLabel,
   percent,
   relativeTime,
+  timeUntil,
   weekDate,
 } from './format';
 
@@ -29,6 +30,29 @@ describe('format', () => {
   it('shows numbers in full, for the locale (UI-06)', () => {
     expect(exactNumber(1_234_567, 'en-US')).toBe('1,234,567');
     expect(plain(exactNumber(1_234_567, 'de-DE'))).toBe('1.234.567');
+  });
+
+  it('tells how long until a time, up to days', () => {
+    const now = new Date('2026-10-22T12:00:00Z').getTime();
+    const MINUTE = 60_000;
+    const HOUR = 60 * MINUTE;
+    const DAY = 24 * HOUR;
+    const until = (ms: number) => timeUntil(new Date(now + ms), now, 'en-US');
+    expect(
+      [-DAY, 59_000, MINUTE, 59 * MINUTE, HOUR, 23 * HOUR, DAY, 6 * DAY + 23 * HOUR, 30 * DAY].map(
+        until,
+      ),
+    ).toEqual([
+      'now',
+      'now',
+      'in 1 minute',
+      'in 59 minutes',
+      'in 1 hour',
+      'in 23 hours',
+      'tomorrow',
+      'in 6 days',
+      'in 30 days',
+    ]);
   });
 
   describe('relativeTime', () => {
