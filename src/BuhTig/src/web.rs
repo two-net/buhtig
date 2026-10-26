@@ -71,6 +71,22 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>, previews: Option<Previews>
             get(organizations::repositories).with_state(cache.clone()),
         )
         .route(
+            "/-/api/organizations/{org}/languages",
+            get(organizations::languages).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/organizations/{org}/top-repositories",
+            get(organizations::top_repositories).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/organizations/{org}/last-push",
+            get(organizations::last_push).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/organizations/{org}/created-per-year",
+            get(organizations::created_per_year).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}",
             get(repositories::summary).with_state(cache.clone()),
         )

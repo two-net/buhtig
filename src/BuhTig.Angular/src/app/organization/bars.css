@@ -1,0 +1,53 @@
+ol {
+  display: grid;
+  gap: 0.625rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The label and the figure on one line, and the bar under them, at any width. */
+li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+}
+
+.label {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.label {
+  text-decoration: none;
+}
+
+a.label:hover {
+  text-decoration: underline;
+}
+
+.value {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.track {
+  grid-column: 1 / -1;
+  display: block;
+  height: 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--raised);
+}
+
+/* At least a sliver, so that a figure that is not 0 shows beside a large one. */
+.bar {
+  display: block;
+  min-width: 0.25rem;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}

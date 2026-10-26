@@ -99,6 +99,46 @@ export interface ListedRepository {
   visibility: 'public' | 'private' | 'internal';
 }
 
+/** How many of an organization's repositories have each primary language (FR-ORG-04). */
+export interface LanguageCounts {
+  /** The 8 languages of the most repositories, most first. */
+  languages: LanguageCount[];
+  /** The repositories of all the other languages together, which are "Other". */
+  other: number;
+}
+
+export interface LanguageCount {
+  name: string;
+  repositories: number;
+}
+
+/** One of the 10 repositories of an organization with the most stars (FR-ORG-05). */
+export interface TopRepository {
+  /** Its name, without the organization's, as GitHub spells it. */
+  name: string;
+  /** The path of its dashboard. */
+  path: string;
+  stars: number;
+}
+
+/**
+ * How many of an organization's repositories were last pushed to in each period (FR-ORG-06).
+ * Each counts in one alone: `last30Days` are those pushed to within 30 days but not within 7,
+ * and so on.
+ */
+export interface LastPush {
+  last7Days: number;
+  last30Days: number;
+  last12Months: number;
+  older: number;
+}
+
+/** How many of an organization's repositories were created in a year, in UTC (FR-ORG-06). */
+export interface YearCount {
+  year: number;
+  repositories: number;
+}
+
 /** What a repository's stat cards show (FR-REPO-02). */
 export interface Stats {
   stars: number;
@@ -277,6 +317,24 @@ interface OrganizationRepositoriesAnswer {
     archived: boolean;
     visibility: string;
   }[];
+}
+
+/** The server's answer about an organization, for its top-repositories chart. */
+interface TopRepositoriesAnswer {
+  repositories: { name: string; stars: number }[];
+}
+
+/** The server's answer about an organization, for its last-push chart. */
+interface LastPushAnswer {
+  last_7_days: number;
+  last_30_days: number;
+  last_12_months: number;
+  older: number;
+}
+
+/** The server's answer about an organization, for its created-per-year chart. */
+interface CreatedPerYearAnswer {
+  years: YearCount[];
 }
 
 /** The server's answer about a repository, for its stat cards. */
@@ -458,6 +516,55 @@ export class Resources {
           }),
         ),
       );
+  }
+
+  /**
+   * How many of the repositories of the organization `org` have each primary language, which
+   * fails as `organizationStats` does.
+   */
+  organizationLanguages(org: string): Observable<LanguageCounts> {
+    return this.http.get<LanguageCounts>(`${organizationUrl(org)}/languages`);
+  }
+
+  /**
+   * The repositories of the organization `org` with the most stars, most first, which fail as
+   * `organizationStats` does. Any that the server gives a name no repository can have is left
+   * out.
+   */
+  topRepositories(org: string): Observable<TopRepository[]> {
+    return this.http.get<TopRepositoriesAnswer>(`${organizationUrl(org)}/top-repositories`).pipe(
+      map(({ repositories }) =>
+        repositories.flatMap(({ name, stars }): TopRepository[] => {
+          const path = canonicalPath(`${org}/${name}`, 'repository');
+          return path !== undefined ? [{ name, path, stars }] : [];
+        }),
+      ),
+    );
+  }
+
+  /**
+   * How many of the repositories of the organization `org` were last pushed to in each period,
+   * which fails as `organizationStats` does.
+   */
+  lastPush(org: string): Observable<LastPush> {
+    return this.http.get<LastPushAnswer>(`${organizationUrl(org)}/last-push`).pipe(
+      map((answer) => ({
+        last7Days: answer.last_7_days,
+        last30Days: answer.last_30_days,
+        last12Months: answer.last_12_months,
+        older: answer.older,
+      })),
+    );
+  }
+
+  /**
+   * How many of the repositories of the organization `org` were created in each year, oldest
+   * first, which fails as `organizationStats` does.
+   */
+  createdPerYear(org: string): Observable<YearCount[]> {
+    return this.http
+      .get<CreatedPerYearAnswer>(`${organizationUrl(org)}/created-per-year`)
+      .pipe(map(({ years }) => years));
   }
 
   /**

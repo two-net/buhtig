@@ -385,16 +385,32 @@ describe('Dashboard', () => {
     expect(page().querySelector('app-repository-header')).toBeNull();
   });
 
-  it("loads an organization's widgets, not a repository's (FR-ORG-02, FR-ORG-03)", async () => {
+  it("loads an organization's widgets, not a repository's (FR-ORG-02 to FR-ORG-06)", async () => {
     await harness.navigateByUrl('/acme');
     const widgets = [...page().querySelectorAll('.grid > * > app-widget')];
     expect(widgets.map((widget) => widget.parentElement!.tagName.toLowerCase())).toEqual([
       'app-organization-stats',
+      'app-organization-languages',
+      'app-organization-top-repositories',
+      'app-organization-last-push',
+      'app-organization-created',
       'app-organization-repositories',
     ]);
-    expect(widgets.map((widget) => widget.classList.contains('wide'))).toEqual([true, true]);
+    // The charts side by side, between the stat cards and the table.
+    expect(widgets.map((widget) => widget.classList.contains('wide'))).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
     expect(http.match(isWidget).map((request) => request.request.url)).toEqual([
       '/-/api/organizations/acme/stats',
+      '/-/api/organizations/acme/languages',
+      '/-/api/organizations/acme/top-repositories',
+      '/-/api/organizations/acme/last-push',
+      '/-/api/organizations/acme/created-per-year',
       '/-/api/organizations/acme/repositories',
     ]);
     http.expectOne('/-/api/organizations/acme').flush({ name: 'acme' });

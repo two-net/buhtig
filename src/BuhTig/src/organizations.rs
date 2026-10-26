@@ -1,16 +1,19 @@
 //! What an organization's dashboard shows of the organization as a whole: its header
-//! (FR-ORG-01), with its name as GitHub spells it (FR-NAV-04), its stat cards (FR-ORG-02)
-//! and its repository table (FR-ORG-03). The figures and the table are over the
-//! repositories that the viewer may see, private and internal ones too for a token user
+//! (FR-ORG-01), with its name as GitHub spells it (FR-NAV-04), its stat cards (FR-ORG-02),
+//! its repository table (FR-ORG-03), its languages (FR-ORG-04), its top repositories
+//! (FR-ORG-05) and its activity (FR-ORG-06). The figures, the table and the charts are over
+//! the repositories that the viewer may see, private and internal ones too for a token user
 //! (FR-ORG-09), and at most `limits.org_repositories` of them, those pushed to most
 //! recently (FR-ORG-08).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
+use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
+use sea_orm::sea_query::prelude::chrono::{Datelike, TimeDelta};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -19,6 +22,16 @@ use crate::cache::{Cache, Cached, Viewer};
 use crate::github::{self, List};
 use crate::repositories::{data, is_repository_name, link, respond, status, text, visibility};
 use crate::visitors::Visitor;
+
+/// FR-ORG-04: the languages the chart names. The rest are "Other".
+const LANGUAGES: usize = 8;
+
+/// FR-ORG-05: the repositories the top-repositories chart shows.
+const TOP_REPOSITORIES: usize = 10;
+
+/// FR-ORG-06: the days within which a repository was last pushed to for each period of the
+/// last-push chart but the last, which is of those pushed to longer ago.
+const PERIODS: [i64; 3] = [7, 30, 365];
 
 /// What is kept of each of an organization's repositories: what its dashboard shows of them
 /// (FR-ORG-02 to FR-ORG-06), so that a large organization's list is small to cache and to
@@ -144,6 +157,103 @@ pub async fn repositories(
     }
 }
 
+/// `/-/api/organizations/{org}/languages`: how many of the organization's repositories have
+/// each primary language (FR-ORG-04): the 8 languages of the most, most first, and the
+/// repositories of the rest together,
+///
+/// ```json
+/// {"languages": [{"name": "Rust", "repositories": 12}, …], "other": 5}
+/// ```
+///
+/// The repositories are those that [`stats`] figures over, but for those without a primary
+/// language. Of languages with as many repositories, the first by name comes first. `other`
+/// is apart from the languages named, so that none is taken for a language that GitHub
+/// calls "Other".
+///
+/// Its statuses are those of [`stats`].
+pub async fn languages(
+    State(cache): State<Arc<Cache>>,
+    visitor: Visitor,
+    Path(org): Path<String>,
+) -> Response {
+    match listed(&cache, visitor, &org).await {
+        Ok(list) => respond(language_chart(&list)),
+        Err(code) => status(code),
+    }
+}
+
+/// `/-/api/organizations/{org}/top-repositories`: the 10 of the organization's repositories
+/// with the most stars (FR-ORG-05), most first,
+///
+/// ```json
+/// {"repositories": [{"name": "widget", "stars": 1200}, …]}
+/// ```
+///
+/// The repositories are those that [`stats`] figures over, but for those without stars, and
+/// of those with as many stars, the first by name comes first. Each `name` is the
+/// repository's alone, as in [`repositories`], and an item without a repository's name is
+/// left out.
+///
+/// Its statuses are those of [`stats`].
+pub async fn top_repositories(
+    State(cache): State<Arc<Cache>>,
+    visitor: Visitor,
+    Path(org): Path<String>,
+) -> Response {
+    match listed(&cache, visitor, &org).await {
+        Ok(list) => respond(top(&list)),
+        Err(code) => status(code),
+    }
+}
+
+/// `/-/api/organizations/{org}/last-push`: how many of the organization's repositories were
+/// last pushed to in each period before now (FR-ORG-06),
+///
+/// ```json
+/// {"last_7_days": 3, "last_30_days": 5, "last_12_months": 20, "older": 12}
+/// ```
+///
+/// Each repository counts in one period alone: `last_30_days` are those pushed to within 30
+/// days but not within 7, `last_12_months` those pushed to within 365 days but not within 30,
+/// and `older` the rest. The repositories are those that [`stats`] figures over, but for any
+/// whose last push GitHub does not tell.
+///
+/// Its statuses are those of [`stats`].
+pub async fn last_push(
+    State(cache): State<Arc<Cache>>,
+    visitor: Visitor,
+    Path(org): Path<String>,
+) -> Response {
+    match listed(&cache, visitor, &org).await {
+        Ok(list) => respond(pushes(&list, ChronoUtc::now())),
+        Err(code) => status(code),
+    }
+}
+
+/// `/-/api/organizations/{org}/created-per-year`: how many of the organization's repositories
+/// were created in each year, in UTC (FR-ORG-06), from the year of the first to this one,
+/// oldest first,
+///
+/// ```json
+/// {"years": [{"year": 2015, "repositories": 3}, …]}
+/// ```
+///
+/// A year in which none was created is there too, with 0. The repositories are those that
+/// [`stats`] figures over, but for any whose creation GitHub does not tell. Without such
+/// repositories, there are no years.
+///
+/// Its statuses are those of [`stats`].
+pub async fn created_per_year(
+    State(cache): State<Arc<Cache>>,
+    visitor: Visitor,
+    Path(org): Path<String>,
+) -> Response {
+    match listed(&cache, visitor, &org).await {
+        Ok(list) => respond(years(&list, ChronoUtc::now())),
+        Err(code) => status(code),
+    }
+}
+
 /// The repositories of the organization `org` that the viewer may see, as many as BuhTig
 /// reads, those pushed to most recently first, or the status that says why there are none:
 /// those of [`summary`], since it reads the organization first, or 502 if the repositories
@@ -222,23 +332,118 @@ fn figures(list: &List) -> Value {
 /// The primary language of the most repositories, and of those the first by name. `None`
 /// if no repository has one.
 fn top_language<'a>(repositories: &[&'a Value]) -> Option<&'a str> {
+    language_counts(repositories.iter().copied())
+        .first()
+        .map(|(name, _)| *name)
+}
+
+/// How many repositories have each primary language, the language of the most first, and of
+/// those with as many the first by name.
+fn language_counts<'a>(repositories: impl IntoIterator<Item = &'a Value>) -> Vec<(&'a str, usize)> {
     let mut counts: HashMap<&str, usize> = HashMap::new();
-    for &repository in repositories {
+    for repository in repositories {
         if let Some(language) = text(repository, "language") {
             *counts.entry(language).or_default() += 1;
         }
     }
+    let mut counts: Vec<(&str, usize)> = counts.into_iter().collect();
+    counts.sort_by(|(name, count), (other_name, other_count)| {
+        other_count.cmp(count).then(name.cmp(other_name))
+    });
     counts
+}
+
+/// The languages chart's figures, from the organization's repositories: the 8 languages of
+/// the most repositories, and how many repositories the rest have together.
+fn language_chart(list: &List) -> Value {
+    let mut counts = language_counts(&list.items);
+    let other: usize = counts.iter().skip(LANGUAGES).map(|(_, count)| count).sum();
+    counts.truncate(LANGUAGES);
+    let languages: Vec<Value> = counts
         .into_iter()
-        .max_by(|(name, count), (other_name, other_count)| {
-            count.cmp(other_count).then(other_name.cmp(name))
+        .map(|(name, repositories)| json!({ "name": name, "repositories": repositories }))
+        .collect();
+    json!({ "languages": languages, "other": other })
+}
+
+/// The repositories that the top-repositories chart shows, with their stars.
+fn top(list: &List) -> Value {
+    let mut starred: Vec<(&str, u64)> = list
+        .items
+        .iter()
+        .filter_map(|repository| {
+            let stars = repository.get("stargazers_count")?.as_u64()?;
+            Some((repository_name(repository)?, stars))
         })
-        .map(|(name, _)| name)
+        .filter(|(_, stars)| *stars > 0)
+        .collect();
+    starred.sort_by(|(name, stars), (other_name, other_stars)| {
+        other_stars.cmp(stars).then(name.cmp(other_name))
+    });
+    starred.truncate(TOP_REPOSITORIES);
+    let repositories: Vec<Value> = starred
+        .into_iter()
+        .map(|(name, stars)| json!({ "name": name, "stars": stars }))
+        .collect();
+    json!({ "repositories": repositories })
+}
+
+/// How many repositories were last pushed to in each period before `now`. One pushed to
+/// after `now`, as by a clock ahead of BuhTig's, was pushed to within the first.
+fn pushes(list: &List, now: DateTimeUtc) -> Value {
+    let mut periods = [0u64; PERIODS.len() + 1];
+    for pushed in list.items.iter().filter_map(|item| time(item, "pushed_at")) {
+        let age = now - pushed;
+        let period = PERIODS
+            .iter()
+            .position(|days| age < TimeDelta::days(*days))
+            .unwrap_or(PERIODS.len());
+        periods[period] += 1;
+    }
+    json!({
+        "last_7_days": periods[0],
+        "last_30_days": periods[1],
+        "last_12_months": periods[2],
+        "older": periods[3],
+    })
+}
+
+/// How many repositories were created in each year, from the year of the first to that of
+/// `now`, or to that of the last if it is later, as by a clock ahead of BuhTig's.
+fn years(list: &List, now: DateTimeUtc) -> Value {
+    let mut counts: BTreeMap<i32, u64> = BTreeMap::new();
+    for created in list
+        .items
+        .iter()
+        .filter_map(|item| time(item, "created_at"))
+    {
+        *counts.entry(created.year()).or_default() += 1;
+    }
+    let years: Vec<Value> = match (counts.first_key_value(), counts.last_key_value()) {
+        (Some((&first, _)), Some((&last, _))) => (first..=last.max(now.year()))
+            .map(|year| {
+                let repositories = counts.get(&year).copied().unwrap_or(0);
+                json!({ "year": year, "repositories": repositories })
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    json!({ "years": years })
+}
+
+/// The time of `data`'s member `key`, if it tells one.
+fn time(data: &Value, key: &str) -> Option<DateTimeUtc> {
+    text(data, key)?.parse().ok()
+}
+
+/// The repository's name, without the organization's, if it can be a repository's.
+fn repository_name(repository: &Value) -> Option<&str> {
+    text(repository, "name").filter(|name| is_repository_name(name))
 }
 
 /// A repository as the repository table lists it, unless it has no repository's name.
 fn row(repository: &Value) -> Option<Value> {
-    let name = text(repository, "name").filter(|name| is_repository_name(name))?;
+    let name = repository_name(repository)?;
     let figure = |key| repository.get(key).and_then(Value::as_u64).unwrap_or(0);
     let flag = |key| repository.get(key) == Some(&Value::Bool(true));
     Some(json!({
@@ -275,6 +480,7 @@ mod tests {
 
     use axum::http::{HeaderMap, header};
     use sea_orm::entity::prelude::DateTimeUtc;
+    use sea_orm::sea_query::prelude::chrono::SecondsFormat;
     use url::form_urlencoded;
 
     use super::*;
@@ -414,10 +620,32 @@ mod tests {
         Summary,
         Stats,
         Repositories,
+        Languages,
+        TopRepositories,
+        LastPush,
+        CreatedPerYear,
     }
 
     /// Every part of a dashboard that is read under its organization.
-    const APIS: [Api; 3] = [Api::Summary, Api::Stats, Api::Repositories];
+    const APIS: [Api; 7] = [
+        Api::Summary,
+        Api::Stats,
+        Api::Repositories,
+        Api::Languages,
+        Api::TopRepositories,
+        Api::LastPush,
+        Api::CreatedPerYear,
+    ];
+
+    /// Every part of a dashboard that is read from the organization's repositories.
+    const LISTED: [Api; 6] = [
+        Api::Stats,
+        Api::Repositories,
+        Api::Languages,
+        Api::TopRepositories,
+        Api::LastPush,
+        Api::CreatedPerYear,
+    ];
 
     /// The status and body of a visitor's request to `api` for `org`, as JSON, `null` if
     /// there is none, and without the time of fetching, since it is the time the test ran.
@@ -428,6 +656,10 @@ mod tests {
             Api::Summary => summary(State(cache.clone()), visitor, name).await,
             Api::Stats => stats(State(cache.clone()), visitor, name).await,
             Api::Repositories => repositories(State(cache.clone()), visitor, name).await,
+            Api::Languages => languages(State(cache.clone()), visitor, name).await,
+            Api::TopRepositories => top_repositories(State(cache.clone()), visitor, name).await,
+            Api::LastPush => last_push(State(cache.clone()), visitor, name).await,
+            Api::CreatedPerYear => created_per_year(State(cache.clone()), visitor, name).await,
         };
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let status = response.status();
@@ -717,7 +949,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_table_and_the_stat_cards_read_the_repositories_once() {
+    async fn the_table_the_stat_cards_and_the_charts_read_the_repositories_once() {
         let stub = github();
         let cache = cache(&stub, 30, 1000).await;
         assert_eq!(ask(&cache, Api::Stats, "acme").await.0, StatusCode::OK);
@@ -726,6 +958,9 @@ mod tests {
             (status, body["repositories"].as_array().unwrap().len()),
             (StatusCode::OK, 5)
         );
+        for api in LISTED {
+            assert_eq!(ask(&cache, api, "Acme").await.0, StatusCode::OK, "{api:?}");
+        }
         assert_eq!(
             stub.urls(),
             [
@@ -780,6 +1015,298 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_languages_chart_counts_the_repositories_of_each_language() {
+        let stub = github();
+        let all = cache(&stub, 30, 1000).await;
+        assert_eq!(
+            ask(&all, Api::Languages, "acme").await,
+            (
+                StatusCode::OK,
+                json!({
+                    // Those without a primary language are not counted.
+                    "languages": [
+                        {"name": "Rust", "repositories": 2},
+                        {"name": "TypeScript", "repositories": 1},
+                    ],
+                    "other": 0,
+                })
+            )
+        );
+
+        // Past the limit, only the repositories pushed to last count (FR-ORG-08).
+        let limited = cache(&stub, 30, 2).await;
+        assert_eq!(
+            ask(&limited, Api::Languages, "big").await,
+            (
+                StatusCode::OK,
+                json!({
+                    "languages": [
+                        {"name": "C", "repositories": 1},
+                        {"name": "Go", "repositories": 1},
+                    ],
+                    "other": 0,
+                })
+            )
+        );
+    }
+
+    #[test]
+    fn languages_past_the_8_of_the_most_repositories_are_other() {
+        let languages = [
+            "Rust", "Rust", "Rust", "Go", "Go", "J", "I", "H", "G", "F", "E", "D", "C",
+        ];
+        let list = List {
+            items: languages
+                .iter()
+                .map(|language| json!({"name": "r", "language": language}))
+                .chain([
+                    json!({"name": "s", "language": null}),
+                    json!({"name": "t", "language": ""}),
+                    json!({"name": "u", "language": 7}),
+                    json!({"name": "v"}),
+                    json!("Rust"),
+                ])
+                .collect(),
+            truncated: false,
+        };
+        assert_eq!(
+            language_chart(&list),
+            json!({
+                // Of those with as many, the first by name.
+                "languages": [
+                    {"name": "Rust", "repositories": 3},
+                    {"name": "Go", "repositories": 2},
+                    {"name": "C", "repositories": 1},
+                    {"name": "D", "repositories": 1},
+                    {"name": "E", "repositories": 1},
+                    {"name": "F", "repositories": 1},
+                    {"name": "G", "repositories": 1},
+                    {"name": "H", "repositories": 1},
+                ],
+                // I and J.
+                "other": 2,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn the_top_repositories_are_those_with_the_most_stars() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        assert_eq!(
+            ask(&cache, Api::TopRepositories, "acme").await,
+            (
+                StatusCode::OK,
+                json!({
+                    // Not `odd`, of which GitHub does not tell the stars.
+                    "repositories": [
+                        {"name": "widget", "stars": 1200},
+                        {"name": "gadget", "stars": 300},
+                        {"name": "sprocket", "stars": 45},
+                        {"name": "docs", "stars": 5},
+                    ],
+                })
+            )
+        );
+    }
+
+    #[test]
+    fn the_top_repositories_are_10_with_stars() {
+        let repository = |name: &str, stars: u64| json!({"name": name, "stargazers_count": stars});
+        let mut items: Vec<Value> = (1..=11)
+            .map(|stars| repository(&format!("r{stars:02}"), stars))
+            .collect();
+        items.extend([
+            repository("a-tie", 11),
+            repository("unstarred", 0),
+            repository("a b", 100),
+            json!({"name": "unknown"}),
+            json!({"stargazers_count": 100}),
+        ]);
+        let chart = top(&List {
+            items,
+            truncated: false,
+        });
+        let names: Vec<(&str, u64)> = chart["repositories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["name"].as_str().unwrap(),
+                    row["stars"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            names,
+            [
+                // Of those with as many, the first by name.
+                ("a-tie", 11),
+                ("r11", 11),
+                ("r10", 10),
+                ("r09", 9),
+                ("r08", 8),
+                ("r07", 7),
+                ("r06", 6),
+                ("r05", 5),
+                ("r04", 4),
+                ("r03", 3),
+            ]
+        );
+
+        let unstarred = List {
+            items: vec![repository("unstarred", 0)],
+            truncated: false,
+        };
+        assert_eq!(top(&unstarred), json!({"repositories": []}));
+    }
+
+    #[test]
+    fn each_repository_counts_in_the_period_of_its_last_push() {
+        let now: DateTimeUtc = "2026-10-26T12:00:00Z".parse().unwrap();
+        let pushed = |ago: TimeDelta| json!({"pushed_at": (now - ago).to_rfc3339_opts(SecondsFormat::Secs, true)});
+        let list = List {
+            items: vec![
+                // As by a clock ahead of BuhTig's.
+                pushed(TimeDelta::hours(-1)),
+                pushed(TimeDelta::zero()),
+                pushed(TimeDelta::days(7) - TimeDelta::seconds(1)),
+                pushed(TimeDelta::days(7)),
+                pushed(TimeDelta::days(30) - TimeDelta::seconds(1)),
+                pushed(TimeDelta::days(30)),
+                pushed(TimeDelta::days(365) - TimeDelta::seconds(1)),
+                pushed(TimeDelta::days(365)),
+                pushed(TimeDelta::days(10 * 365)),
+                // GitHub does not tell when these were pushed to.
+                json!({"pushed_at": null}),
+                json!({"pushed_at": "yesterday"}),
+                json!({"pushed_at": 7}),
+                json!({}),
+                json!("2026-10-26T12:00:00Z"),
+            ],
+            truncated: false,
+        };
+        assert_eq!(
+            pushes(&list, now),
+            json!({
+                "last_7_days": 3,
+                "last_30_days": 2,
+                "last_12_months": 2,
+                "older": 2,
+            })
+        );
+    }
+
+    #[test]
+    fn repositories_are_counted_by_the_year_they_were_created_in() {
+        let now: DateTimeUtc = "2026-10-26T12:00:00Z".parse().unwrap();
+        let created = |at: &str| json!({"created_at": at});
+        let list = List {
+            items: vec![
+                created("2019-05-01T10:00:00Z"),
+                created("2019-12-31T23:59:59Z"),
+                // 2021 in UTC.
+                created("2020-12-31T23:30:00-05:00"),
+                created("2023-06-01T10:00:00Z"),
+                json!({"created_at": null}),
+                json!({"created_at": "last year"}),
+                json!({}),
+            ],
+            truncated: false,
+        };
+        let year =
+            |year: i32, repositories: u64| json!({"year": year, "repositories": repositories});
+        assert_eq!(
+            years(&list, now),
+            json!({
+                // Every year to this one, with or without any.
+                "years": [
+                    year(2019, 2),
+                    year(2020, 0),
+                    year(2021, 1),
+                    year(2022, 0),
+                    year(2023, 1),
+                    year(2024, 0),
+                    year(2025, 0),
+                    year(2026, 0),
+                ],
+            })
+        );
+
+        // As by a clock ahead of BuhTig's.
+        let ahead = List {
+            items: vec![
+                created("2025-01-01T00:00:00Z"),
+                created("2027-01-01T00:00:00Z"),
+            ],
+            truncated: false,
+        };
+        assert_eq!(
+            years(&ahead, now),
+            json!({"years": [year(2025, 1), year(2026, 0), year(2027, 1)]})
+        );
+
+        let undated = List {
+            items: vec![json!({"name": "widget"})],
+            truncated: false,
+        };
+        assert_eq!(years(&undated, now), json!({"years": []}));
+    }
+
+    #[tokio::test]
+    async fn the_activity_charts_count_the_repositories_that_github_dates() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        // Of Acme's repositories, GitHub tells only when `widget` was pushed to, in 2026, and
+        // created, in 2015.
+        let (status, pushes) = ask(&cache, Api::LastPush, "acme").await;
+        assert_eq!(status, StatusCode::OK);
+        let periods = ["last_7_days", "last_30_days", "last_12_months", "older"];
+        assert_eq!(pushes.as_object().unwrap().len(), periods.len());
+        let counted: u64 = periods
+            .iter()
+            .map(|period| pushes[period].as_u64().unwrap())
+            .sum();
+        assert_eq!(counted, 1);
+
+        let (status, created) = ask(&cache, Api::CreatedPerYear, "acme").await;
+        assert_eq!(status, StatusCode::OK);
+        let years = created["years"].as_array().unwrap();
+        assert_eq!(years[0], json!({"year": 2015, "repositories": 1}));
+        assert_eq!(
+            years.last().unwrap()["year"],
+            json!(ChronoUtc::now().year())
+        );
+        assert_eq!(
+            years.len(),
+            usize::try_from(ChronoUtc::now().year() - 2014).unwrap()
+        );
+        assert!(years[1..].iter().all(|year| year["repositories"] == 0));
+    }
+
+    #[tokio::test]
+    async fn an_organization_without_repositories_has_nothing_to_chart() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        for (api, expected) in [
+            (Api::Languages, json!({"languages": [], "other": 0})),
+            (Api::TopRepositories, json!({"repositories": []})),
+            (
+                Api::LastPush,
+                json!({"last_7_days": 0, "last_30_days": 0, "last_12_months": 0, "older": 0}),
+            ),
+            (Api::CreatedPerYear, json!({"years": []})),
+        ] {
+            assert_eq!(
+                ask(&cache, api, "bare").await,
+                (StatusCode::OK, expected),
+                "{api:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn what_github_cannot_tell_is_not_an_answer() {
         let stub = github();
         let cache = cache(&stub, 30, 1000).await;
@@ -793,7 +1320,7 @@ mod tests {
                 StatusCode::BAD_GATEWAY
             );
         }
-        for api in [Api::Stats, Api::Repositories] {
+        for api in LISTED {
             assert_eq!(
                 ask(&cache, api, "unlisted").await.0,
                 StatusCode::BAD_GATEWAY

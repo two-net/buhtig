@@ -1,0 +1,4 @@
+/* The widget within is the grid's item (UI-05). */
+:host {
+  display: contents;
+}

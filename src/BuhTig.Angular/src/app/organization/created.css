@@ -1,0 +1,43 @@
+/* The widget within is the grid's item (UI-05). */
+:host {
+  display: contents;
+}
+
+.caption {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+svg {
+  display: block;
+  width: 100%;
+  height: 8rem;
+}
+
+.baseline {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.bar {
+  fill: var(--accent);
+}
+
+/* Apart from the others by its shade, and by the caption, which tells its year. */
+.bar.pointed {
+  fill: var(--text);
+}
+
+.column {
+  fill: transparent;
+}
+
+/* The first year under the chart's start, and the last under its end. */
+.years {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}

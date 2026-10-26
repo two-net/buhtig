@@ -1,0 +1,21 @@
+<ol>
+  @for (bar of bars(); track $index) {
+    <li>
+      @if (bar.path; as path) {
+        <a class="label" [routerLink]="path">{{ bar.label }}</a>
+      } @else {
+        <span class="label">{{ bar.label }}</span>
+      }
+      <span class="value">
+        <app-compact-number [value]="bar.value" />
+        {{ unit()(bar.value) }}
+      </span>
+      <!-- The figure beside it says all that the bar shows. -->
+      <span class="track" aria-hidden="true">
+        @if (bar.value > 0) {
+          <span class="bar" [style.width.%]="lengths()[$index]"></span>
+        }
+      </span>
+    </li>
+  }
+</ol>
