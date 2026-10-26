@@ -26,9 +26,10 @@
       [organization]="summary()?.organization"
       [fetchedAt]="summary()?.fetchedAt"
     />
-    <!-- Laid out as a repository's. Its other widgets are still to come (#19 to #21). -->
+    <!-- Laid out as a repository's. Its charts are still to come (#20, #21). -->
     <div class="grid">
       <app-organization-stats [org]="organization.org" />
+      <app-organization-repositories [org]="organization.org" />
     </div>
   }
 </main>

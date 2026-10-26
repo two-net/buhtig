@@ -4,6 +4,7 @@ import { Router, RouterLink } from '@angular/router';
 import { map, switchMap } from 'rxjs';
 import { Account } from '../account/account';
 import { OrganizationHeader } from '../organization/header';
+import { OrganizationRepositories } from '../organization/repositories';
 import { OrganizationStats } from '../organization/stats';
 import { RepositoryActivity } from '../repository/activity';
 import { RepositoryCommits } from '../repository/commits';
@@ -26,8 +27,8 @@ import { Resources, Summary } from './resources';
  * (FR-REPO-02), before its commit activity (FR-REPO-03), languages (FR-REPO-04), top
  * contributors (FR-REPO-05), issues and pull requests (FR-REPO-06), recent commits (FR-REPO-07)
  * and releases (FR-REPO-08). An organization's head shows what the server says of it
- * (FR-ORG-01), and its stat cards lead the grid (FR-ORG-02). Its other widgets are still to come
- * (#19 to #21).
+ * (FR-ORG-01), and its stat cards lead the grid (FR-ORG-02), before its repository table
+ * (FR-ORG-03). Its charts are still to come (#20, #21).
  *
  * Once it knows how GitHub spells the names, it moves there, in place of the URL it was opened
  * at (FR-NAV-04, FR-NAV-05).
@@ -37,6 +38,7 @@ import { Resources, Summary } from './resources';
   imports: [
     Account,
     OrganizationHeader,
+    OrganizationRepositories,
     OrganizationStats,
     RepositoryActivity,
     RepositoryCommits,

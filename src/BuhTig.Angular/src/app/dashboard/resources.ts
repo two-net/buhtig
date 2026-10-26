@@ -79,6 +79,26 @@ export interface OrganizationStats {
   truncated: boolean;
 }
 
+/** One of an organization's repositories, as its repository table lists it (FR-ORG-03). */
+export interface ListedRepository {
+  /** Its name, without the organization's, as GitHub spells it. */
+  name: string;
+  /** The path of its dashboard. */
+  path: string;
+  description: string | undefined;
+  /** Its primary language, if it has one. */
+  language: string | undefined;
+  stars: number;
+  forks: number;
+  /** Issues and pull requests together, as GitHub counts them. */
+  openIssuesAndPullRequests: number;
+  pushedAt: Date | undefined;
+  fork: boolean;
+  archived: boolean;
+  /** Only a token user sees private and internal ones (FR-ORG-09). */
+  visibility: 'public' | 'private' | 'internal';
+}
+
 /** What a repository's stat cards show (FR-REPO-02). */
 export interface Stats {
   stars: number;
@@ -243,6 +263,22 @@ interface OrganizationStatsAnswer {
   truncated: boolean;
 }
 
+/** The server's answer about an organization, for its repository table. */
+interface OrganizationRepositoriesAnswer {
+  repositories: {
+    name: string;
+    description: string | null;
+    language: string | null;
+    stars: number;
+    forks: number;
+    open_issues_and_pull_requests: number;
+    pushed_at: string | null;
+    fork: boolean;
+    archived: boolean;
+    visibility: string;
+  }[];
+}
+
 /** The server's answer about a repository, for its stat cards. */
 interface StatsAnswer {
   stars: number;
@@ -385,6 +421,43 @@ export class Resources {
         truncated: stats.truncated === true,
       })),
     );
+  }
+
+  /**
+   * The repositories of the organization `org` that its repository table lists, pushed to most
+   * recently first, which fail as `organizationStats` does. Any that the server gives a name no
+   * repository can have is left out.
+   */
+  organizationRepositories(org: string): Observable<ListedRepository[]> {
+    return this.http
+      .get<OrganizationRepositoriesAnswer>(`${organizationUrl(org)}/repositories`)
+      .pipe(
+        map(({ repositories }) =>
+          repositories.flatMap((repository): ListedRepository[] => {
+            const path = canonicalPath(`${org}/${repository.name}`, 'repository');
+            if (path === undefined) {
+              return [];
+            }
+            const visibility = repository.visibility;
+            return [
+              {
+                name: repository.name,
+                path,
+                description: repository.description || undefined,
+                language: repository.language || undefined,
+                stars: repository.stars,
+                forks: repository.forks,
+                openIssuesAndPullRequests: repository.open_issues_and_pull_requests,
+                pushedAt: date(repository.pushed_at),
+                fork: repository.fork === true,
+                archived: repository.archived === true,
+                visibility:
+                  visibility === 'private' || visibility === 'internal' ? visibility : 'public',
+              },
+            ];
+          }),
+        ),
+      );
   }
 
   /**

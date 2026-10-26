@@ -385,15 +385,17 @@ describe('Dashboard', () => {
     expect(page().querySelector('app-repository-header')).toBeNull();
   });
 
-  it("loads an organization's stat cards, not a repository's widgets (FR-ORG-02)", async () => {
+  it("loads an organization's widgets, not a repository's (FR-ORG-02, FR-ORG-03)", async () => {
     await harness.navigateByUrl('/acme');
     const widgets = [...page().querySelectorAll('.grid > * > app-widget')];
     expect(widgets.map((widget) => widget.parentElement!.tagName.toLowerCase())).toEqual([
       'app-organization-stats',
+      'app-organization-repositories',
     ]);
-    expect(widgets[0].classList.contains('wide')).toBe(true);
+    expect(widgets.map((widget) => widget.classList.contains('wide'))).toEqual([true, true]);
     expect(http.match(isWidget).map((request) => request.request.url)).toEqual([
       '/-/api/organizations/acme/stats',
+      '/-/api/organizations/acme/repositories',
     ]);
     http.expectOne('/-/api/organizations/acme').flush({ name: 'acme' });
   });

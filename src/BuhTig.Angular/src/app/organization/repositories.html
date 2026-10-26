@@ -1,0 +1,128 @@
+<app-widget heading="Repositories" empty="No repositories yet." [wide]="true">
+  <ng-template [appLoaded]="repositories">
+    <!-- Labels apart from their controls, so that no option becomes part of a control's name. -->
+    <div class="filters">
+      <div class="field search">
+        <label class="visually-hidden" [for]="id + '-name'">Find a repository</label>
+        <input
+          #nameBox
+          type="search"
+          placeholder="Find a repository…"
+          autocomplete="off"
+          [id]="id + '-name'"
+          [value]="filter().name"
+          (input)="filterByName(nameBox.value)"
+        />
+      </div>
+      <div class="field">
+        <label [for]="id + '-type'">Type</label>
+        <select #typeBox [id]="id + '-type'" (change)="filterByType(typeBox.value)">
+          <option value="all" [selected]="filter().type === 'all'">All</option>
+          <option value="sources" [selected]="filter().type === 'sources'">Sources</option>
+          <option value="forks" [selected]="filter().type === 'forks'">Forks</option>
+          <option value="archived" [selected]="filter().type === 'archived'">Archived</option>
+        </select>
+      </div>
+      <div class="field">
+        <label [for]="id + '-language'">Language</label>
+        <select #languageBox [id]="id + '-language'" (change)="filterByLanguage(languageBox.value)">
+          <option value="" [selected]="filter().language === undefined">All</option>
+          @for (option of languages(); track option) {
+            <option [value]="option" [selected]="filter().language === option">
+              {{ option }}
+            </option>
+          }
+        </select>
+      </div>
+    </div>
+    @if (page().repositories.length > 0) {
+      <!-- Scrolled on its own on narrow screens, so that the page is not (UI-05). -->
+      <div class="scroll" role="region" aria-label="Repositories" tabindex="0">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Language</th>
+              <th scope="col" class="figure" [attr.aria-sort]="order('stars')">
+                <button type="button" (click)="sortBy('stars')">
+                  Stars<span class="arrow" aria-hidden="true"></span>
+                </button>
+              </th>
+              <th scope="col" class="figure" [attr.aria-sort]="order('forks')">
+                <button type="button" (click)="sortBy('forks')">
+                  Forks<span class="arrow" aria-hidden="true"></span>
+                </button>
+              </th>
+              <th scope="col" class="figure issues" [attr.aria-sort]="order('issues')">
+                <button type="button" (click)="sortBy('issues')">
+                  Open issues &amp; pull requests<span class="arrow" aria-hidden="true"></span>
+                </button>
+              </th>
+              <th scope="col" [attr.aria-sort]="order('pushed')">
+                <button type="button" (click)="sortBy('pushed')">
+                  Last push<span class="arrow" aria-hidden="true"></span>
+                </button>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (repository of page().repositories; track repository.name) {
+              <tr (click)="open($event, repository)">
+                <td class="name">
+                  <a [routerLink]="repository.path">{{ repository.name }}</a>
+                  <!-- In words, so that color is not all that tells them (NFR-UX-05). -->
+                  @switch (repository.visibility) {
+                    @case ('private') {
+                      <span class="badge">Private</span>
+                    }
+                    @case ('internal') {
+                      <span class="badge">Internal</span>
+                    }
+                  }
+                  @if (repository.fork) {
+                    <span class="badge">Fork</span>
+                  }
+                  @if (repository.archived) {
+                    <span class="badge">Archived</span>
+                  }
+                  @if (repository.description; as description) {
+                    <p class="description">{{ description }}</p>
+                  }
+                </td>
+                <td>{{ repository.language }}</td>
+                <td class="figure"><app-compact-number [value]="repository.stars" /></td>
+                <td class="figure"><app-compact-number [value]="repository.forks" /></td>
+                <td class="figure">
+                  <app-compact-number [value]="repository.openIssuesAndPullRequests" />
+                </td>
+                <td class="pushed">
+                  @if (repository.pushedAt; as pushedAt) {
+                    <app-relative-time [value]="pushedAt" />
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+    <div class="footer">
+      <p class="status" role="status">{{ status() }}</p>
+      @if (page().count > 1) {
+        <!-- Not disabled at either end, so that the button keeps the focus there. -->
+        <div class="pages">
+          <button type="button" [attr.aria-disabled]="page().index === 0" (click)="previous()">
+            Previous
+          </button>
+          <button
+            type="button"
+            [attr.aria-disabled]="page().index === page().count - 1"
+            (click)="next()"
+          >
+            Next
+          </button>
+        </div>
+      }
+    </div>
+  </ng-template>
+</app-widget>

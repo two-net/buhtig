@@ -1,0 +1,199 @@
+/* The widget within is the grid's item, so that it spans the grid (UI-05). */
+:host {
+  display: contents;
+}
+
+/* The search box first, as wide as there is room for, then the type and the language. */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.field {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.field.search {
+  flex: 1 1 14rem;
+}
+
+label {
+  color: var(--muted);
+}
+
+input,
+select {
+  min-width: 0;
+  padding: calc(0.375rem - 1px) calc(0.75rem - 1px);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background: var(--background);
+  color: var(--text);
+  font: inherit;
+}
+
+input {
+  flex: 1;
+}
+
+input::placeholder {
+  color: var(--muted);
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 0.5rem 0.625rem;
+  border-bottom: 1px solid var(--raised);
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  vertical-align: bottom;
+}
+
+/* Figures line up on the right, as their digits do. */
+.figure {
+  text-align: right;
+}
+
+td.figure,
+td.pushed {
+  white-space: nowrap;
+}
+
+/* Wide enough that its long header wraps onto two lines at most, where the table is narrow. */
+th.issues {
+  min-width: 6.5rem;
+}
+
+/* A header that sorts by its column, which looks like the other headers. */
+th button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+th button:hover,
+th[aria-sort='ascending'],
+th[aria-sort='descending'] {
+  color: var(--text);
+}
+
+/* The order in a shape, so that color is not all that tells it (NFR-UX-05). */
+th[aria-sort='descending'] .arrow::after {
+  content: ' ↓';
+}
+
+th[aria-sort='ascending'] .arrow::after {
+  content: ' ↑';
+}
+
+/* The whole row opens the repository's dashboard, as its name's link does. */
+tbody tr {
+  cursor: pointer;
+}
+
+tbody tr:hover {
+  background: var(--raised);
+}
+
+.name {
+  min-width: 12rem;
+}
+
+.name a {
+  margin-right: 0.25rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.name a:hover {
+  text-decoration: underline;
+}
+
+.badge {
+  display: inline-block;
+  margin-right: 0.25rem;
+  padding: 0 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+/* Two lines at most, so that a long one does not make its row tower over the others. */
+.description {
+  display: -webkit-box;
+  margin: 0.125rem 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.75rem;
+}
+
+.status {
+  margin: 0;
+  color: var(--muted);
+}
+
+.pages {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* Shaped as the widget's "Try again": plain, beside no primary action of their own (UI-01). */
+.pages button {
+  padding: calc(0.375rem - 1px) calc(1rem - 1px);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pages button:hover {
+  background: var(--raised);
+}
+
+.pages button[aria-disabled='true'] {
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+}

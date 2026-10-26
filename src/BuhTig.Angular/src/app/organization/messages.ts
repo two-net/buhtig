@@ -27,3 +27,19 @@ export function limited(count: number): string {
     `These figures cover the ${repositories} pushed to most recently.`
   );
 }
+
+/** FR-ORG-03: how many repositories the repository table lists, such as "312 repositories". */
+export function repositoryCount(count: number): string {
+  return `${exactNumber(count)} ${count === 1 ? 'repository' : 'repositories'}`;
+}
+
+/**
+ * FR-ORG-03: which of the `count` repositories that the repository table lists a page shows,
+ * such as "26–50 of 312 repositories".
+ */
+export function pageRange(first: number, last: number, count: number): string {
+  return `${exactNumber(first)}–${exactNumber(last)} of ${repositoryCount(count)}`;
+}
+
+/** FR-ORG-03: filters that no repository passes. */
+export const NO_MATCH = 'No repositories match. Try another name, type or language.';

@@ -1,8 +1,9 @@
 //! What an organization's dashboard shows of the organization as a whole: its header
-//! (FR-ORG-01), with its name as GitHub spells it (FR-NAV-04), and its stat cards
-//! (FR-ORG-02). The figures are over the repositories that the viewer may see, private and
-//! internal ones too for a token user (FR-ORG-09), and at most `limits.org_repositories` of
-//! them, those pushed to most recently (FR-ORG-08).
+//! (FR-ORG-01), with its name as GitHub spells it (FR-NAV-04), its stat cards (FR-ORG-02)
+//! and its repository table (FR-ORG-03). The figures and the table are over the
+//! repositories that the viewer may see, private and internal ones too for a token user
+//! (FR-ORG-09), and at most `limits.org_repositories` of them, those pushed to most
+//! recently (FR-ORG-08).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use url::Url;
 use crate::accounts::is_account_name;
 use crate::cache::{Cache, Cached, Viewer};
 use crate::github::{self, List};
-use crate::repositories::{data, link, respond, status, text, visibility};
+use crate::repositories::{data, is_repository_name, link, respond, status, text, visibility};
 use crate::visitors::Visitor;
 
 /// What is kept of each of an organization's repositories: what its dashboard shows of them
@@ -107,15 +108,51 @@ pub async fn stats(
     visitor: Visitor,
     Path(org): Path<String>,
 ) -> Response {
+    match listed(&cache, visitor, &org).await {
+        Ok(list) => respond(figures(&list)),
+        Err(code) => status(code),
+    }
+}
+
+/// `/-/api/organizations/{org}/repositories`: what the dashboard's repository table lists
+/// (FR-ORG-03),
+///
+/// ```json
+/// {"repositories": [{"name": "widget", "description": …, "language": "Rust" | null,
+///   "stars": …, "forks": …, "open_issues_and_pull_requests": …, "pushed_at": …,
+///   "fork": false, "archived": false, "visibility": "public"}]}
+/// ```
+///
+/// The repositories are those that [`stats`] figures over, in the order GitHub gives them,
+/// pushed to most recently first. The dashboard sorts, filters and pages them itself. Each
+/// `name` is the repository's alone, without the organization's, and `visibility` is
+/// `public`, `private` or `internal` (FR-ORG-09). What GitHub does not say is `null`, or 0
+/// for a figure, and an item without a repository's name is left out.
+///
+/// Its statuses are those of [`stats`].
+pub async fn repositories(
+    State(cache): State<Arc<Cache>>,
+    visitor: Visitor,
+    Path(org): Path<String>,
+) -> Response {
+    match listed(&cache, visitor, &org).await {
+        Ok(list) => {
+            let rows: Vec<Value> = list.items.iter().filter_map(row).collect();
+            respond(json!({ "repositories": rows }))
+        }
+        Err(code) => status(code),
+    }
+}
+
+/// The repositories of the organization `org` that the viewer may see, as many as BuhTig
+/// reads, those pushed to most recently first, or the status that says why there are none:
+/// those of [`summary`], since it reads the organization first, or 502 if the repositories
+/// cannot be read.
+async fn listed(cache: &Cache, visitor: Visitor, org: &str) -> Result<List, StatusCode> {
     // As in `summary`.
     let viewer = Viewer::Visitor(visitor);
-    let organization = match organization(&cache, &viewer, &org).await {
-        Ok(cached) => cached.data,
-        Err(code) => return status(code),
-    };
-    let Some(login) = login(&organization) else {
-        return status(StatusCode::BAD_GATEWAY);
-    };
+    let organization = organization(cache, &viewer, org).await?.data;
+    let login = login(&organization).ok_or(StatusCode::BAD_GATEWAY)?;
     // By the name GitHub gave, so that the list is cached once whatever case the dashboard
     // was opened in. GitHub lists them all, private and internal ones too, that the
     // credential may see.
@@ -131,10 +168,7 @@ pub async fn stats(
             &REPOSITORY_FIELDS,
         )
         .await;
-    match data(list) {
-        Ok(list) => respond(figures(&list.data)),
-        Err(code) => status(code),
-    }
+    data(list).map(|list| list.data)
 }
 
 /// The organization `org`, as the cache has it for the viewer, or the status that says why
@@ -200,6 +234,25 @@ fn top_language<'a>(repositories: &[&'a Value]) -> Option<&'a str> {
             count.cmp(other_count).then(other_name.cmp(name))
         })
         .map(|(name, _)| name)
+}
+
+/// A repository as the repository table lists it, unless it has no repository's name.
+fn row(repository: &Value) -> Option<Value> {
+    let name = text(repository, "name").filter(|name| is_repository_name(name))?;
+    let figure = |key| repository.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let flag = |key| repository.get(key) == Some(&Value::Bool(true));
+    Some(json!({
+        "name": name,
+        "description": text(repository, "description"),
+        "language": text(repository, "language"),
+        "stars": figure("stargazers_count"),
+        "forks": figure("forks_count"),
+        "open_issues_and_pull_requests": figure("open_issues_count"),
+        "pushed_at": text(repository, "pushed_at"),
+        "fork": flag("fork"),
+        "archived": flag("archived"),
+        "visibility": visibility(repository),
+    }))
 }
 
 /// The website that GitHub gives, as a URL to link to: as it is, if it is an `http` or
@@ -360,7 +413,11 @@ mod tests {
     enum Api {
         Summary,
         Stats,
+        Repositories,
     }
+
+    /// Every part of a dashboard that is read under its organization.
+    const APIS: [Api; 3] = [Api::Summary, Api::Stats, Api::Repositories];
 
     /// The status and body of a visitor's request to `api` for `org`, as JSON, `null` if
     /// there is none, and without the time of fetching, since it is the time the test ran.
@@ -370,6 +427,7 @@ mod tests {
         let response = match api {
             Api::Summary => summary(State(cache.clone()), visitor, name).await,
             Api::Stats => stats(State(cache.clone()), visitor, name).await,
+            Api::Repositories => repositories(State(cache.clone()), visitor, name).await,
         };
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let status = response.status();
@@ -615,10 +673,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_table_lists_each_repository() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        let expected = |name: &str, language: Option<&str>, figures: [u64; 3]| {
+            json!({
+                "name": name,
+                "description": null,
+                "language": language,
+                "stars": figures[0],
+                "forks": figures[1],
+                "open_issues_and_pull_requests": figures[2],
+                "pushed_at": null,
+                "fork": false,
+                "archived": false,
+                "visibility": "public",
+            })
+        };
+        let mut widget = expected("widget", Some("Rust"), [1200, 30, 12]);
+        widget["description"] = json!("Widgets");
+        widget["pushed_at"] = json!("2026-10-20T08:00:00Z");
+        let mut gadget = expected("gadget", Some("TypeScript"), [300, 12, 5]);
+        gadget["fork"] = json!(true);
+        let mut sprocket = expected("sprocket", Some("Rust"), [45, 3, 0]);
+        sprocket["archived"] = json!(true);
+        assert_eq!(
+            ask(&cache, Api::Repositories, "acme").await,
+            (
+                StatusCode::OK,
+                json!({
+                    // In the order GitHub gives them, pushed to most recently first.
+                    "repositories": [
+                        widget,
+                        gadget,
+                        sprocket,
+                        expected("docs", None, [5, 1, 2]),
+                        // What GitHub does not say is 0, as the stat cards count it.
+                        expected("odd", None, [0, 0, 0]),
+                    ],
+                })
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn the_table_and_the_stat_cards_read_the_repositories_once() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        assert_eq!(ask(&cache, Api::Stats, "acme").await.0, StatusCode::OK);
+        let (status, body) = ask(&cache, Api::Repositories, "Acme").await;
+        assert_eq!(
+            (status, body["repositories"].as_array().unwrap().len()),
+            (StatusCode::OK, 5)
+        );
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://api.github.com/orgs/acme",
+                "https://api.github.com/orgs/Acme/repos?sort=pushed&per_page=100",
+                "https://api.github.com/orgs/Acme",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_table_lists_only_the_repositories_pushed_to_last_past_the_limit() {
+        let stub = github();
+        let cache = cache(&stub, 30, 2).await;
+        let (status, body) = ask(&cache, Api::Repositories, "big").await;
+        let names: Vec<&str> = body["repositories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["name"].as_str().unwrap())
+            .collect();
+        assert_eq!((status, names), (StatusCode::OK, vec!["new", "newer"]));
+    }
+
+    #[test]
+    fn rows_mark_private_and_internal_repositories_and_need_a_name() {
+        let visibility = |repository: Value| row(&repository).unwrap()["visibility"].clone();
+        assert_eq!(
+            visibility(json!({"name": "a", "private": false, "visibility": "public"})),
+            "public"
+        );
+        assert_eq!(
+            visibility(json!({"name": "b", "private": true, "visibility": "private"})),
+            "private"
+        );
+        assert_eq!(visibility(json!({"name": "c", "private": true})), "private");
+        assert_eq!(
+            visibility(json!({"name": "d", "private": true, "visibility": "internal"})),
+            "internal"
+        );
+        for repository in [
+            json!({}),
+            json!({"name": ""}),
+            json!({"name": ".."}),
+            json!({"name": "a b"}),
+            json!({"name": "acme/widget"}),
+            json!({"name": 7}),
+            json!("widget"),
+        ] {
+            assert_eq!(row(&repository), None, "{repository}");
+        }
+    }
+
+    #[tokio::test]
     async fn what_github_cannot_tell_is_not_an_answer() {
         let stub = github();
         let cache = cache(&stub, 30, 1000).await;
-        for api in [Api::Summary, Api::Stats] {
+        for api in APIS {
             // A user's account is no organization (FR-SRCH-06).
             assert_eq!(ask(&cache, api, "octocat").await.0, StatusCode::NOT_FOUND);
             assert_eq!(ask(&cache, api, "nobody").await.0, StatusCode::NOT_FOUND);
@@ -628,17 +793,19 @@ mod tests {
                 StatusCode::BAD_GATEWAY
             );
         }
-        assert_eq!(
-            ask(&cache, Api::Stats, "unlisted").await.0,
-            StatusCode::BAD_GATEWAY
-        );
+        for api in [Api::Stats, Api::Repositories] {
+            assert_eq!(
+                ask(&cache, api, "unlisted").await.0,
+                StatusCode::BAD_GATEWAY
+            );
+        }
     }
 
     #[tokio::test]
     async fn names_that_cannot_be_accounts_are_not_asked_for() {
         let stub = github();
         let cache = cache(&stub, 30, 1000).await;
-        for api in [Api::Summary, Api::Stats] {
+        for api in APIS {
             for org in ["", "-acme", "acme.com", "ac me", &"a".repeat(40)] {
                 assert_eq!(
                     ask(&cache, api, org).await.0,
@@ -654,7 +821,7 @@ mod tests {
     async fn visitors_held_back_are_told_so() {
         let stub = github();
         let cache = cache(&stub, 0, 1000).await;
-        for api in [Api::Summary, Api::Stats] {
+        for api in APIS {
             assert_eq!(
                 ask(&cache, api, "acme").await.0,
                 StatusCode::TOO_MANY_REQUESTS

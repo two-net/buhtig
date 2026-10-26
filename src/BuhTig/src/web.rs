@@ -67,6 +67,10 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>, previews: Option<Previews>
             get(organizations::stats).with_state(cache.clone()),
         )
         .route(
+            "/-/api/organizations/{org}/repositories",
+            get(organizations::repositories).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}",
             get(repositories::summary).with_state(cache.clone()),
         )
