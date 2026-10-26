@@ -71,7 +71,10 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   the contributors of its very largest repositories, and their dashboards say so.
 - **Organizations:** an organization's dashboard reads up to `limits.org_repositories` of
   its repositories, those pushed to most recently, 100 per request to GitHub. A larger
-  organization's figures cover only those, and its dashboard says so.
+  organization's figures cover only those, and its dashboard says so. Its members widget
+  shows only members who make their membership public. GitHub doesn't report how many
+  there are, so for an organization with more than 24, BuhTig makes one more request to
+  count them.
 - **Cache:** BuhTig keeps the GitHub data it shows in the database, and serves it for
   `cache.ttl` before it asks GitHub again. While GitHub is unreachable or rate-limited,
   dashboards show the latest data they have, with its age. Data fetched with a user's

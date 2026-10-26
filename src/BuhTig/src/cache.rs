@@ -181,18 +181,22 @@ enum Fetch<'a> {
         /// The members kept of each item, or all of them if there are none.
         fields: &'a [&'a str],
     },
+    /// How many items a list has, such as an organization's members.
+    Count(&'a Path),
 }
 
 impl Fetch<'_> {
     /// The `resource_key` of its cache entries, such as `/repos/owner/repo/languages`,
-    /// `/repos/owner/repo/releases/latest optional` for a resource that may not exist, or
+    /// `/repos/owner/repo/releases/latest optional` for a resource that may not exist,
     /// `/orgs/org/repos?sort=pushed limit=1000` for a list, with ` fields=name,language`
-    /// after it if only those members of each item are kept. A path has no spaces, since
-    /// they are percent-encoded, so the kinds of key cannot meet.
+    /// after it if only those members of each item are kept, or
+    /// `/orgs/org/public_members count` for how many items a list has. A path has no
+    /// spaces, since they are percent-encoded, so the kinds of key cannot meet.
     fn key(&self) -> String {
         match self {
             Fetch::One(path) => path.to_string(),
             Fetch::Optional(path) => format!("{path} optional"),
+            Fetch::Count(path) => format!("{path} count"),
             Fetch::List {
                 path,
                 limit,
@@ -215,6 +219,7 @@ impl Fetch<'_> {
                 data.get("items").is_some_and(Value::is_array)
                     && data.get("truncated").is_some_and(Value::is_boolean)
             }
+            Fetch::Count(_) => data.get("count").is_some_and(Value::is_u64),
         }
     }
 
@@ -238,6 +243,11 @@ impl Fetch<'_> {
                 .get_list(credential, path, *limit, etag)
                 .await?
                 .map(list_value)),
+            // Never conditional, so it has no use for `etag`.
+            Fetch::Count(path) => Ok(github
+                .count(credential, path)
+                .await?
+                .map(|count| serde_json::json!({ "count": count }))),
         }
     }
 
@@ -421,6 +431,17 @@ impl Cache {
             .await
     }
 
+    /// How many items a list has, for a dashboard, as [`Cache::get`], without reading them
+    /// all: GitHub's pages are counted instead.
+    pub async fn get_count(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+    ) -> Result<Outcome<u64>, Error> {
+        self.count(viewer, dashboard, path, &ChronoUtc::now).await
+    }
+
     /// Makes the next requests for a dashboard's data ask GitHub, conditionally, however
     /// fresh what is cached (FR-DATA-07). Only signed-in users may, at most once a minute
     /// for each dashboard in each scope: shared data refreshed by one user is then less
@@ -539,6 +560,36 @@ impl Cache {
                 let data = value_list(data).ok_or_else(|| {
                     Error::GitHub(github::Error::Invalid(
                         "a cached list is not one".to_owned(),
+                    ))
+                })?;
+                Ok(Outcome::Data(Cached {
+                    data,
+                    fetched_at,
+                    stale,
+                }))
+            }
+        }
+    }
+
+    async fn count(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+        clock: &Clock,
+    ) -> Result<Outcome<u64>, Error> {
+        let fetch = Fetch::Count(path);
+        match self.lookup(viewer, dashboard, fetch, clock).await? {
+            Outcome::Computing => Ok(Outcome::Computing),
+            Outcome::Data(Cached {
+                data,
+                fetched_at,
+                stale,
+            }) => {
+                // `lookup` only returns data that `fetch.holds`.
+                let data = data.get("count").and_then(Value::as_u64).ok_or_else(|| {
+                    Error::GitHub(github::Error::Invalid(
+                        "a cached count is not one".to_owned(),
                     ))
                 })?;
                 Ok(Outcome::Data(Cached {
@@ -1184,6 +1235,17 @@ mod tests {
         ) -> Result<Outcome<List>, Error> {
             self.list(viewer, dashboard, path, limit, fields, &move || now)
                 .await
+        }
+
+        /// [`Cache::get_count`] at `now`.
+        async fn get_count_at(
+            &self,
+            viewer: &Viewer,
+            dashboard: &str,
+            path: &Path,
+            now: DateTimeUtc,
+        ) -> Result<Outcome<u64>, Error> {
+            self.count(viewer, dashboard, path, &move || now).await
         }
 
         /// [`Cache::fresh_shared`] at `now`.
@@ -1966,6 +2028,85 @@ mod tests {
             .unwrap();
         assert_eq!(data(get_list(2, at(2)).await).data, two.data);
         assert_eq!(setup.stub.requests().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn counts_are_cached_apart_from_their_lists() {
+        let setup = setup().await;
+        setup.answer(|request| match request.uri().query() {
+            Some("per_page=1") => answer(
+                200,
+                &[
+                    (
+                        "link",
+                        r#"<https://api.github.com/orgs/org/public_members?per_page=1&page=57>; rel="last""#,
+                    ),
+                    ("etag", r#"W/"one""#),
+                ],
+                r#"[{"login":"a"}]"#,
+            ),
+            _ => answer(200, &[], r#"[{"login":"a"},{"login":"b"}]"#),
+        });
+        let members = path(&["orgs", "org", "public_members"]);
+        let visitor = visitor();
+
+        let count = data(
+            setup
+                .cache
+                .get_count_at(&visitor, "/org", &members, at(0))
+                .await,
+        );
+        assert_eq!(count.data, 57);
+        assert_eq!(
+            data(
+                setup
+                    .cache
+                    .get_count_at(&visitor, "/org", &members, at(1))
+                    .await
+            ),
+            count
+        );
+        let list = data(
+            setup
+                .cache
+                .get_list_at(&visitor, "/org", &members, 10, at(1))
+                .await,
+        );
+        assert_eq!(list.data.items.len(), 2);
+        assert_eq!(
+            setup.stub.urls(),
+            [
+                "https://api.github.com/orgs/org/public_members?per_page=1",
+                "https://api.github.com/orgs/org/public_members?per_page=10",
+            ]
+        );
+        let rows: Vec<(String, Value, Option<String>)> = setup
+            .rows()
+            .await
+            .into_iter()
+            .map(|row| (row.resource_key, row.data, row.etag))
+            .collect();
+        assert_eq!(
+            rows[0],
+            (
+                "/orgs/org/public_members count".to_owned(),
+                json!({"count": 57}),
+                // GitHub's validator covers only the first member.
+                None
+            )
+        );
+        assert_eq!(rows[1].0, "/orgs/org/public_members limit=10");
+
+        // Once stale, after the TTL of 15 minutes, it is asked for again, unconditionally.
+        data(
+            setup
+                .cache
+                .get_count_at(&visitor, "/org", &members, at(15))
+                .await,
+        );
+        let requests = setup.stub.requests();
+        assert_eq!(requests.len(), 3);
+        assert!(!requests[2].1.contains_key(IF_NONE_MATCH));
     }
 
     #[tokio::test]

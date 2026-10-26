@@ -1,10 +1,11 @@
 //! What an organization's dashboard shows of the organization as a whole: its header
 //! (FR-ORG-01), with its name as GitHub spells it (FR-NAV-04), its stat cards (FR-ORG-02),
 //! its repository table (FR-ORG-03), its languages (FR-ORG-04), its top repositories
-//! (FR-ORG-05) and its activity (FR-ORG-06). The figures, the table and the charts are over
-//! the repositories that the viewer may see, private and internal ones too for a token user
-//! (FR-ORG-09), and at most `limits.org_repositories` of them, those pushed to most
-//! recently (FR-ORG-08).
+//! (FR-ORG-05), its activity (FR-ORG-06) and its members (FR-ORG-07). The figures, the table
+//! and the charts are over the repositories that the viewer may see, private and internal
+//! ones too for a token user (FR-ORG-09), and at most `limits.org_repositories` of them, those
+//! pushed to most recently (FR-ORG-08). The members are those that the viewer may see: those
+//! who show their membership publicly, and others too for a token user (FR-ACC-04).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -20,7 +21,9 @@ use url::Url;
 use crate::accounts::is_account_name;
 use crate::cache::{Cache, Cached, Viewer};
 use crate::github::{self, List};
-use crate::repositories::{data, is_repository_name, link, respond, status, text, visibility};
+use crate::repositories::{
+    data, is_repository_name, link, page, respond, status, text, visibility,
+};
 use crate::visitors::Visitor;
 
 /// FR-ORG-04: the languages the chart names. The rest are "Other".
@@ -32,6 +35,9 @@ const TOP_REPOSITORIES: usize = 10;
 /// FR-ORG-06: the days within which a repository was last pushed to for each period of the
 /// last-push chart but the last, which is of those pushed to longer ago.
 const PERIODS: [i64; 3] = [7, 30, 365];
+
+/// FR-ORG-07: the members whose avatars the members widget shows.
+const MEMBERS: usize = 24;
 
 /// What is kept of each of an organization's repositories: what its dashboard shows of them
 /// (FR-ORG-02 to FR-ORG-06), so that a large organization's list is small to cache and to
@@ -254,6 +260,69 @@ pub async fn created_per_year(
     }
 }
 
+/// `/-/api/organizations/{org}/members`: how many of the organization's members the viewer
+/// may see, and the first 24 of them, in the order GitHub gives them (FR-ORG-07),
+///
+/// ```json
+/// {"count": 30, "members": [{"login": "alice", "avatar_url": …, "url": …}, …]}
+/// ```
+///
+/// Which members the viewer may see is told in [`members_path`]. `url` is the member's page
+/// on GitHub. What BuhTig does not show or link to is `null` (NFR-SEC-03), and an item
+/// without a login is left out, though it counts, as GitHub counts it. GitHub tells no
+/// count, so it is asked for apart when there are more than 24.
+///
+/// Its statuses are those of [`summary`], since it reads the organization first. A failure
+/// to read its members, or to count them, is 502.
+pub async fn members(
+    State(cache): State<Arc<Cache>>,
+    visitor: Visitor,
+    Path(org): Path<String>,
+) -> Response {
+    // As in `summary`.
+    let viewer = Viewer::Visitor(visitor);
+    match member_list(&cache, &viewer, &org).await {
+        Ok(body) => respond(body),
+        Err(code) => status(code),
+    }
+}
+
+/// What [`members`] answers for the organization `org`, or the status that says why it
+/// cannot.
+async fn member_list(cache: &Cache, viewer: &Viewer, org: &str) -> Result<Value, StatusCode> {
+    let organization = organization(cache, viewer, org).await?.data;
+    let login = login(&organization).ok_or(StatusCode::BAD_GATEWAY)?;
+    // By the name GitHub gave, as in `listed`.
+    let path = members_path(viewer, login);
+    let dashboard = format!("/{org}");
+    let list = data(cache.get_list(viewer, &dashboard, &path, MEMBERS).await)?.data;
+    let listed = u64::try_from(list.items.len()).unwrap_or(u64::MAX);
+    let count = if list.truncated {
+        // The count is cached apart from the list, so it may be older. It is never fewer
+        // than the list shows.
+        data(cache.get_count(viewer, &dashboard, &path).await)?
+            .data
+            .max(listed)
+    } else {
+        listed
+    };
+    let members: Vec<Value> = list.items.iter().filter_map(member).collect();
+    Ok(json!({ "count": count, "members": members }))
+}
+
+/// The list of the organization's members that the viewer may see. Members may keep their
+/// membership private, and GitHub lists them too for another member's credential. So a
+/// viewer served from the shared cache, which holds only public information (FR-DATA-04),
+/// reads only the members who show their membership publicly. A token user reads all that
+/// their PAT may see (FR-ACC-04).
+fn members_path(viewer: &Viewer, login: &str) -> github::Path {
+    let list = match viewer {
+        Viewer::TokenUser { .. } => "members",
+        Viewer::Visitor(_) | Viewer::SignedIn { .. } => "public_members",
+    };
+    github::Path::new(["orgs", login, list]).expect("an account name is neither empty nor dots")
+}
+
 /// The repositories of the organization `org` that the viewer may see, as many as BuhTig
 /// reads, those pushed to most recently first, or the status that says why there are none:
 /// those of [`summary`], since it reads the organization first, or 502 if the repositories
@@ -460,6 +529,15 @@ fn row(repository: &Value) -> Option<Value> {
     }))
 }
 
+/// A member as the members widget shows them, unless GitHub left out their login.
+fn member(member: &Value) -> Option<Value> {
+    Some(json!({
+        "login": text(member, "login")?,
+        "avatar_url": link(member.get("avatar_url"), &["https"]),
+        "url": page(member.get("html_url")),
+    }))
+}
+
 /// The website that GitHub gives, as a URL to link to: as it is, if it is an `http` or
 /// `https` one, or with `https://` before it, if it names no scheme, as `acme.example` does
 /// (NFR-SEC-03).
@@ -546,9 +624,22 @@ mod tests {
         "odd"
     ]"#;
 
+    /// The public members of `Acme`, with some that the widget must not show as they are.
+    const ACME_MEMBERS: &str = r#"[
+        {"login": "alice", "id": 2, "type": "User", "site_admin": false,
+         "avatar_url": "https://avatars.githubusercontent.com/u/2?v=4",
+         "html_url": "https://github.com/alice"},
+        {"login": "bob", "avatar_url": "https://avatars.githubusercontent.com/u/3?v=4",
+         "html_url": "https://github.com/bob"},
+        {"login": "mallory", "avatar_url": "http://avatars.example/u/4",
+         "html_url": "https://evil.example/mallory"},
+        {"login": "", "html_url": "https://github.com/ghost"},
+        "odd"
+    ]"#;
+
     /// A stub GitHub with the organizations `Acme`, `bare`, `odd` and `big`, which has more
-    /// repositories than two pages of two, a user `octocat`, and a few odd answers. Like
-    /// GitHub, it ignores the case of names in paths.
+    /// repositories than two pages of two and 57 public members, a user `octocat`, and a few
+    /// odd answers. Like GitHub, it ignores the case of names in paths.
     fn github() -> Arc<Stub> {
         Stub::new(|request| {
             let query: HashMap<String, String> =
@@ -565,7 +656,34 @@ mod tests {
                 "/orgs/unlisted" => answer(200, &[], r#"{"login": "unlisted"}"#),
                 "/orgs/unlisted/repos" => answer(500, &[], r#"{"message": "Server Error"}"#),
                 "/orgs/acme/repos" => answer(200, &[], REPOSITORIES),
-                "/orgs/bare/repos" => answer(200, &[], "[]"),
+                "/orgs/bare/repos" | "/orgs/bare/public_members" => answer(200, &[], "[]"),
+                "/orgs/acme/public_members" => answer(200, &[], ACME_MEMBERS),
+                "/orgs/unlisted/public_members" => {
+                    answer(500, &[], r#"{"message": "Server Error"}"#)
+                }
+                "/orgs/big/public_members" => match query.get("per_page").map(String::as_str) {
+                    Some("1") => answer(
+                        200,
+                        &[(
+                            "link",
+                            r#"<https://api.github.com/orgs/big/public_members?per_page=1&page=2>; rel="next", <https://api.github.com/orgs/big/public_members?per_page=1&page=57>; rel="last""#,
+                        )],
+                        r#"[{"login": "m1"}]"#,
+                    ),
+                    _ => {
+                        let members: Vec<String> = (1..=24)
+                            .map(|n| format!(r#"{{"login": "m{n}"}}"#))
+                            .collect();
+                        answer(
+                            200,
+                            &[(
+                                "link",
+                                r#"<https://api.github.com/orgs/big/public_members?per_page=24&page=2>; rel="next""#,
+                            )],
+                            &format!("[{}]", members.join(",")),
+                        )
+                    }
+                },
                 "/orgs/big/repos" => {
                     let next = r#"<https://api.github.com/orgs/big/repos?sort=pushed&per_page=2&page=2>; rel="next""#;
                     match query.get("page").map(String::as_str) {
@@ -624,10 +742,11 @@ mod tests {
         TopRepositories,
         LastPush,
         CreatedPerYear,
+        Members,
     }
 
     /// Every part of a dashboard that is read under its organization.
-    const APIS: [Api; 7] = [
+    const APIS: [Api; 8] = [
         Api::Summary,
         Api::Stats,
         Api::Repositories,
@@ -635,6 +754,7 @@ mod tests {
         Api::TopRepositories,
         Api::LastPush,
         Api::CreatedPerYear,
+        Api::Members,
     ];
 
     /// Every part of a dashboard that is read from the organization's repositories.
@@ -660,6 +780,7 @@ mod tests {
             Api::TopRepositories => top_repositories(State(cache.clone()), visitor, name).await,
             Api::LastPush => last_push(State(cache.clone()), visitor, name).await,
             Api::CreatedPerYear => created_per_year(State(cache.clone()), visitor, name).await,
+            Api::Members => members(State(cache.clone()), visitor, name).await,
         };
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let status = response.status();
@@ -1307,6 +1428,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_members_widget_shows_the_members_github_lists() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        assert_eq!(
+            ask(&cache, Api::Members, "acme").await,
+            (
+                StatusCode::OK,
+                json!({
+                    // Those without a login count too, as GitHub counts them.
+                    "count": 5,
+                    "members": [
+                        {
+                            "login": "alice",
+                            "avatar_url": "https://avatars.githubusercontent.com/u/2?v=4",
+                            "url": "https://github.com/alice",
+                        },
+                        {
+                            "login": "bob",
+                            "avatar_url": "https://avatars.githubusercontent.com/u/3?v=4",
+                            "url": "https://github.com/bob",
+                        },
+                        // Avatars only from https URLs, and links only to pages on GitHub
+                        // (NFR-SEC-03).
+                        {"login": "mallory", "avatar_url": null, "url": null},
+                    ],
+                })
+            )
+        );
+        // The public members alone, by the name as GitHub spells it. They fit on one page, so
+        // they are not counted apart.
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://api.github.com/orgs/acme",
+                "https://api.github.com/orgs/Acme/public_members?per_page=24",
+            ]
+        );
+
+        assert_eq!(
+            ask(&cache, Api::Members, "bare").await,
+            (StatusCode::OK, json!({"count": 0, "members": []}))
+        );
+    }
+
+    #[tokio::test]
+    async fn more_than_24_members_are_counted_apart() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        let (status, body) = ask(&cache, Api::Members, "big").await;
+        let logins: Vec<String> = body["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|member| member["login"].as_str().unwrap().to_owned())
+            .collect();
+        let first: Vec<String> = (1..=24).map(|n| format!("m{n}")).collect();
+        assert_eq!(
+            (status, &body["count"], logins),
+            (StatusCode::OK, &json!(57), first)
+        );
+
+        // Both are then cached.
+        assert_eq!(ask(&cache, Api::Members, "big").await, (status, body));
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://api.github.com/orgs/big",
+                "https://api.github.com/orgs/big/public_members?per_page=24",
+                "https://api.github.com/orgs/big/public_members?per_page=1",
+            ]
+        );
+    }
+
+    #[test]
+    fn only_token_users_see_members_who_keep_their_membership_private() {
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let signed_in = Viewer::SignedIn {
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let token_user = Viewer::TokenUser {
+            user_id: 1,
+            pat: Secret::new("pat".to_owned()),
+        };
+        for viewer in [visitor, signed_in] {
+            assert_eq!(
+                members_path(&viewer, "Acme").to_string(),
+                "/orgs/Acme/public_members",
+                "{viewer:?}"
+            );
+        }
+        assert_eq!(
+            members_path(&token_user, "Acme").to_string(),
+            "/orgs/Acme/members"
+        );
+    }
+
+    #[tokio::test]
     async fn what_github_cannot_tell_is_not_an_answer() {
         let stub = github();
         let cache = cache(&stub, 30, 1000).await;
@@ -1320,10 +1541,11 @@ mod tests {
                 StatusCode::BAD_GATEWAY
             );
         }
-        for api in LISTED {
+        for api in LISTED.into_iter().chain([Api::Members]) {
             assert_eq!(
                 ask(&cache, api, "unlisted").await.0,
-                StatusCode::BAD_GATEWAY
+                StatusCode::BAD_GATEWAY,
+                "{api:?}"
             );
         }
     }

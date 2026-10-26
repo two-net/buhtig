@@ -385,7 +385,7 @@ describe('Dashboard', () => {
     expect(page().querySelector('app-repository-header')).toBeNull();
   });
 
-  it("loads an organization's widgets, not a repository's (FR-ORG-02 to FR-ORG-06)", async () => {
+  it("loads an organization's widgets, not a repository's (FR-ORG-02 to FR-ORG-07)", async () => {
     await harness.navigateByUrl('/acme');
     const widgets = [...page().querySelectorAll('.grid > * > app-widget')];
     expect(widgets.map((widget) => widget.parentElement!.tagName.toLowerCase())).toEqual([
@@ -395,14 +395,16 @@ describe('Dashboard', () => {
       'app-organization-last-push',
       'app-organization-created',
       'app-organization-repositories',
+      'app-organization-members',
     ]);
-    // The charts side by side, between the stat cards and the table.
+    // The charts side by side, between the stat cards and the table, and the members below.
     expect(widgets.map((widget) => widget.classList.contains('wide'))).toEqual([
       true,
       false,
       false,
       false,
       false,
+      true,
       true,
     ]);
     expect(http.match(isWidget).map((request) => request.request.url)).toEqual([
@@ -412,6 +414,7 @@ describe('Dashboard', () => {
       '/-/api/organizations/acme/last-push',
       '/-/api/organizations/acme/created-per-year',
       '/-/api/organizations/acme/repositories',
+      '/-/api/organizations/acme/members',
     ]);
     http.expectOne('/-/api/organizations/acme').flush({ name: 'acme' });
   });

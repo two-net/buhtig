@@ -713,7 +713,7 @@ fn listed_release(data: &Value) -> Option<Value> {
 }
 
 /// `value` as a URL to link to, if it is one of a page on GitHub (FR-REPO-12).
-fn page(value: Option<&Value>) -> Option<String> {
+pub(crate) fn page(value: Option<&Value>) -> Option<String> {
     link(value, &["https"])
         .filter(|url| Url::parse(url).is_ok_and(|url| url.host_str() == Some("github.com")))
 }

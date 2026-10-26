@@ -7,6 +7,7 @@ import { OrganizationCreated } from '../organization/created';
 import { OrganizationHeader } from '../organization/header';
 import { OrganizationLanguages } from '../organization/languages';
 import { OrganizationLastPush } from '../organization/last-push';
+import { OrganizationMembers } from '../organization/members';
 import { OrganizationRepositories } from '../organization/repositories';
 import { OrganizationStats } from '../organization/stats';
 import { OrganizationTopRepositories } from '../organization/top-repositories';
@@ -32,8 +33,8 @@ import { Resources, Summary } from './resources';
  * contributors (FR-REPO-05), issues and pull requests (FR-REPO-06), recent commits (FR-REPO-07)
  * and releases (FR-REPO-08). An organization's head shows what the server says of it
  * (FR-ORG-01), and its stat cards lead the grid (FR-ORG-02), before its languages (FR-ORG-04),
- * top repositories (FR-ORG-05), last pushes and repositories created per year (FR-ORG-06), and
- * its repository table (FR-ORG-03). Its members widget is still to come (#21).
+ * top repositories (FR-ORG-05), last pushes and repositories created per year (FR-ORG-06), its
+ * repository table (FR-ORG-03), and its members (FR-ORG-07).
  *
  * Once it knows how GitHub spells the names, it moves there, in place of the URL it was opened
  * at (FR-NAV-04, FR-NAV-05).
@@ -46,6 +47,7 @@ import { Resources, Summary } from './resources';
     OrganizationHeader,
     OrganizationLanguages,
     OrganizationLastPush,
+    OrganizationMembers,
     OrganizationRepositories,
     OrganizationStats,
     OrganizationTopRepositories,

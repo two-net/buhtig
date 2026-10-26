@@ -90,6 +90,21 @@ impl Path {
         self.0.query_pairs_mut().append_pair(key, value);
         self
     }
+
+    /// Its URL, asking for `per_page` items a page in place of any `per_page` it has.
+    fn paged(&self, per_page: usize) -> Url {
+        let mut url = self.0.clone();
+        let query: Vec<(String, String)> = url
+            .query_pairs()
+            .filter(|(key, _)| key != "per_page")
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect();
+        url.query_pairs_mut()
+            .clear()
+            .extend_pairs(query)
+            .append_pair("per_page", &per_page.to_string());
+        url
+    }
 }
 
 impl fmt::Display for Path {
@@ -370,18 +385,7 @@ impl Client {
         etag: Option<&str>,
     ) -> Result<Reply<List>, Error> {
         let per_page = limit.clamp(1, PER_PAGE);
-        let mut url = path.0.clone();
-        let query: Vec<(String, String)> = url
-            .query_pairs()
-            .filter(|(key, _)| key != "per_page")
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect();
-        url.query_pairs_mut()
-            .clear()
-            .extend_pairs(query)
-            .append_pair("per_page", &per_page.to_string());
-
-        let first = self.fetch(credential, url, etag).await?;
+        let first = self.fetch(credential, path.paged(per_page), etag).await?;
         match first.status {
             StatusCode::NOT_MODIFIED => return Ok(Reply::NotModified),
             StatusCode::ACCEPTED => return Ok(Reply::Computing),
@@ -415,6 +419,26 @@ impl Client {
             data: List { items, truncated },
             etag,
             redirected,
+        })
+    }
+
+    /// How many items a list that GitHub answers in pages of JSON arrays has, read from its
+    /// first page of one item: the number of its last page, or else the items on that one.
+    ///
+    /// It is never conditional, and the reply has no validator: GitHub's covers the one
+    /// item on the page, which stays the same while items are added or removed after it.
+    pub async fn count(&self, credential: &Credential, path: &Path) -> Result<Reply<u64>, Error> {
+        let answer = self.fetch(credential, path.paged(1), None).await?;
+        if answer.status == StatusCode::ACCEPTED {
+            return Ok(Reply::Computing);
+        }
+        let items = answer.items()?;
+        let count = last_page(&answer.headers)
+            .unwrap_or_else(|| u64::try_from(items.len()).unwrap_or(u64::MAX));
+        Ok(Reply::Fresh {
+            data: count,
+            etag: None,
+            redirected: answer.redirected,
         })
     }
 
@@ -740,9 +764,22 @@ fn message(body: &[u8]) -> Option<String> {
     body.get("message")?.as_str().map(str::to_owned)
 }
 
-/// The `rel="next"` URL of a `Link` header such as
-/// `<https://api.github.com/…&page=2>; rel="next", <https://api.github.com/…&page=5>; rel="last"`.
+/// The `rel="next"` URL of a `Link` header.
 fn next_link(headers: &HeaderMap) -> Option<String> {
+    link_to(headers, "next")
+}
+
+/// The page number of the `rel="last"` URL of a `Link` header, which is how many items a
+/// list has in pages of one.
+fn last_page(headers: &HeaderMap) -> Option<u64> {
+    let url = Url::parse(&link_to(headers, "last")?).ok()?;
+    let (_, page) = url.query_pairs().find(|(key, _)| key == "page")?;
+    page.parse().ok()
+}
+
+/// The URL with the relation `rel` in a `Link` header such as
+/// `<https://api.github.com/…&page=2>; rel="next", <https://api.github.com/…&page=5>; rel="last"`.
+fn link_to(headers: &HeaderMap, rel: &str) -> Option<String> {
     for value in headers.get_all(LINK) {
         let Ok(mut rest) = value.to_str() else {
             continue;
@@ -754,14 +791,14 @@ fn next_link(headers: &HeaderMap) -> Option<String> {
             let target = &rest[start + 1..end];
             rest = &rest[end + 1..];
             let params = &rest[..rest.find('<').unwrap_or(rest.len())];
-            let is_next = params.split([';', ',']).any(|param| {
-                param.trim().strip_prefix("rel=").is_some_and(|rel| {
-                    rel.trim_matches('"')
+            let is_rel = params.split([';', ',']).any(|param| {
+                param.trim().strip_prefix("rel=").is_some_and(|rels| {
+                    rels.trim_matches('"')
                         .split_whitespace()
-                        .any(|rel| rel.eq_ignore_ascii_case("next"))
+                        .any(|one| one.eq_ignore_ascii_case(rel))
                 })
             });
-            if is_next {
+            if is_rel {
                 return Some(target.to_owned());
             }
         }
@@ -1141,15 +1178,17 @@ mod tests {
         }
     }
 
+    /// Headers with a `Link` header for each of `links`.
+    fn headers(links: &[&str]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for link in links {
+            headers.append(LINK, HeaderValue::from_str(link).unwrap());
+        }
+        headers
+    }
+
     #[test]
     fn next_links_are_found_among_the_others() {
-        let headers = |links: &[&str]| {
-            let mut headers = HeaderMap::new();
-            for link in links {
-                headers.append(LINK, HeaderValue::from_str(link).unwrap());
-            }
-            headers
-        };
         assert_eq!(
             next_link(&headers(&[
                 r#"<https://api.github.com/x?page=1>; rel="prev", <https://api.github.com/x?q=a,b&page=3>; rel="next""#
@@ -1171,6 +1210,84 @@ mod tests {
         ] {
             assert_eq!(next_link(&headers(links)), None, "{links:?}");
         }
+    }
+
+    #[test]
+    fn last_pages_are_read_from_their_links() {
+        assert_eq!(
+            last_page(&headers(&[
+                r#"<https://api.github.com/x?per_page=1&page=2>; rel="next", <https://api.github.com/x?per_page=1&page=57>; rel="last""#
+            ])),
+            Some(57)
+        );
+        for links in [
+            &[][..],
+            &[r#"<https://api.github.com/x?page=2>; rel="next""#][..],
+            &[r#"<https://api.github.com/x?page=many>; rel="last""#][..],
+            &[r#"<https://api.github.com/x?page=-1>; rel="last""#][..],
+            &[r#"<https://api.github.com/x>; rel="last""#][..],
+            &[r#"<x?page=5>; rel="last""#][..],
+            &["garbage"][..],
+        ] {
+            assert_eq!(last_page(&headers(links)), None, "{links:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn lists_are_counted_from_a_page_of_one() {
+        let stub = Stub::new(|request| match request.uri().path() {
+            "/many" => answer(
+                200,
+                &[
+                    (
+                        "link",
+                        r#"<https://api.github.com/many?per_page=1&page=2>; rel="next", <https://api.github.com/many?per_page=1&page=57>; rel="last""#,
+                    ),
+                    ("etag", r#"W/"one""#),
+                ],
+                "[{}]",
+            ),
+            "/one" => answer(200, &[], "[{}]"),
+            "/none" => answer(200, &[], "[]"),
+            "/computing" => answer(202, &[], ""),
+            _ => answer(200, &[], "{}"),
+        });
+        let github = client(&stub);
+        for (name, count) in [("many", 57), ("one", 1), ("none", 0)] {
+            let list = path(&[name]).query("per_page", "50");
+            assert_eq!(
+                github.count(&Credential::Visitor, &list).await,
+                Ok(Reply::Fresh {
+                    data: count,
+                    etag: None,
+                    redirected: false
+                }),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            github
+                .count(&Credential::Visitor, &path(&["computing"]))
+                .await,
+            Ok(Reply::Computing)
+        );
+        assert!(matches!(
+            github.count(&Credential::Visitor, &path(&["odd"])).await,
+            Err(Error::Invalid(_))
+        ));
+        assert_eq!(
+            stub.urls()[..3],
+            [
+                "https://api.github.com/many?per_page=1",
+                "https://api.github.com/one?per_page=1",
+                "https://api.github.com/none?per_page=1",
+            ]
+        );
+        assert!(
+            stub.requests()
+                .iter()
+                .all(|(_, headers)| !headers.contains_key(IF_NONE_MATCH))
+        );
     }
 
     #[tokio::test]

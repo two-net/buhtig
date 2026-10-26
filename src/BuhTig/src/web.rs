@@ -87,6 +87,10 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>, previews: Option<Previews>
             get(organizations::created_per_year).with_state(cache.clone()),
         )
         .route(
+            "/-/api/organizations/{org}/members",
+            get(organizations::members).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}",
             get(repositories::summary).with_state(cache.clone()),
         )

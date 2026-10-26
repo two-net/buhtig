@@ -93,3 +93,8 @@ export function createdDescription(years: YearCount[]): string {
     `with ${repositoryCount(busiest.repositories)}.`
   );
 }
+
+/** FR-ORG-07: "member" or "members", as a count of them, such as 12, takes. */
+export function membersLabel(count: number): string {
+  return count === 1 ? 'member' : 'members';
+}

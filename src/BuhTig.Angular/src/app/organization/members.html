@@ -1,0 +1,31 @@
+<app-widget heading="Members" empty="No members to show." [wide]="true">
+  <ng-template [appLoaded]="members" let-members>
+    <p class="count">
+      <app-compact-number [value]="members.count" />
+      {{ membersLabel(members.count) }}
+    </p>
+    <ul>
+      @for (member of members.members; track member.login) {
+        <li>
+          <!-- Each avatar's alternative text names the member, and so the link (NFR-UX-02). -->
+          <a [attr.href]="member.url ?? null" [title]="member.login">
+            @if (member.avatarUrl; as avatar) {
+              <img
+                class="avatar"
+                [src]="avatar"
+                [alt]="member.login"
+                width="40"
+                height="40"
+                loading="lazy"
+              />
+            } @else {
+              <span class="avatar" role="img" [attr.aria-label]="member.login">{{
+                member.login[0]
+              }}</span>
+            }
+          </a>
+        </li>
+      }
+    </ul>
+  </ng-template>
+</app-widget>

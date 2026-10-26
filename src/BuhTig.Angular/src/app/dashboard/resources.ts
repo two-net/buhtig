@@ -139,6 +139,22 @@ export interface YearCount {
   repositories: number;
 }
 
+/** The members of an organization that the viewer may see (FR-ORG-07). */
+export interface Members {
+  /** How many there are. */
+  count: number;
+  /** Up to 24 of them, in the order GitHub gives them. */
+  members: Member[];
+}
+
+export interface Member {
+  login: string;
+  /** An `https` URL. */
+  avatarUrl: string | undefined;
+  /** Their page on GitHub. */
+  url: string | undefined;
+}
+
 /** What a repository's stat cards show (FR-REPO-02). */
 export interface Stats {
   stars: number;
@@ -335,6 +351,16 @@ interface LastPushAnswer {
 /** The server's answer about an organization, for its created-per-year chart. */
 interface CreatedPerYearAnswer {
   years: YearCount[];
+}
+
+/** The server's answer about an organization, for its members widget. */
+interface MembersAnswer {
+  count: number;
+  members: {
+    login: string;
+    avatar_url: string | null;
+    url: string | null;
+  }[];
 }
 
 /** The server's answer about a repository, for its stat cards. */
@@ -565,6 +591,20 @@ export class Resources {
     return this.http
       .get<CreatedPerYearAnswer>(`${organizationUrl(org)}/created-per-year`)
       .pipe(map(({ years }) => years));
+  }
+
+  /** The members of the organization `org` that the viewer may see, which fail as `organizationStats` does. */
+  members(org: string): Observable<Members> {
+    return this.http.get<MembersAnswer>(`${organizationUrl(org)}/members`).pipe(
+      map((answer) => ({
+        count: answer.count,
+        members: answer.members.map((member) => ({
+          login: member.login,
+          avatarUrl: link(member.avatar_url, ['https:']),
+          url: link(member.url, ['https:']),
+        })),
+      })),
+    );
   }
 
   /**

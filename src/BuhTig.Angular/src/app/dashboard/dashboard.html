@@ -26,7 +26,7 @@
       [organization]="summary()?.organization"
       [fetchedAt]="summary()?.fetchedAt"
     />
-    <!-- Laid out as a repository's. Its members widget is still to come (#21). -->
+    <!-- Laid out as a repository's. -->
     <div class="grid">
       <app-organization-stats [org]="organization.org" />
       <app-organization-languages [org]="organization.org" />
@@ -34,6 +34,7 @@
       <app-organization-last-push [org]="organization.org" />
       <app-organization-created [org]="organization.org" />
       <app-organization-repositories [org]="organization.org" />
+      <app-organization-members [org]="organization.org" />
     </div>
   }
 </main>
