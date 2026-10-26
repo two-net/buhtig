@@ -22,11 +22,6 @@
 //! Every timestamp is a `DateTimeUtc`, stored as `timestamptz` (DR-06). Tables that
 //! belong to a user cascade on delete, so deleting the user removes them too (DR-04).
 
-#![allow(
-    dead_code,
-    reason = "the features that read and write these tables are still to come (#6, #22, #23, #25)"
-)]
-
 pub mod cache_entry;
 pub mod credential;
 pub mod history_entry;

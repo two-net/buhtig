@@ -17,7 +17,7 @@
 
 #![allow(
     dead_code,
-    reason = "sign-in, tokens and refreshing are still to come (#22 to #24)"
+    reason = "tokens and refreshing are still to come (#23, #24)"
 )]
 
 use std::collections::HashMap;
@@ -37,6 +37,7 @@ use tracing::{debug, error, warn};
 use crate::config::{CacheConfig, LimitsConfig, Secret};
 use crate::entity::cache_entry::{self, Scope};
 use crate::github::{self, Credential, List, Path, Reply};
+use crate::session;
 use crate::visitors::{Held, Visitor, Visitors};
 
 /// FR-DATA-07: a dashboard may be refreshed at most once a minute.
@@ -53,8 +54,11 @@ pub enum Viewer {
     /// limits on what visitors may fetch.
     Visitor(Visitor),
     /// A signed-in user without a valid PAT: their sign-in credential (FR-PAT-06), which
-    /// sees only public data (A-03), and the shared cache.
-    SignedIn { sign_in: Secret<String> },
+    /// sees only public data (A-03), and the shared cache. `user_id` is their `users.id`.
+    SignedIn {
+        user_id: i64,
+        sign_in: Secret<String>,
+    },
     /// A token user: their PAT, and their private cache. `user_id` is their `users.id`.
     TokenUser { user_id: i64, pat: Secret<String> },
 }
@@ -71,7 +75,7 @@ impl Viewer {
     fn token(&self) -> Option<&Secret<String>> {
         match self {
             Viewer::Visitor(_) => None,
-            Viewer::SignedIn { sign_in } => Some(sign_in),
+            Viewer::SignedIn { sign_in, .. } => Some(sign_in),
             Viewer::TokenUser { pat, .. } => Some(pat),
         }
     }
@@ -758,6 +762,15 @@ impl Cache {
         let now = clock();
         let etag = stored.as_ref().and_then(|entry| entry.etag.as_deref());
         let reply = fetch.send(&self.github, &viewer.credential(), etag).await;
+        if let (Err(github::Error::BadCredentials), Viewer::SignedIn { user_id, .. }) =
+            (&reply, viewer)
+        {
+            // GitHub no longer takes the credential the user signed in with, as when they
+            // revoke BuhTig's access: they must sign in again (FR-AUTH-09).
+            if let Err(error) = session::end_all(&self.db, *user_id).await {
+                error!("cannot sign out a user whose sign-in GitHub rejected: {error}");
+            }
+        }
         let mut stored_data = true;
         let result = match reply {
             Ok(Reply::Fresh { mut data, etag, .. }) => {
@@ -1090,7 +1103,7 @@ mod tests {
 
     const DASHBOARD: &str = "/owner/repo";
 
-    type Answer = dyn Fn(&Request<()>) -> Result<Response<Bytes>, github::Error> + Send + Sync;
+    type Answer = dyn Fn(&Request<Bytes>) -> Result<Response<Bytes>, github::Error> + Send + Sync;
 
     /// A cache on a database of its own, in front of a stub GitHub that answers as the
     /// test says, with Alice and Bob as users.
@@ -1112,7 +1125,7 @@ mod tests {
     }
 
     impl Transport for Delayed {
-        fn send(&self, request: Request<()>) -> Sending<'_> {
+        fn send(&self, request: Request<Bytes>) -> Sending<'_> {
             let delay = Duration::from_millis(self.delay.load(Ordering::Relaxed));
             Box::pin(async move {
                 tokio::time::sleep(delay).await;
@@ -1277,7 +1290,7 @@ mod tests {
         /// Makes the stub answer each request with `respond`.
         fn answer(
             &self,
-            respond: impl Fn(&Request<()>) -> Result<Response<Bytes>, github::Error>
+            respond: impl Fn(&Request<Bytes>) -> Result<Response<Bytes>, github::Error>
             + Send
             + Sync
             + 'static,
@@ -1364,8 +1377,11 @@ mod tests {
         }
     }
 
+    /// A user signed in with `token`, who is not in the database: no test of the cache
+    /// needs their row, but that of what a rejected token does to their sessions.
     fn signed_in(token: &str) -> Viewer {
         Viewer::SignedIn {
+            user_id: 0,
             sign_in: Secret::new(token.to_owned()),
         }
     }
@@ -1388,7 +1404,10 @@ mod tests {
         "2026-10-21T12:00:00Z".parse::<DateTimeUtc>().unwrap() + TimeDelta::minutes(minutes)
     }
 
-    fn header(request: &Request<()>, name: impl axum::http::header::AsHeaderName) -> Option<&str> {
+    fn header(
+        request: &Request<Bytes>,
+        name: impl axum::http::header::AsHeaderName,
+    ) -> Option<&str> {
         request.headers().get(name)?.to_str().ok()
     }
 
@@ -1422,12 +1441,12 @@ mod tests {
 
     /// A primary rate limit that resets in an hour, and when that is.
     fn rate_limited() -> (
-        impl Fn(&Request<()>) -> Result<Response<Bytes>, github::Error>,
+        impl Fn(&Request<Bytes>) -> Result<Response<Bytes>, github::Error>,
         DateTimeUtc,
     ) {
         let seconds = (ChronoUtc::now() + TimeDelta::hours(1)).timestamp();
         let reset = seconds.to_string();
-        let respond = move |_: &Request<()>| {
+        let respond = move |_: &Request<Bytes>| {
             answer(
                 403,
                 &[
@@ -1786,6 +1805,82 @@ mod tests {
             github_error(setup.get(&visitor(), &repo, at(18)).await),
             github::Error::Unreachable(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_sign_in_signs_the_user_out_everywhere() {
+        use crate::entity::{credential, session};
+
+        let setup = setup().await;
+        for (user_id, kind) in [
+            (setup.bob, credential::Kind::SignIn),
+            (setup.bob, credential::Kind::Pat),
+            (setup.alice, credential::Kind::SignIn),
+        ] {
+            credential::ActiveModel {
+                user_id: Set(user_id),
+                kind: Set(kind),
+                encrypted_value: Set(vec![1, 2, 3]),
+                ..Default::default()
+            }
+            .insert(&setup.db)
+            .await
+            .unwrap();
+        }
+        for (id, user_id) in [(1, setup.bob), (2, setup.bob), (3, setup.alice)] {
+            session::ActiveModel {
+                id_hash: Set(vec![id]),
+                user_id: Set(user_id),
+                created_at: Set(at(0)),
+                last_used_at: Set(at(0)),
+                expires_at: Set(at(60)),
+            }
+            .insert(&setup.db)
+            .await
+            .unwrap();
+        }
+        setup.answer(|request| match header(request, AUTHORIZATION) {
+            Some("Bearer revoked") => answer(401, &[], r#"{"message":"Bad credentials"}"#),
+            _ => answer(200, &[], "{}"),
+        });
+        let bob = Viewer::SignedIn {
+            user_id: setup.bob,
+            sign_in: Secret::new("revoked".to_owned()),
+        };
+        assert_eq!(
+            github_error(
+                setup
+                    .get(&bob, &path(&["repos", "owner", "repo"]), at(1))
+                    .await
+            ),
+            github::Error::BadCredentials
+        );
+
+        // Bob's sessions and sign-in credential are gone, and his PAT is his to replace
+        // (#23). Alice is still signed in.
+        let sessions: Vec<_> = session::Entity::find()
+            .all(&setup.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|session| (session.id_hash, session.user_id))
+            .collect();
+        assert_eq!(sessions, [(vec![3], setup.alice)]);
+        let mut credentials: Vec<_> = credential::Entity::find()
+            .all(&setup.db)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|credential| (credential.user_id, credential.kind))
+            .collect();
+        credentials.sort_by_key(|(user_id, _)| *user_id);
+        assert_eq!(
+            credentials,
+            [
+                (setup.alice, credential::Kind::SignIn),
+                (setup.bob, credential::Kind::Pat)
+            ]
+        );
     }
 
     #[tokio::test]
@@ -2452,7 +2547,7 @@ mod tests {
         let seconds = (ChronoUtc::now() + TimeDelta::hours(1)).timestamp();
         let until = DateTime::from_timestamp(seconds, 0).unwrap();
         let remaining = move |remaining: u32| {
-            move |_: &Request<()>| {
+            move |_: &Request<Bytes>| {
                 answer(
                     200,
                     &[

@@ -55,8 +55,9 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   its default.
 - **TLS:** terminate HTTPS in front of BuhTig, for example in a reverse proxy. BuhTig
   itself listens on plain HTTP at `server.listen`.
-- **GitHub:** BuhTig only reads from GitHub, through `api.github.com` over HTTPS. It
-  checks GitHub's certificate against the root certificates built into it, not the host's.
+- **GitHub:** BuhTig only reads from GitHub, through `api.github.com` over HTTPS, and
+  signs users in through `github.com`. It checks GitHub's certificate against the root
+  certificates built into it, not the host's.
   Requests go through `github.proxy_url` if it is set, and never through a proxy named in
   the environment, so a proxy that inspects TLS does not work. Visitors' requests carry
   the OAuth app's client ID and secret, which earn a higher rate limit than anonymous
@@ -69,6 +70,17 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   computes a repository's commit activity when it is first asked for, so its chart may say
   "Calculating on GitHub…" for up to a minute while BuhTig asks again. GitHub does not list
   the contributors of its very largest repositories, and their dashboards say so.
+- **Sign-in:** users sign in with their GitHub account. GitHub asks them to let BuhTig
+  identify them, and grants it nothing more: no private repositories or organization data,
+  and nothing to write. Open BuhTig at `server.public_url`, since a sign-in started at
+  another address cannot finish. When `access.allowed_users` lists logins, only those
+  users may sign in, and anyone else sees a "not allowed" page. A session ends after
+  `auth.session_idle_timeout` without use, `auth.session_max_age` after sign-in, or when
+  the user signs out. A user is signed out everywhere once GitHub rejects their sign-in, as
+  when they revoke BuhTig's access on GitHub, and everyone is signed out when
+  `security.encryption_key` changes. BuhTig sets two cookies: the session's, and one that
+  keeps a sign-in's state for 10 minutes. Both are `Secure`, unless `server.public_url` is
+  `http://localhost`.
 - **Organizations:** an organization's dashboard reads up to `limits.org_repositories` of
   its repositories, those pushed to most recently, 100 per request to GitHub. A larger
   organization's figures cover only those, and its dashboard says so. Its members widget

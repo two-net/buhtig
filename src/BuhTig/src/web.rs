@@ -14,24 +14,25 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
+use axum::{Extension, Router};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
 use crate::accounts;
+use crate::auth::{self, Auth};
 use crate::cache::Cache;
 use crate::health::{self, Health};
 use crate::navigation;
 use crate::organizations;
 use crate::preview::Previews;
 use crate::repositories;
-use crate::session;
+use crate::session::{self, Sessions};
 use crate::surprise;
 use crate::ui::{self, Ui};
 
@@ -47,13 +48,30 @@ struct Pages {
     previews: Option<Arc<Previews>>,
 }
 
-pub fn router(health: Arc<Health>, cache: Arc<Cache>, previews: Option<Previews>) -> Router {
+/// Every request may carry a session, so each has the [`Sessions`] at hand, to tell who
+/// it comes from.
+pub fn router(
+    health: Arc<Health>,
+    cache: Arc<Cache>,
+    previews: Option<Previews>,
+    sessions: Arc<Sessions>,
+    auth: Arc<Auth>,
+) -> Router {
     let pages = Pages {
         health: health.clone(),
         previews: previews.map(Arc::new),
     };
     Router::new()
         .route("/-/health", get(health::check))
+        .route(
+            "/-/auth/sign-in",
+            get(auth::sign_in).with_state(auth.clone()),
+        )
+        .route(
+            "/-/auth/callback",
+            get(auth::callback).with_state(auth.clone()),
+        )
+        .route("/-/auth/sign-out", post(auth::sign_out).with_state(auth))
         .route(
             "/-/api/accounts/{name}",
             get(accounts::kind).with_state(cache.clone()),
@@ -127,6 +145,7 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>, previews: Option<Previews>
         .route("/-/api/surprise", get(surprise::pick).with_state(cache))
         .fallback(get(page).with_state(pages))
         .with_state(health)
+        .layer(Extension(sessions))
         // Outermost, so that every response is logged, whichever part answered.
         .layer(middleware::from_fn(log_request))
 }
@@ -168,7 +187,7 @@ fn moved(dashboard: &str) -> Response {
 }
 
 /// The response to a request that needs the database while it is unreachable.
-fn unavailable() -> Response {
+pub(crate) fn unavailable() -> Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
         [

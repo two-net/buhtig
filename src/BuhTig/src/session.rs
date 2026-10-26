@@ -1,30 +1,410 @@
-//! Who is viewing, which the UI asks so as to show "Sign in" or the user's avatar menu
-//! (UI-02), and the signed-in user's shortcuts on the home page (FR-SRCH-08).
+//! Sessions (SRS §4.5): which signed-in user a browser belongs to, so that their requests
+//! carry their own credential rather than a visitor's (FR-DATA-02). The UI asks who is
+//! viewing so as to show "Sign in" or the user's avatar menu (UI-02), and the signed-in
+//! user's shortcuts on the home page (FR-SRCH-08).
 //!
-//! Nobody can sign in until sign-in is built (#22), so for now everyone is a visitor, and
-//! the shortcuts come with pins and history (#25).
+//! A session's ID is 256 random bits in the session cookie, and the database keeps only
+//! its hash (DR-02), so that what the database holds signs no one in. Each sign-in starts
+//! a session with a new ID (NFR-SEC-01). A session ends after `auth.session_idle_timeout`
+//! without use, and in any case `auth.session_max_age` after sign-in (FR-AUTH-06), or
+//! when the user signs out (FR-AUTH-07). Housekeeping deletes those that end on their own.
+//!
+//! A user is signed out everywhere once the credential they signed in with is of no more
+//! use: when GitHub rejects it (FR-AUTH-09), or when it cannot be decrypted because
+//! `security.encryption_key` changed (DR-03). So is a user whom `access.allowed_users` no
+//! longer lists (FR-AUTH-08).
+//!
+//! Pins and history come with #25.
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Json;
-use axum::http::{StatusCode, header};
+use axum::extract::{Extension, FromRequestParts};
+use axum::http::request::Parts;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
+use sea_orm::sea_query::prelude::chrono::TimeDelta;
+use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::{
+    ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set, TransactionTrait,
+};
 use serde_json::json;
+use tracing::{error, info};
+
+use crate::cache::Viewer;
+use crate::config::Secret;
+use crate::cookies;
+use crate::crypto::{self, Sealer};
+use crate::entity::credential::{self, Kind};
+use crate::entity::{session, user};
+use crate::visitors::Visitor;
+
+/// The session cookie, which every request of BuhTig's carries.
+const COOKIE: &str = "buhtig_session";
+
+/// How far a session's `last_used_at` may lag behind its last use. Writing it on every
+/// request would cost a write for each of a dashboard's widgets.
+const TOUCH_INTERVAL: TimeDelta = TimeDelta::minutes(1);
+
+/// What sessions need from the config file.
+pub struct Settings {
+    pub idle_timeout: Duration,
+    pub max_age: Duration,
+    /// Lowercase GitHub logins; empty means anyone may sign in (FR-AUTH-08).
+    pub allowed_users: BTreeSet<String>,
+    /// Whether browsers reach BuhTig over HTTPS, so that its cookies can be `Secure`
+    /// (NFR-SEC-01). They do but on `http://localhost` (IF-04), where Safari would not
+    /// keep a `Secure` cookie.
+    pub secure: bool,
+}
+
+pub struct Sessions {
+    db: DatabaseConnection,
+    sealer: Sealer,
+    settings: Settings,
+}
+
+/// A GitHub user, as GitHub describes them at sign-in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    pub github_id: i64,
+    pub login: String,
+    pub name: Option<String>,
+    pub avatar_url: String,
+}
+
+/// A signed-in user, and the credential they signed in with.
+pub struct SignedIn {
+    pub user: user::Model,
+    pub sign_in: Secret<String>,
+}
+
+impl Sessions {
+    pub fn new(db: DatabaseConnection, sealer: Sealer, settings: Settings) -> Sessions {
+        Sessions {
+            db,
+            sealer,
+            settings,
+        }
+    }
+
+    /// Whether the GitHub user `login` may sign in (FR-AUTH-08). Logins ignore case.
+    pub fn allows(&self, login: &str) -> bool {
+        let allowed = &self.settings.allowed_users;
+        allowed.is_empty() || allowed.contains(&login.to_ascii_lowercase())
+    }
+
+    /// Whether BuhTig's cookies are `Secure`.
+    pub fn secure(&self) -> bool {
+        self.settings.secure
+    }
+
+    /// Signs the GitHub user `profile` in, with the `token` GitHub issued them, on the
+    /// browser that sent `headers`. Returns the `Set-Cookie` of their new session.
+    ///
+    /// The user is created on their first sign-in, by their GitHub ID, and their login,
+    /// name and avatar are refreshed on every one (FR-AUTH-04). The token is kept
+    /// encrypted (DR-03), in place of the one before. The session the browser had, if any,
+    /// ends: each sign-in gets a new ID (NFR-SEC-01).
+    pub async fn sign_in(
+        &self,
+        profile: Profile,
+        token: &Secret<String>,
+        headers: &HeaderMap,
+    ) -> Result<HeaderValue, DbErr> {
+        self.sign_in_at(profile, token, headers, ChronoUtc::now())
+            .await
+    }
+
+    async fn sign_in_at(
+        &self,
+        profile: Profile,
+        token: &Secret<String>,
+        headers: &HeaderMap,
+        now: DateTimeUtc,
+    ) -> Result<HeaderValue, DbErr> {
+        let txn = self.db.begin().await?;
+        let user = user::ActiveModel {
+            github_id: Set(profile.github_id),
+            login: Set(profile.login),
+            name: Set(profile.name),
+            avatar_url: Set(profile.avatar_url),
+            created_at: Set(now),
+            last_sign_in_at: Set(now),
+            ..Default::default()
+        };
+        let user_id = user::Entity::insert(user)
+            .on_conflict(
+                OnConflict::column(user::Column::GithubId)
+                    .update_columns([
+                        user::Column::Login,
+                        user::Column::Name,
+                        user::Column::AvatarUrl,
+                        user::Column::LastSignInAt,
+                    ])
+                    .to_owned(),
+            )
+            .exec(&txn)
+            .await?
+            .last_insert_id;
+
+        let credential = credential::ActiveModel {
+            user_id: Set(user_id),
+            kind: Set(Kind::SignIn),
+            encrypted_value: Set(self
+                .sealer
+                .seal(token.expose().as_bytes(), &sign_in_context(user_id))),
+            ..Default::default()
+        };
+        credential::Entity::insert(credential)
+            .on_conflict(
+                OnConflict::columns([credential::Column::UserId, credential::Column::Kind])
+                    .update_column(credential::Column::EncryptedValue)
+                    .to_owned(),
+            )
+            .exec(&txn)
+            .await?;
+
+        if let Some(old) = cookies::get(headers, COOKIE) {
+            session::Entity::delete_by_id(id_hash(old))
+                .exec(&txn)
+                .await?;
+        }
+        let id = crypto::random_id();
+        let session = session::ActiveModel {
+            id_hash: Set(id_hash(&id)),
+            user_id: Set(user_id),
+            created_at: Set(now),
+            last_used_at: Set(now),
+            expires_at: Set(after(now, self.settings.max_age).unwrap_or(DateTimeUtc::MAX_UTC)),
+        };
+        session::Entity::insert(session).exec(&txn).await?;
+        txn.commit().await?;
+        Ok(cookies::set(
+            COOKIE,
+            &id,
+            "/",
+            self.settings.max_age,
+            self.settings.secure,
+        ))
+    }
+
+    /// The signed-in user whose session a request carries, unless it has ended. Using a
+    /// session keeps it from ending for another `auth.session_idle_timeout`.
+    pub async fn resolve(&self, headers: &HeaderMap) -> Result<Option<SignedIn>, DbErr> {
+        self.resolve_at(headers, ChronoUtc::now()).await
+    }
+
+    async fn resolve_at(
+        &self,
+        headers: &HeaderMap,
+        now: DateTimeUtc,
+    ) -> Result<Option<SignedIn>, DbErr> {
+        let Some(id) = cookies::get(headers, COOKIE) else {
+            return Ok(None);
+        };
+        let id_hash = id_hash(id);
+        let Some(session) = session::Entity::find_by_id(id_hash.clone())
+            .one(&self.db)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if self.has_ended(&session, now) {
+            session::Entity::delete_by_id(id_hash)
+                .exec(&self.db)
+                .await?;
+            return Ok(None);
+        }
+        // Deleting the user deletes their sessions too, so this is missing only if that
+        // happened since the read above.
+        let Some(user) = user::Entity::find_by_id(session.user_id)
+            .one(&self.db)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !self.allows(&user.login) {
+            info!(
+                user_id = user.id,
+                "signed a user out: access.allowed_users no longer lists them"
+            );
+            end_all(&self.db, user.id).await?;
+            return Ok(None);
+        }
+        let credential = credential::Entity::find()
+            .filter(credential::Column::UserId.eq(user.id))
+            .filter(credential::Column::Kind.eq(Kind::SignIn))
+            .one(&self.db)
+            .await?;
+        let sign_in = credential
+            .as_ref()
+            .and_then(|credential| {
+                self.sealer
+                    .open(&credential.encrypted_value, &sign_in_context(user.id))
+            })
+            .and_then(|token| String::from_utf8(token).ok());
+        let Some(sign_in) = sign_in else {
+            // Missing only if the user was signed out everywhere since the read above.
+            if credential.is_some() {
+                info!(
+                    user_id = user.id,
+                    "signed a user out: their sign-in credential cannot be decrypted, as \
+                     after a change of security.encryption_key"
+                );
+            }
+            end_all(&self.db, user.id).await?;
+            return Ok(None);
+        };
+        if session.last_used_at + TOUCH_INTERVAL <= now {
+            session::Entity::update_many()
+                .col_expr(session::Column::LastUsedAt, Expr::value(now))
+                .filter(session::Column::IdHash.eq(id_hash))
+                .exec(&self.db)
+                .await?;
+        }
+        Ok(Some(SignedIn {
+            user,
+            sign_in: Secret::new(sign_in),
+        }))
+    }
+
+    /// Whether a session has ended (FR-AUTH-06), as housekeeping tells: past its
+    /// `expires_at`, or by the current settings, which may have been shortened since it
+    /// began.
+    fn has_ended(&self, session: &session::Model, now: DateTimeUtc) -> bool {
+        let ends = |at, duration| after(at, duration).is_some_and(|end| end <= now);
+        session.expires_at <= now
+            || ends(session.last_used_at, self.settings.idle_timeout)
+            || ends(session.created_at, self.settings.max_age)
+    }
+
+    /// Ends the session that a request carries, if any (FR-AUTH-07).
+    pub async fn sign_out(&self, headers: &HeaderMap) -> Result<(), DbErr> {
+        if let Some(id) = cookies::get(headers, COOKIE) {
+            session::Entity::delete_by_id(id_hash(id))
+                .exec(&self.db)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// The `Set-Cookie` that removes the session cookie from the browser.
+    pub fn removal(&self) -> HeaderValue {
+        cookies::remove(COOKIE, "/", self.settings.secure)
+    }
+}
+
+/// Signs the user `user_id` out everywhere: ends all their sessions, and forgets the
+/// credential they signed in with, which is of no more use. They sign in again for a new
+/// one. All else of theirs stays.
+pub async fn end_all(db: &DatabaseConnection, user_id: i64) -> Result<(), DbErr> {
+    let txn = db.begin().await?;
+    session::Entity::delete_many()
+        .filter(session::Column::UserId.eq(user_id))
+        .exec(&txn)
+        .await?;
+    credential::Entity::delete_many()
+        .filter(credential::Column::UserId.eq(user_id))
+        .filter(credential::Column::Kind.eq(Kind::SignIn))
+        .exec(&txn)
+        .await?;
+    txn.commit().await
+}
+
+/// What the database keeps of a session ID (DR-02). The ID is random enough that a hash
+/// needs no salt.
+fn id_hash(id: &str) -> Vec<u8> {
+    crypto::sha256(id.as_bytes())
+}
+
+/// What the sign-in credential of the user `user_id` is sealed for, so that it opens for
+/// no other row.
+fn sign_in_context(user_id: i64) -> Vec<u8> {
+    format!("credentials/{user_id}/sign_in").into_bytes()
+}
+
+/// `duration` after `at`, or `None` if that is past any time BuhTig can store.
+fn after(at: DateTimeUtc, duration: Duration) -> Option<DateTimeUtc> {
+    at.checked_add_signed(TimeDelta::from_std(duration).ok()?)
+}
+
+/// Who a request is from: the signed-in user whose session it carries, or else a visitor.
+/// It needs the [`Sessions`] as an extension of the request, as [`crate::web::router`]
+/// adds them, and the peer's address, as a [`Visitor`] does.
+impl<S: Send + Sync> FromRequestParts<S> for Viewer {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Viewer, Response> {
+        let Extension(sessions) = Extension::<Arc<Sessions>>::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        match sessions.resolve(&parts.headers).await {
+            Ok(Some(signed_in)) => Ok(Viewer::SignedIn {
+                user_id: signed_in.user.id,
+                sign_in: signed_in.sign_in,
+            }),
+            Ok(None) => Visitor::from_request_parts(parts, state)
+                .await
+                .map(Viewer::Visitor)
+                .map_err(IntoResponse::into_response),
+            Err(error) => {
+                error!("cannot read the session: {error}");
+                Err(status(StatusCode::SERVICE_UNAVAILABLE))
+            }
+        }
+    }
+}
 
 /// `/-/api/session`: `{"user": null}` for a visitor. For a signed-in user, `{"user":
-/// {"login": …, "name": … or null, "avatar_url": …}}`, once there are any (#22).
-pub async fn current() -> Response {
-    (
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(json!({ "user": null })),
-    )
-        .into_response()
+/// {"login": …, "name": … or null, "avatar_url": …}}`, as GitHub described them when they
+/// last signed in.
+pub async fn current(
+    Extension(sessions): Extension<Arc<Sessions>>,
+    headers: HeaderMap,
+) -> Response {
+    match sessions.resolve(&headers).await {
+        Ok(signed_in) => {
+            let user = signed_in.map(|SignedIn { user, .. }| {
+                json!({
+                    "login": user.login,
+                    "name": user.name,
+                    "avatar_url": user.avatar_url,
+                })
+            });
+            respond(json!({ "user": user }))
+        }
+        Err(error) => {
+            error!("cannot read the session: {error}");
+            status(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
 }
 
 /// `/-/api/shortcuts`: 401 for a visitor, who has none (FR-ACC-02). For a signed-in user,
-/// `{"pins": […], "recent": […]}`, once there are any (#22, #25). Each item is `{"kind":
-/// "repository" | "organization", "name": "owner/repo" | "org"}`. Pins are in the user's
-/// order, and recent dashboards newest first. The UI picks the shortcuts from them.
-pub async fn shortcuts() -> Response {
-    status(StatusCode::UNAUTHORIZED)
+/// `{"pins": […], "recent": […]}`, which are empty until there are pins and history (#25).
+/// Each item is `{"kind": "repository" | "organization", "name": "owner/repo" | "org"}`.
+/// Pins are in the user's order, and recent dashboards newest first. The UI picks the
+/// shortcuts from them.
+pub async fn shortcuts(
+    Extension(sessions): Extension<Arc<Sessions>>,
+    headers: HeaderMap,
+) -> Response {
+    match sessions.resolve(&headers).await {
+        Ok(Some(_)) => respond(json!({ "pins": [], "recent": [] })),
+        Ok(None) => status(StatusCode::UNAUTHORIZED),
+        Err(error) => {
+            error!("cannot read the session: {error}");
+            status(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
+}
+
+fn respond(body: serde_json::Value) -> Response {
+    ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
 }
 
 fn status(status: StatusCode) -> Response {
@@ -33,7 +413,435 @@ fn status(status: StatusCode) -> Response {
 
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
+    use axum::extract::ConnectInfo;
+    use axum::http::Request;
+    use url::Url;
+
+    use sea_orm::SqlxPostgresConnector;
+    use sea_orm::sqlx::postgres::PgPoolOptions;
+
     use super::*;
+    use crate::config::DatabaseConfig;
+    use crate::db;
+    use crate::test_cluster::cluster;
+
+    const KEY: &[u8] = b"a secret of at least thirty-two bytes";
+
+    const DAY: i64 = 24 * 60;
+
+    /// `minutes` after the first sign-in of these tests.
+    fn at(minutes: i64) -> DateTimeUtc {
+        "2026-10-20T12:00:00Z".parse::<DateTimeUtc>().unwrap() + TimeDelta::minutes(minutes)
+    }
+
+    fn settings(allowed_users: &[&str]) -> Settings {
+        Settings {
+            idle_timeout: Duration::from_secs(7 * 24 * 60 * 60),
+            max_age: Duration::from_secs(30 * 24 * 60 * 60),
+            allowed_users: allowed_users
+                .iter()
+                .map(|login| login.to_string())
+                .collect(),
+            secure: true,
+        }
+    }
+
+    /// A database of its own.
+    async fn database() -> DatabaseConnection {
+        let cluster = cluster();
+        let database = cluster.create_database();
+        let db = db::connect(&DatabaseConfig {
+            url: Secret::new(Url::parse(&cluster.url(&database)).unwrap()),
+            max_connections: 5,
+        })
+        .await
+        .unwrap();
+        db::migrate(&db).await.unwrap();
+        db
+    }
+
+    fn sessions(db: &DatabaseConnection, key: &[u8], settings: Settings) -> Sessions {
+        Sessions::new(db.clone(), Sealer::new(key), settings)
+    }
+
+    fn mona() -> Profile {
+        Profile {
+            github_id: 583231,
+            login: "Mona".to_owned(),
+            name: Some("Mona Lisa".to_owned()),
+            avatar_url: "https://avatars.githubusercontent.com/u/583231".to_owned(),
+        }
+    }
+
+    fn token(value: &str) -> Secret<String> {
+        Secret::new(value.to_owned())
+    }
+
+    /// The headers of a request that carries the cookie that `set_cookie` sets.
+    fn carrying(set_cookie: &HeaderValue) -> HeaderMap {
+        let cookie = set_cookie.to_str().unwrap().split(';').next().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, HeaderValue::from_str(cookie).unwrap());
+        headers
+    }
+
+    /// The session ID that `set_cookie` sets.
+    fn id(set_cookie: &HeaderValue) -> String {
+        let cookie = set_cookie.to_str().unwrap().split(';').next().unwrap();
+        cookie.strip_prefix("buhtig_session=").unwrap().to_owned()
+    }
+
+    async fn rows(db: &DatabaseConnection) -> Vec<session::Model> {
+        session::Entity::find().all(db).await.unwrap()
+    }
+
+    async fn sign_in_credentials(db: &DatabaseConnection) -> Vec<credential::Model> {
+        credential::Entity::find()
+            .filter(credential::Column::Kind.eq(Kind::SignIn))
+            .all(db)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn sign_in_keeps_only_a_hash_of_the_session_and_the_token_encrypted() {
+        let db = database().await;
+        let sessions = sessions(&db, KEY, settings(&[]));
+        let cookie = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        let id = id(&cookie);
+        assert_eq!(id.len(), 43);
+        assert!(cookie.is_sensitive());
+        assert_eq!(
+            cookie.to_str().unwrap(),
+            format!("buhtig_session={id}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Lax; Secure")
+        );
+
+        let users = user::Entity::find().all(&db).await.unwrap();
+        assert_eq!(users.len(), 1);
+        let user = &users[0];
+        assert_eq!(
+            (user.github_id, user.login.as_str(), user.name.as_deref()),
+            (583231, "Mona", Some("Mona Lisa"))
+        );
+        assert_eq!((user.created_at, user.last_sign_in_at), (at(0), at(0)));
+
+        let rows = rows(&db).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id_hash, crypto::sha256(id.as_bytes()));
+        assert_eq!(rows[0].user_id, user.id);
+        assert_eq!(
+            (rows[0].created_at, rows[0].last_used_at, rows[0].expires_at),
+            (at(0), at(0), at(30 * DAY))
+        );
+
+        let credentials = sign_in_credentials(&db).await;
+        assert_eq!(credentials.len(), 1);
+        let sealed = &credentials[0].encrypted_value;
+        assert!(!sealed.windows(8).any(|window| window == b"gho_mona"));
+        assert_eq!(
+            Sealer::new(KEY).open(sealed, &sign_in_context(user.id)),
+            Some(b"gho_mona".to_vec())
+        );
+
+        let signed_in = sessions
+            .resolve_at(&carrying(&cookie), at(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(signed_in.user, *user);
+        assert_eq!(signed_in.sign_in.expose(), "gho_mona");
+    }
+
+    #[tokio::test]
+    async fn each_sign_in_refreshes_the_user_and_starts_a_new_session() {
+        let db = database().await;
+        let sessions = sessions(&db, KEY, settings(&[]));
+        let first = sessions
+            .sign_in_at(mona(), &token("gho_first"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        let elsewhere = sessions
+            .sign_in_at(mona(), &token("gho_first"), &HeaderMap::new(), at(1))
+            .await
+            .unwrap();
+        // Mona renamed her account, and took her name off it, since.
+        let renamed = Profile {
+            login: "mona-lisa".to_owned(),
+            name: None,
+            avatar_url: "https://avatars.githubusercontent.com/u/583231?v=4".to_owned(),
+            ..mona()
+        };
+        let second = sessions
+            .sign_in_at(renamed, &token("gho_second"), &carrying(&first), at(10))
+            .await
+            .unwrap();
+        assert_ne!(id(&first), id(&second));
+
+        let users = user::Entity::find().all(&db).await.unwrap();
+        assert_eq!(users.len(), 1);
+        let user = &users[0];
+        assert_eq!(
+            (
+                user.login.as_str(),
+                user.name.as_deref(),
+                user.avatar_url.as_str()
+            ),
+            (
+                "mona-lisa",
+                None,
+                "https://avatars.githubusercontent.com/u/583231?v=4"
+            )
+        );
+        assert_eq!((user.created_at, user.last_sign_in_at), (at(0), at(10)));
+
+        // The browser's old session ended. The one on another browser goes on, with the
+        // new token, which is the only one kept.
+        assert!(
+            sessions
+                .resolve_at(&carrying(&first), at(11))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for cookie in [&second, &elsewhere] {
+            let signed_in = sessions
+                .resolve_at(&carrying(cookie), at(11))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(signed_in.sign_in.expose(), "gho_second");
+        }
+        assert_eq!(rows(&db).await.len(), 2);
+        assert_eq!(sign_in_credentials(&db).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn sessions_end_when_idle_and_at_their_maximum_age() {
+        let db = database().await;
+        let sessions = sessions(&db, KEY, settings(&[]));
+        let resolves = async |cookie: &HeaderValue, minutes| {
+            sessions
+                .resolve_at(&carrying(cookie), at(minutes))
+                .await
+                .unwrap()
+                .is_some()
+        };
+
+        // Used every 6 days, a session lasts 30.
+        let used = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        for days in [6, 12, 18, 24] {
+            assert!(resolves(&used, days * DAY).await, "{days} days");
+        }
+        assert!(resolves(&used, 30 * DAY - 1).await);
+        assert!(!resolves(&used, 30 * DAY).await);
+
+        // Unused for 7 days, it ends.
+        let idle = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        assert!(!resolves(&idle, 7 * DAY).await);
+
+        // Settings shortened since sign-in apply at once.
+        let shortened = sessions_with_max_age(&db, Duration::from_secs(24 * 60 * 60));
+        let older = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        assert!(
+            shortened
+                .resolve_at(&carrying(&older), at(DAY))
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Ended sessions are deleted as they are found.
+        assert!(rows(&db).await.is_empty());
+    }
+
+    fn sessions_with_max_age(db: &DatabaseConnection, max_age: Duration) -> Sessions {
+        sessions(
+            db,
+            KEY,
+            Settings {
+                max_age,
+                ..settings(&[])
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn use_is_recorded_at_most_once_a_minute() {
+        let db = database().await;
+        let sessions = sessions(&db, KEY, settings(&[]));
+        let cookie = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        let last_used = async |now| {
+            sessions
+                .resolve_at(&carrying(&cookie), now)
+                .await
+                .unwrap()
+                .unwrap();
+            rows(&db).await[0].last_used_at
+        };
+        assert_eq!(last_used(at(0) + TimeDelta::seconds(59)).await, at(0));
+        assert_eq!(last_used(at(1)).await, at(1));
+        assert_eq!(last_used(at(1) + TimeDelta::seconds(30)).await, at(1));
+        assert_eq!(last_used(at(5)).await, at(5));
+    }
+
+    #[tokio::test]
+    async fn signing_out_ends_the_session_at_once() {
+        let db = database().await;
+        let sessions = sessions(&db, KEY, settings(&[]));
+        let here = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        let elsewhere = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        sessions.sign_out(&carrying(&here)).await.unwrap();
+        assert!(
+            sessions
+                .resolve_at(&carrying(&here), at(1))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            sessions
+                .resolve_at(&carrying(&elsewhere), at(1))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        // Without a session, there is nothing to end.
+        sessions.sign_out(&HeaderMap::new()).await.unwrap();
+        assert_eq!(
+            sessions.removal(),
+            "buhtig_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_encryption_key_signs_everyone_out() {
+        let db = database().await;
+        let cookie = sessions(&db, KEY, settings(&[]))
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        let rekeyed = sessions(&db, b"another secret of thirty-two bytes", settings(&[]));
+        assert!(
+            rekeyed
+                .resolve_at(&carrying(&cookie), at(1))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(rows(&db).await.is_empty());
+        assert!(sign_in_credentials(&db).await.is_empty());
+        assert_eq!(user::Entity::find().all(&db).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn users_no_longer_allowed_are_signed_out() {
+        let db = database().await;
+        let cookie = sessions(&db, KEY, settings(&["mona"]))
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        let narrowed = sessions(&db, KEY, settings(&["hubot"]));
+        assert!(
+            narrowed
+                .resolve_at(&carrying(&cookie), at(1))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(rows(&db).await.is_empty());
+        assert!(sign_in_credentials(&db).await.is_empty());
+    }
+
+    #[test]
+    fn allowed_users_are_told_apart_ignoring_case() {
+        let db = DatabaseConnection::default();
+        let anyone = sessions(&db, KEY, settings(&[]));
+        assert!(anyone.allows("Mona") && anyone.allows("hubot"));
+        let some = sessions(&db, KEY, settings(&["mona", "octo-cat"]));
+        assert!(some.allows("Mona") && some.allows("MONA") && some.allows("Octo-Cat"));
+        assert!(!some.allows("hubot") && !some.allows("mona-lisa"));
+    }
+
+    /// Who `headers` say a request from 203.0.113.1 is from.
+    async fn viewer(sessions: Sessions, headers: HeaderMap) -> Result<Viewer, Response> {
+        let mut request = Request::new(());
+        *request.headers_mut() = headers;
+        request.extensions_mut().insert(Arc::new(sessions));
+        request.extensions_mut().insert(ConnectInfo(
+            "203.0.113.1:4711".parse::<SocketAddr>().unwrap(),
+        ));
+        let (mut parts, ()) = request.into_parts();
+        Viewer::from_request_parts(&mut parts, &()).await
+    }
+
+    #[tokio::test]
+    async fn requests_without_a_session_are_a_visitors() {
+        let sessions = sessions(&DatabaseConnection::default(), KEY, settings(&[]));
+        let viewer = viewer(sessions, HeaderMap::new()).await.unwrap();
+        assert_eq!(format!("{viewer:?}"), "Visitor(Visitor(203.0.113.1))");
+    }
+
+    /// A database that cannot be reached, which every query fails on at once.
+    fn unreachable_database() -> DatabaseConnection {
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_secs(1))
+            .connect_lazy("postgres://buhtig@127.0.0.1:1/buhtig")
+            .unwrap();
+        SqlxPostgresConnector::from_sqlx_postgres_pool(pool)
+    }
+
+    #[tokio::test]
+    async fn requests_whose_session_cannot_be_read_are_refused() {
+        let sessions = sessions(&unreachable_database(), KEY, settings(&[]));
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, HeaderValue::from_static("buhtig_session=x"));
+        let response = viewer(sessions, headers).await.unwrap_err();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn requests_with_a_session_are_the_signed_in_users() {
+        let db = database().await;
+        let sessions = sessions(&db, KEY, settings(&[]));
+        let cookie = sessions
+            .sign_in(mona(), &token("gho_mona"), &HeaderMap::new())
+            .await
+            .unwrap();
+        let user_id = user::Entity::find().one(&db).await.unwrap().unwrap().id;
+        match viewer(sessions, carrying(&cookie)).await.unwrap() {
+            Viewer::SignedIn {
+                user_id: signed_in,
+                sign_in,
+            } => {
+                assert_eq!(signed_in, user_id);
+                assert_eq!(sign_in.expose(), "gho_mona");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
 
     /// The status, `Cache-Control` and body of a response.
     async fn parts(response: Response) -> (StatusCode, String, String) {
@@ -48,27 +856,41 @@ mod tests {
         (status, cache, String::from_utf8(body.to_vec()).unwrap())
     }
 
-    #[tokio::test]
-    async fn everyone_is_a_visitor_until_sign_in_is_built() {
-        assert_eq!(
-            parts(current().await).await,
-            (
-                StatusCode::OK,
-                "no-store".to_owned(),
-                r#"{"user":null}"#.to_owned()
-            )
-        );
+    fn ok(body: &str) -> (StatusCode, String, String) {
+        (StatusCode::OK, "no-store".to_owned(), body.to_owned())
     }
 
     #[tokio::test]
-    async fn visitors_have_no_shortcuts() {
+    async fn the_ui_is_told_who_is_viewing() {
+        let db = database().await;
+        let sessions = Arc::new(sessions(&db, KEY, settings(&[])));
+        let cookie = sessions
+            .sign_in(mona(), &token("gho_mona"), &HeaderMap::new())
+            .await
+            .unwrap();
+        let current =
+            async |headers| parts(current(Extension(sessions.clone()), headers).await).await;
+        let shortcuts =
+            async |headers| parts(shortcuts(Extension(sessions.clone()), headers).await).await;
+
+        assert_eq!(current(HeaderMap::new()).await, ok(r#"{"user":null}"#));
         assert_eq!(
-            parts(shortcuts().await).await,
+            shortcuts(HeaderMap::new()).await,
             (
                 StatusCode::UNAUTHORIZED,
                 "no-store".to_owned(),
                 String::new()
             )
+        );
+        assert_eq!(
+            current(carrying(&cookie)).await,
+            ok(
+                r#"{"user":{"avatar_url":"https://avatars.githubusercontent.com/u/583231","login":"Mona","name":"Mona Lisa"}}"#
+            )
+        );
+        assert_eq!(
+            shortcuts(carrying(&cookie)).await,
+            ok(r#"{"pins":[],"recent":[]}"#)
         );
     }
 }

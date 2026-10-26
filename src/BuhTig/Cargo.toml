@@ -9,6 +9,9 @@ base64 = "0.22.1"
 # The client for GitHub's API. Its TLS is the rustls and ring that sqlx already uses,
 # configured in `github::https`, so neither aws-lc-rs nor the host's CA files are needed.
 reqwest = { version = "0.13.5", default-features = false, features = ["gzip", "rustls-no-provider"] }
+# Random session IDs, their hashes, and the encryption of stored credentials. TLS already
+# brings it in.
+ring = "0.17.14"
 # The built Angular UI, embedded in release builds and read from disk in debug ones.
 rust-embed = { version = "8.13.0", features = ["mime-guess"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }

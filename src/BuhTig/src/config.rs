@@ -4,11 +4,6 @@
 //! are checked by hand rather than with serde so that every problem is reported at once
 //! under its full `section.key` name, and no message ever echoes a value (FR-CFG-03).
 
-#![allow(
-    dead_code,
-    reason = "settings are read by features still to come (#5, #22, …)"
-)]
-
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io;

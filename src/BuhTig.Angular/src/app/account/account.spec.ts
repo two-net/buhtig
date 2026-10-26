@@ -2,7 +2,9 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
+import { Session } from '../session/session';
 import { Account } from './account';
+import { ENDED } from './messages';
 
 describe('Account', () => {
   let fixture: ComponentFixture<Account>;
@@ -75,6 +77,30 @@ describe('Account', () => {
     avatar()!.click();
     await fixture.whenStable();
     expect(menu()).toBeNull();
+  });
+
+  it('asks a user signed out while the page was open to sign in again (FR-AUTH-09)', async () => {
+    await answer({ user: MONA });
+    TestBed.inject(Session).end();
+    await fixture.whenStable();
+    expect(avatar()).toBeNull();
+    expect(element().querySelector('a')!.textContent?.trim()).toBe('Sign in');
+    expect(element().querySelector('[role="alert"]')!.textContent?.trim()).toBe(ENDED);
+
+    // Put away as the menu is, with a click elsewhere.
+    element().querySelector<HTMLElement>('[role="alert"]')!.click();
+    await fixture.whenStable();
+    expect(element().querySelector('[role="alert"]')).not.toBeNull();
+    document.body.click();
+    await fixture.whenStable();
+    expect(element().querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('tells a visitor of no sign-out', async () => {
+    await answer({ user: null });
+    TestBed.inject(Session).end();
+    await fixture.whenStable();
+    expect(element().querySelector('[role="alert"]')).toBeNull();
   });
 
   it('shows the login alone for a user without a display name', async () => {

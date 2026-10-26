@@ -13,8 +13,8 @@ pub struct Model {
     #[sea_orm(belongs_to, from = "user_id", to = "id", on_delete = "Cascade")]
     pub user: BelongsTo<super::user::Entity>,
     pub created_at: DateTimeUtc,
-    /// Updated on every use: housekeeping deletes a session idle for longer than
-    /// `auth.session_idle_timeout` by this column.
+    /// Updated as the session is used, at most once a minute: housekeeping deletes a
+    /// session idle for longer than `auth.session_idle_timeout` by this column.
     pub last_used_at: DateTimeUtc,
     pub expires_at: DateTimeUtc,
 }

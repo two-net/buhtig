@@ -1,12 +1,14 @@
-import { Component, ElementRef, inject, signal, viewChild } from '@angular/core';
+import { Component, ElementRef, computed, inject, signal, viewChild } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
 import { filter, map } from 'rxjs';
-import { Session } from '../session/session';
+import { Session, signInUrl } from '../session/session';
+import { ENDED } from './messages';
 
 /**
  * The corner that says who is viewing (UI-02, UI-03): "Sign in" for a visitor, or the
- * user's avatar with a menu of Settings and Sign out.
+ * user's avatar with a menu of Settings and Sign out. A user signed out while the page was open
+ * is told so, and asked to sign in again (FR-AUTH-09).
  */
 @Component({
   selector: 'app-account',
@@ -24,8 +26,14 @@ export class Account {
   private readonly router = inject(Router);
   private readonly button = viewChild<ElementRef<HTMLButtonElement>>('button');
 
-  protected readonly user = inject(Session).user;
+  private readonly session = inject(Session);
+  protected readonly user = this.session.user;
   protected readonly open = signal(false);
+
+  protected readonly ENDED = ENDED;
+  /** Whether the note that the user was signed out has been put away. */
+  private readonly dismissed = signal(false);
+  protected readonly ended = computed(() => this.session.ended() && !this.dismissed());
 
   /** Where signing in starts, with the page to return to afterwards (FR-AUTH-05). */
   protected readonly signIn = toSignal(
@@ -40,11 +48,12 @@ export class Account {
     this.open.update((open) => !open);
   }
 
-  /** Closes the menu when a click or the focus lands outside it. */
+  /** Closes the menu, or the note, when a click or the focus lands outside it. */
   protected closeIfOutside(target: EventTarget | null): void {
     // No target is focus leaving the page, which is no reason to close.
     if (target instanceof Node && !this.host.nativeElement.contains(target)) {
       this.open.set(false);
+      this.dismissed.set(this.session.ended());
     }
   }
 
@@ -53,9 +62,6 @@ export class Account {
       this.open.set(false);
       this.button()?.nativeElement.focus();
     }
+    this.dismissed.set(this.session.ended());
   }
-}
-
-function signInUrl(returnTo: string): string {
-  return `/-/auth/sign-in?return_to=${encodeURIComponent(returnTo)}`;
 }

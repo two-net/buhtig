@@ -71,10 +71,9 @@ fn tls() -> Result<rustls::ClientConfig, String> {
 }
 
 impl Transport for Https {
-    fn send(&self, request: Request<()>) -> Sending<'_> {
+    fn send(&self, request: Request<Bytes>) -> Sending<'_> {
         Box::pin(async move {
-            let request = reqwest::Request::try_from(request.map(|()| Bytes::new()))
-                .map_err(describe_error)?;
+            let request = reqwest::Request::try_from(request).map_err(describe_error)?;
             let response = self.0.execute(request).await.map_err(describe_error)?;
             let mut answer = Response::new(Bytes::new());
             *answer.status_mut() = response.status();
@@ -139,8 +138,8 @@ mod tests {
         }
     }
 
-    fn get(url: &str) -> Request<()> {
-        Request::builder().uri(url).body(()).unwrap()
+    fn get(url: &str) -> Request<Bytes> {
+        Request::builder().uri(url).body(Bytes::new()).unwrap()
     }
 
     /// reqwest only finds out at this point whether it takes the TLS configuration, which

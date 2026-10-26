@@ -1,6 +1,9 @@
 mod accounts;
+mod auth;
 mod cache;
 mod config;
+mod cookies;
+mod crypto;
 mod db;
 mod entity;
 mod github;
@@ -33,10 +36,13 @@ use std::time::Duration;
 
 use tracing::{debug, error, info, warn};
 
+use crate::auth::Auth;
 use crate::cache::Cache;
 use crate::config::{AccessMode, Config, LogLevel};
+use crate::crypto::Sealer;
 use crate::health::Health;
 use crate::preview::Previews;
+use crate::session::Sessions;
 
 /// Where the config file is read from unless `--config` says otherwise (FR-CFG-01).
 const DEFAULT_CONFIG_PATH: &str = "BuhTig.toml";
@@ -132,7 +138,7 @@ async fn serve(config: Config) -> ExitCode {
         }
     }
     let github = match github::Client::new(&config.github) {
-        Ok(github) => github,
+        Ok(github) => Arc::new(github),
         Err(error) => {
             error!("{error}");
             return ExitCode::FAILURE;
@@ -140,14 +146,35 @@ async fn serve(config: Config) -> ExitCode {
     };
     let cache = Arc::new(Cache::new(
         db.clone(),
-        Arc::new(github),
+        github.clone(),
         &config.cache,
         &config.limits,
     ));
     // FR-NAV-06. In private mode, visitors see no dashboard (FR-ACC-03), nor a preview.
     let previews = (config.access.mode == AccessMode::Public)
         .then(|| Previews::new(cache.clone(), config.server.public_url.clone()));
-    let app = web::router(Arc::new(Health::new(db.clone())), cache, previews);
+    let sessions = Arc::new(Sessions::new(
+        db.clone(),
+        Sealer::new(config.security.encryption_key.expose()),
+        session::Settings {
+            idle_timeout: config.auth.session_idle_timeout,
+            max_age: config.auth.session_max_age,
+            allowed_users: config.access.allowed_users.clone(),
+            secure: config.server.public_url.scheme() == "https",
+        },
+    ));
+    let auth = Arc::new(Auth::new(
+        sessions.clone(),
+        github,
+        config.server.public_url.clone(),
+    ));
+    let app = web::router(
+        Arc::new(Health::new(db.clone())),
+        cache,
+        previews,
+        sessions,
+        auth,
+    );
 
     let listen = config.server.listen;
     let listener = match tokio::net::TcpListener::bind(listen).await {

@@ -9,6 +9,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "reqwest",
+ "ring",
  "rust-embed",
  "rustls",
  "sea-orm",

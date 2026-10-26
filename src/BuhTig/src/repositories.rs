@@ -20,7 +20,6 @@ use url::Url;
 use crate::accounts::is_account_name;
 use crate::cache::{self, Cache, Cached, Outcome, Viewer};
 use crate::github;
-use crate::visitors::Visitor;
 
 /// The longest repository name GitHub allows.
 const MAX_LENGTH: usize = 100;
@@ -69,16 +68,15 @@ const OPEN_PULLS: &str = "is:pr is:open";
 /// other status means that BuhTig cannot tell now. The dashboard then keeps its URL.
 pub async fn summary(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path((owner, repo)): Path<(String, String)>,
 ) -> Response {
     if !is_account_name(&owner) || !is_repository_name(&repo) {
         return status(StatusCode::BAD_REQUEST);
     }
-    // Everyone is a visitor until sign-in is built (#22). A token user will then read
-    // with their PAT, which may see private repositories (#23). The repository is read
-    // for its dashboard, so a visitor's load of that counts once (FR-DATA-10).
-    let viewer = Viewer::Visitor(visitor);
+    // A token user will read with their PAT, which may see private repositories (#23).
+    // The repository is read for its dashboard, so a visitor's load of that counts once
+    // (FR-DATA-10).
     let cached = match repository(&cache, &viewer, &owner, &repo).await {
         Ok(cached) => cached,
         Err(code) => return status(code),
@@ -131,10 +129,10 @@ pub async fn summary(
 /// to read the rest is 502.
 pub async fn stats(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path((owner, repo)): Path<(String, String)>,
 ) -> Response {
-    let repository = match under(&cache, visitor, &owner, &repo).await {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
@@ -168,10 +166,10 @@ pub async fn stats(
 /// are those of [`stats`].
 pub async fn commit_activity(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path((owner, repo)): Path<(String, String)>,
 ) -> Response {
-    let repository = match under(&cache, visitor, &owner, &repo).await {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
@@ -203,10 +201,10 @@ pub async fn commit_activity(
 /// Its statuses are those of [`commit_activity`].
 pub async fn languages(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path((owner, repo)): Path<(String, String)>,
 ) -> Response {
-    let repository = match under(&cache, visitor, &owner, &repo).await {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
@@ -240,10 +238,10 @@ pub async fn languages(
 /// Its statuses are those of [`commit_activity`].
 pub async fn contributors(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path((owner, repo)): Path<(String, String)>,
 ) -> Response {
-    let repository = match under(&cache, visitor, &owner, &repo).await {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
@@ -294,10 +292,10 @@ pub async fn contributors(
 /// Its statuses are those of [`stats`].
 pub async fn issues(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path((owner, repo)): Path<(String, String)>,
 ) -> Response {
-    let repository = match under(&cache, visitor, &owner, &repo).await {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
@@ -323,10 +321,10 @@ pub async fn issues(
 /// Its statuses are those of [`commit_activity`].
 pub async fn commits(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path((owner, repo)): Path<(String, String)>,
 ) -> Response {
-    let repository = match under(&cache, visitor, &owner, &repo).await {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
@@ -364,10 +362,10 @@ pub async fn commits(
 /// Its statuses are those of [`commit_activity`].
 pub async fn releases(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path((owner, repo)): Path<(String, String)>,
 ) -> Response {
-    let repository = match under(&cache, visitor, &owner, &repo).await {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
@@ -419,19 +417,17 @@ impl Under {
     }
 }
 
-/// The repository `owner/repo`, read for a visitor as [`summary`] reads it, for what is
+/// The repository `owner/repo`, read for the viewer as [`summary`] reads it, for what is
 /// read under it, or the status that says why it cannot be: those of [`summary`].
 async fn under(
     cache: &Cache,
-    visitor: Visitor,
+    viewer: Viewer,
     owner: &str,
     repo: &str,
 ) -> Result<Under, StatusCode> {
     if !is_account_name(owner) || !is_repository_name(repo) {
         return Err(StatusCode::BAD_REQUEST);
     }
-    // As in `summary`.
-    let viewer = Viewer::Visitor(visitor);
     let data = repository(cache, &viewer, owner, repo).await?.data;
     let name = data
         .get("full_name")
@@ -460,12 +456,14 @@ async fn repository(
 }
 
 /// The data the cache had, or the status that says why it had none: 202 while GitHub is
-/// still computing it, for the dashboard to ask again (FR-REPO-10).
+/// still computing it, for the dashboard to ask again (FR-REPO-10), and 401 when GitHub
+/// rejected the credential of the signed-in user, who has been signed out (FR-AUTH-09).
 pub(crate) fn data<T>(result: Result<Outcome<T>, cache::Error>) -> Result<Cached<T>, StatusCode> {
     match result {
         Ok(Outcome::Data(cached)) => Ok(cached),
         Ok(Outcome::Computing) => Err(StatusCode::ACCEPTED),
         Err(cache::Error::GitHub(github::Error::NotFound)) => Err(StatusCode::NOT_FOUND),
+        Err(cache::Error::GitHub(github::Error::BadCredentials)) => Err(StatusCode::UNAUTHORIZED),
         Err(cache::Error::GitHub(_)) => Err(StatusCode::BAD_GATEWAY),
         Err(cache::Error::Held(_)) => Err(StatusCode::TOO_MANY_REQUESTS),
         Err(error @ cache::Error::Database(_)) => {
@@ -783,6 +781,7 @@ mod tests {
     use crate::db;
     use crate::github::stub::{Stub, answer, client};
     use crate::test_cluster::cluster;
+    use crate::visitors::Visitor;
 
     /// `Acme/Widget` as GitHub gives it, with all that its dashboard shows.
     const WIDGET: &str = r#"{
@@ -1133,7 +1132,10 @@ mod tests {
         owner: &str,
         repo: &str,
     ) -> (StatusCode, String) {
-        let visitor = Visitor::of("203.0.113.1".parse().unwrap(), &HeaderMap::new());
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
         let names = Path((owner.to_owned(), repo.to_owned()));
         let cache = State(cache.clone());
         let response = match api {

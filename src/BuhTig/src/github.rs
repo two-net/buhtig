@@ -6,6 +6,11 @@
 //! name a [`Path`] rather than a URL, and the client follows a redirect or a next-page
 //! link only if it stays there. So a credential never goes anywhere else.
 //!
+//! Sign-in is the one exception (IF-02). OAuth's web flow sends the browser to GitHub's
+//! [`Client::authorize_url`], and the code it brings back is then exchanged for the
+//! user's token with a POST to `https://github.com/login/oauth/access_token`
+//! ([`Client::exchange`]), which reads the token and changes nothing on GitHub either.
+//!
 //! It uses REST rather than GraphQL because visitors' requests carry BuhTig's OAuth app
 //! credentials (FR-DATA-02), which GitHub accepts for public data on REST only.
 //!
@@ -29,9 +34,10 @@ use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::http::header::{
-    ACCEPT, AUTHORIZATION, ETAG, IF_NONE_MATCH, LINK, LOCATION, RETRY_AFTER, USER_AGENT,
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, IF_NONE_MATCH, LINK, LOCATION, RETRY_AFTER,
+    USER_AGENT,
 };
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
@@ -44,6 +50,12 @@ use crate::config::{GithubConfig, Secret};
 
 const API: &str = "https://api.github.com";
 const API_HOST: &str = "api.github.com";
+
+/// Where a browser signs in with GitHub.
+const AUTHORIZE: &str = "https://github.com/login/oauth/authorize";
+
+/// Where BuhTig exchanges the code that sign-in gives for the user's token.
+const ACCESS_TOKEN: &str = "https://github.com/login/oauth/access_token";
 
 /// The REST API version BuhTig is written against.
 const API_VERSION: &str = "2022-11-28";
@@ -247,11 +259,14 @@ pub type Sending<'a> = Pin<Box<dyn Future<Output = Result<Response<Bytes>, Error
 /// redirects nor makes anything of the status. Its errors are [`Error::Unreachable`] or
 /// [`Error::Invalid`].
 pub trait Transport: Send + Sync {
-    fn send(&self, request: Request<()>) -> Sending<'_>;
+    fn send(&self, request: Request<Bytes>) -> Sending<'_>;
 }
 
 pub struct Client {
     transport: Arc<dyn Transport>,
+    /// The OAuth app's, for sign-in.
+    client_id: String,
+    client_secret: Secret<String>,
     /// `Basic` with the OAuth app's client ID and secret, for visitors' requests.
     app: HeaderValue,
     /// Set once GitHub rejects the app credentials. Visitors' requests then go without
@@ -343,10 +358,82 @@ impl Client {
         app.set_sensitive(true);
         Client {
             transport,
+            client_id: client_id.to_owned(),
+            client_secret: client_secret.clone(),
             app,
             app_rejected: AtomicBool::new(false),
             limits: Mutex::new(HashMap::new()),
             hasher: RandomState::new(),
+        }
+    }
+
+    /// Where to send a browser to sign in with GitHub (IF-02). GitHub asks the user to let
+    /// BuhTig identify them, and then sends them to `redirect_uri` with a code and `state`.
+    ///
+    /// It asks for no scope, which grants read-only access to public information alone
+    /// (FR-AUTH-02, A-03): neither private repositories nor private organization data, and
+    /// nothing to write.
+    pub fn authorize_url(&self, redirect_uri: &Url, state: &str) -> Url {
+        let mut url = Url::parse(AUTHORIZE).expect("AUTHORIZE is a URL");
+        url.query_pairs_mut()
+            .append_pair("client_id", &self.client_id)
+            .append_pair("redirect_uri", redirect_uri.as_str())
+            .append_pair("state", state);
+        url
+    }
+
+    /// The token of the user who signed in and brought back `code`. GitHub takes a code
+    /// once, for a few minutes, and only with the `redirect_uri` that sign-in started with.
+    ///
+    /// It answers a code it does not take with a 200 that names the problem, such as
+    /// `bad_verification_code`, which becomes [`Error::Invalid`].
+    pub async fn exchange(&self, code: &str, redirect_uri: &Url) -> Result<Secret<String>, Error> {
+        let form = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("client_id", &self.client_id)
+            .append_pair("client_secret", self.client_secret.expose())
+            .append_pair("code", code)
+            .append_pair("redirect_uri", redirect_uri.as_str())
+            .finish();
+        let mut request = Request::new(Bytes::from(form));
+        *request.method_mut() = Method::POST;
+        *request.uri_mut() = ACCESS_TOKEN.parse().expect("ACCESS_TOKEN is a URI");
+        let headers = request.headers_mut();
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+        headers.insert(USER_AGENT, HeaderValue::from_static(AGENT));
+
+        let start = Instant::now();
+        let result = self.transport.send(request).await;
+        let path = "/login/oauth/access_token";
+        match &result {
+            Ok(response) => debug!(
+                path,
+                status = response.status().as_u16(),
+                duration = ?start.elapsed(),
+                "GitHub answered"
+            ),
+            Err(error) => debug!(path, duration = ?start.elapsed(), "{error}"),
+        }
+        let (parts, body) = result?.into_parts();
+        if parts.status != StatusCode::OK {
+            return Err(Error::Status {
+                status: parts.status.as_u16(),
+                message: message(&body),
+            });
+        }
+        let answer: Value = serde_json::from_slice(&body)
+            .map_err(|_| Error::Invalid("the body is not JSON".to_owned()))?;
+        match answer.get("access_token").and_then(Value::as_str) {
+            Some(token) if !token.is_empty() => Ok(Secret::new(token.to_owned())),
+            _ => Err(Error::Invalid(
+                match answer.get("error").and_then(Value::as_str) {
+                    Some(error) => format!("GitHub refused the sign-in code: {error:?}"),
+                    None => "an answer without a token".to_owned(),
+                },
+            )),
         }
     }
 
@@ -560,8 +647,8 @@ impl Client {
         url: &Url,
         etag: Option<&str>,
         with_app: bool,
-    ) -> Result<Request<()>, Error> {
-        let mut request = Request::new(());
+    ) -> Result<Request<Bytes>, Error> {
+        let mut request = Request::new(Bytes::new());
         *request.uri_mut() = url
             .as_str()
             .parse()
@@ -830,10 +917,11 @@ pub mod stub {
     use super::*;
 
     /// How the stub answers a request.
-    type Responder = dyn Fn(&Request<()>) -> Result<Response<Bytes>, Error> + Send + Sync;
+    type Responder = dyn Fn(&Request<Bytes>) -> Result<Response<Bytes>, Error> + Send + Sync;
 
     /// Answers each request from a function of it, and keeps every request it gets. It
-    /// fails the test if a request is not a GET.
+    /// fails the test if a request is not a GET, unless it is sign-in's exchange of a code
+    /// for a token.
     pub struct Stub {
         answer: Box<Responder>,
         requests: Mutex<Vec<(String, HeaderMap)>>,
@@ -841,7 +929,7 @@ pub mod stub {
 
     impl Stub {
         pub fn new(
-            answer: impl Fn(&Request<()>) -> Result<Response<Bytes>, Error> + Send + Sync + 'static,
+            answer: impl Fn(&Request<Bytes>) -> Result<Response<Bytes>, Error> + Send + Sync + 'static,
         ) -> Arc<Stub> {
             Arc::new(Stub {
                 answer: Box::new(answer),
@@ -860,8 +948,13 @@ pub mod stub {
     }
 
     impl Transport for Stub {
-        fn send(&self, request: Request<()>) -> Sending<'_> {
-            assert_eq!(request.method(), "GET", "BuhTig only reads from GitHub");
+        fn send(&self, request: Request<Bytes>) -> Sending<'_> {
+            if request.uri() == ACCESS_TOKEN {
+                assert_eq!(request.method(), "POST", "a code is exchanged with a POST");
+            } else {
+                assert_eq!(request.method(), "GET", "BuhTig only reads from GitHub");
+                assert!(request.body().is_empty(), "a GET has no body");
+            }
             let answer = (self.answer)(&request);
             self.requests
                 .lock()
@@ -915,7 +1008,7 @@ mod tests {
         Credential::Token(Secret::new(value.to_owned()))
     }
 
-    fn authorization(request: &Request<()>) -> Option<&str> {
+    fn authorization(request: &Request<Bytes>) -> Option<&str> {
         header(request.headers(), AUTHORIZATION)
     }
 
@@ -978,6 +1071,105 @@ mod tests {
             assert_eq!(header(headers, USER_AGENT), Some(AGENT));
             assert!(headers[AUTHORIZATION].is_sensitive());
             assert!(!headers.contains_key(IF_NONE_MATCH));
+        }
+    }
+
+    fn callback() -> Url {
+        Url::parse("https://buhtig.example.com/-/auth/callback").unwrap()
+    }
+
+    #[test]
+    fn sign_in_asks_github_for_no_scope() {
+        let client = client(&Stub::new(|_| unreachable!()));
+        let url = client.authorize_url(&callback(), "the-state");
+        assert_eq!(
+            url.as_str(),
+            "https://github.com/login/oauth/authorize?client_id=client-id\
+             &redirect_uri=https%3A%2F%2Fbuhtig.example.com%2F-%2Fauth%2Fcallback\
+             &state=the-state"
+        );
+    }
+
+    #[tokio::test]
+    async fn codes_are_exchanged_for_tokens_with_a_post_to_github_com() {
+        let forms = Arc::new(Mutex::new(Vec::new()));
+        let stub = Stub::new({
+            let forms = forms.clone();
+            move |request| {
+                let form = String::from_utf8(request.body().to_vec()).unwrap();
+                forms.lock().unwrap().push(form);
+                answer(
+                    200,
+                    &[],
+                    r#"{"access_token":"gho_token","token_type":"bearer","scope":""}"#,
+                )
+            }
+        });
+        let client = client(&stub);
+        let token = client.exchange("the-code", &callback()).await.unwrap();
+        assert_eq!(token.expose(), "gho_token");
+
+        assert_eq!(stub.urls(), [ACCESS_TOKEN]);
+        let headers = &stub.requests()[0].1;
+        assert_eq!(header(headers, ACCEPT), Some("application/json"));
+        assert_eq!(
+            header(headers, CONTENT_TYPE),
+            Some("application/x-www-form-urlencoded")
+        );
+        assert_eq!(header(headers, USER_AGENT), Some(AGENT));
+        assert!(!headers.contains_key(AUTHORIZATION));
+        assert_eq!(
+            *forms.lock().unwrap(),
+            [
+                "client_id=client-id&client_secret=client-secret&code=the-code\
+              &redirect_uri=https%3A%2F%2Fbuhtig.example.com%2F-%2Fauth%2Fcallback"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn codes_github_does_not_take_give_no_token() {
+        let stub = Stub::new(|request| {
+            let form = String::from_utf8(request.body().to_vec()).unwrap();
+            match form.split('&').nth(2).unwrap() {
+                "code=used" => answer(
+                    200,
+                    &[],
+                    r#"{"error":"bad_verification_code","error_description":"The code passed is incorrect or expired."}"#,
+                ),
+                "code=empty" => answer(200, &[], r#"{"access_token":""}"#),
+                "code=garbled" => answer(200, &[], "access_token=gho_token"),
+                "code=broken" => answer(503, &[], r#"{"message":"Unavailable"}"#),
+                _ => Err(Error::Unreachable("connection refused".to_owned())),
+            }
+        });
+        let client = client(&stub);
+        for (code, expected) in [
+            (
+                "used",
+                Error::Invalid(
+                    r#"GitHub refused the sign-in code: "bad_verification_code""#.to_owned(),
+                ),
+            ),
+            (
+                "empty",
+                Error::Invalid("an answer without a token".to_owned()),
+            ),
+            ("garbled", Error::Invalid("the body is not JSON".to_owned())),
+            (
+                "broken",
+                Error::Status {
+                    status: 503,
+                    message: Some("Unavailable".to_owned()),
+                },
+            ),
+            ("down", Error::Unreachable("connection refused".to_owned())),
+        ] {
+            assert_eq!(
+                client.exchange(code, &callback()).await.map(|_| ()),
+                Err(expected),
+                "{code}"
+            );
         }
     }
 

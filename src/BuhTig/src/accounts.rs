@@ -14,7 +14,6 @@ use tracing::error;
 
 use crate::cache::{self, Cache, Cached, Outcome, Viewer};
 use crate::github;
-use crate::visitors::Visitor;
 
 /// The longest account name GitHub allows.
 const MAX_LENGTH: usize = 39;
@@ -29,7 +28,7 @@ const MAX_LENGTH: usize = 39;
 /// dashboard anyway, which says why it has no data.
 pub async fn kind(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path(name): Path<String>,
 ) -> Response {
     if !is_account_name(&name) {
@@ -39,7 +38,6 @@ pub async fn kind(
         .expect("an account name is neither empty nor dots");
     // An account's public profile, the same for everyone, so it may be shared. It is read
     // for the dashboard it leads to, so a visitor's load of that counts once (FR-DATA-10).
-    let viewer = Viewer::Visitor(visitor);
     match cache.get(&viewer, &format!("/{name}"), &path).await {
         Ok(Outcome::Data(cached)) => {
             let login = cached.data.get("login").and_then(Value::as_str);
@@ -51,6 +49,10 @@ pub async fn kind(
         }
         Ok(Outcome::Computing) => status(StatusCode::BAD_GATEWAY),
         Err(cache::Error::GitHub(github::Error::NotFound)) => status(StatusCode::NOT_FOUND),
+        // As for a dashboard's data (FR-AUTH-09).
+        Err(cache::Error::GitHub(github::Error::BadCredentials)) => {
+            status(StatusCode::UNAUTHORIZED)
+        }
         Err(cache::Error::GitHub(_)) => status(StatusCode::BAD_GATEWAY),
         Err(cache::Error::Held(_)) => status(StatusCode::TOO_MANY_REQUESTS),
         Err(error @ cache::Error::Database(_)) => {
@@ -102,6 +104,7 @@ mod tests {
     use crate::db;
     use crate::github::stub::{Stub, answer, client};
     use crate::test_cluster::cluster;
+    use crate::visitors::Visitor;
 
     /// A stub GitHub with an organization `Acme`, a user `octocat`, and a few odd answers.
     /// Like GitHub, it ignores the case of names.
@@ -146,7 +149,10 @@ mod tests {
 
     /// The status and body of a visitor's request for `name`'s kind.
     async fn request(cache: &Arc<Cache>, name: &str) -> (StatusCode, String) {
-        let visitor = Visitor::of("203.0.113.1".parse().unwrap(), &HeaderMap::new());
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
         let response = kind(State(cache.clone()), visitor, Path(name.to_owned())).await;
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let status = response.status();

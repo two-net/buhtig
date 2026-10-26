@@ -24,7 +24,6 @@ use crate::github::{self, List};
 use crate::repositories::{
     data, is_repository_name, link, page, respond, status, text, visibility,
 };
-use crate::visitors::Visitor;
 
 /// FR-ORG-04: the languages the chart names. The rest are "Other".
 const LANGUAGES: usize = 8;
@@ -78,13 +77,11 @@ const REPOSITORY_FIELDS: [&str; 13] = [
 /// status means that BuhTig cannot tell now. The dashboard then keeps its URL.
 pub async fn summary(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path(org): Path<String>,
 ) -> Response {
-    // Everyone is a visitor until sign-in is built (#22). A token user will then read with
-    // their PAT (#23). The organization is read for its dashboard, so a visitor's load of
-    // that counts once (FR-DATA-10).
-    let viewer = Viewer::Visitor(visitor);
+    // A token user will read with their PAT (#23). The organization is read for its
+    // dashboard, so a visitor's load of that counts once (FR-DATA-10).
     let cached = match organization(&cache, &viewer, &org).await {
         Ok(cached) => cached,
         Err(code) => return status(code),
@@ -124,10 +121,10 @@ pub async fn summary(
 /// to read its repositories is 502.
 pub async fn stats(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path(org): Path<String>,
 ) -> Response {
-    match listed(&cache, visitor, &org).await {
+    match listed(&cache, viewer, &org).await {
         Ok(list) => respond(figures(&list)),
         Err(code) => status(code),
     }
@@ -151,10 +148,10 @@ pub async fn stats(
 /// Its statuses are those of [`stats`].
 pub async fn repositories(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path(org): Path<String>,
 ) -> Response {
-    match listed(&cache, visitor, &org).await {
+    match listed(&cache, viewer, &org).await {
         Ok(list) => {
             let rows: Vec<Value> = list.items.iter().filter_map(row).collect();
             respond(json!({ "repositories": rows }))
@@ -179,10 +176,10 @@ pub async fn repositories(
 /// Its statuses are those of [`stats`].
 pub async fn languages(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path(org): Path<String>,
 ) -> Response {
-    match listed(&cache, visitor, &org).await {
+    match listed(&cache, viewer, &org).await {
         Ok(list) => respond(language_chart(&list)),
         Err(code) => status(code),
     }
@@ -203,10 +200,10 @@ pub async fn languages(
 /// Its statuses are those of [`stats`].
 pub async fn top_repositories(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path(org): Path<String>,
 ) -> Response {
-    match listed(&cache, visitor, &org).await {
+    match listed(&cache, viewer, &org).await {
         Ok(list) => respond(top(&list)),
         Err(code) => status(code),
     }
@@ -227,10 +224,10 @@ pub async fn top_repositories(
 /// Its statuses are those of [`stats`].
 pub async fn last_push(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path(org): Path<String>,
 ) -> Response {
-    match listed(&cache, visitor, &org).await {
+    match listed(&cache, viewer, &org).await {
         Ok(list) => respond(pushes(&list, ChronoUtc::now())),
         Err(code) => status(code),
     }
@@ -251,10 +248,10 @@ pub async fn last_push(
 /// Its statuses are those of [`stats`].
 pub async fn created_per_year(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path(org): Path<String>,
 ) -> Response {
-    match listed(&cache, visitor, &org).await {
+    match listed(&cache, viewer, &org).await {
         Ok(list) => respond(years(&list, ChronoUtc::now())),
         Err(code) => status(code),
     }
@@ -276,11 +273,9 @@ pub async fn created_per_year(
 /// to read its members, or to count them, is 502.
 pub async fn members(
     State(cache): State<Arc<Cache>>,
-    visitor: Visitor,
+    viewer: Viewer,
     Path(org): Path<String>,
 ) -> Response {
-    // As in `summary`.
-    let viewer = Viewer::Visitor(visitor);
     match member_list(&cache, &viewer, &org).await {
         Ok(body) => respond(body),
         Err(code) => status(code),
@@ -327,9 +322,7 @@ fn members_path(viewer: &Viewer, login: &str) -> github::Path {
 /// reads, those pushed to most recently first, or the status that says why there are none:
 /// those of [`summary`], since it reads the organization first, or 502 if the repositories
 /// cannot be read.
-async fn listed(cache: &Cache, visitor: Visitor, org: &str) -> Result<List, StatusCode> {
-    // As in `summary`.
-    let viewer = Viewer::Visitor(visitor);
+async fn listed(cache: &Cache, viewer: Viewer, org: &str) -> Result<List, StatusCode> {
     let organization = organization(cache, &viewer, org).await?.data;
     let login = login(&organization).ok_or(StatusCode::BAD_GATEWAY)?;
     // By the name GitHub gave, so that the list is cached once whatever case the dashboard
@@ -566,6 +559,7 @@ mod tests {
     use crate::db;
     use crate::github::stub::{Stub, answer, client};
     use crate::test_cluster::cluster;
+    use crate::visitors::Visitor;
 
     /// `Acme` as GitHub gives it, with all that its header shows.
     const ACME: &str = r#"{
@@ -770,7 +764,10 @@ mod tests {
     /// The status and body of a visitor's request to `api` for `org`, as JSON, `null` if
     /// there is none, and without the time of fetching, since it is the time the test ran.
     async fn ask(cache: &Arc<Cache>, api: Api, org: &str) -> (StatusCode, Value) {
-        let visitor = Visitor::of("203.0.113.1".parse().unwrap(), &HeaderMap::new());
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
         let name = Path(org.to_owned());
         let response = match api {
             Api::Summary => summary(State(cache.clone()), visitor, name).await,
@@ -1508,6 +1505,7 @@ mod tests {
             &HeaderMap::new(),
         ));
         let signed_in = Viewer::SignedIn {
+            user_id: 1,
             sign_in: Secret::new("sign-in".to_owned()),
         };
         let token_user = Viewer::TokenUser {

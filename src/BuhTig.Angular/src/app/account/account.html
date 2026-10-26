@@ -30,4 +30,7 @@
   }
 } @else if (user() === null) {
   <a class="sign-in" [href]="signIn()">Sign in</a>
+  @if (ended()) {
+    <p class="ended" role="alert">{{ ENDED }}</p>
+  }
 }
