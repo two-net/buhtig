@@ -28,6 +28,7 @@ use crate::accounts;
 use crate::cache::Cache;
 use crate::health::{self, Health};
 use crate::navigation;
+use crate::organizations;
 use crate::preview::Previews;
 use crate::repositories;
 use crate::session;
@@ -56,6 +57,14 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>, previews: Option<Previews>
         .route(
             "/-/api/accounts/{name}",
             get(accounts::kind).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/organizations/{org}",
+            get(organizations::summary).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/organizations/{org}/stats",
+            get(organizations::stats).with_state(cache.clone()),
         )
         .route(
             "/-/api/repositories/{owner}/{repo}",

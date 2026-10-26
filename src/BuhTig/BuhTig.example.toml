@@ -73,7 +73,9 @@ encryption_key = "CHANGE-ME"
 # retention = "30d"
 
 [limits]
-# Maximum number of repositories analyzed per organization.
+# Maximum number of repositories analyzed per organization: those pushed to
+# most recently, read from GitHub 100 at a time. A larger organization's
+# dashboard says that its figures cover only these.
 # org_repositories = 1000
 # Dashboard loads per visitor per hour that need a fetch from GitHub. Loads
 # served from the cache don't count, and 0 serves visitors from the cache

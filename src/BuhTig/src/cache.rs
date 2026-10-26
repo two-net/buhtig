@@ -17,7 +17,7 @@
 
 #![allow(
     dead_code,
-    reason = "sign-in, tokens and the widgets that read lists are still to come (#18 to #23)"
+    reason = "sign-in, tokens and refreshing are still to come (#22 to #24)"
 )]
 
 use std::collections::HashMap;
@@ -164,6 +164,8 @@ pub struct Cache {
     refreshes: Mutex<HashMap<(Scope, String), DateTimeUtc>>,
     /// How much visitors may still fetch from GitHub (FR-DATA-10, FR-DATA-11).
     visitors: Visitors,
+    /// The most repositories read for an organization (FR-ORG-08).
+    org_repositories: usize,
 }
 
 /// What to read from GitHub.
@@ -176,19 +178,31 @@ enum Fetch<'a> {
     List {
         path: &'a Path,
         limit: usize,
+        /// The members kept of each item, or all of them if there are none.
+        fields: &'a [&'a str],
     },
 }
 
 impl Fetch<'_> {
     /// The `resource_key` of its cache entries, such as `/repos/owner/repo/languages`,
     /// `/repos/owner/repo/releases/latest optional` for a resource that may not exist, or
-    /// `/orgs/org/repos?sort=pushed limit=1000` for a list. A path has no spaces, since
+    /// `/orgs/org/repos?sort=pushed limit=1000` for a list, with ` fields=name,language`
+    /// after it if only those members of each item are kept. A path has no spaces, since
     /// they are percent-encoded, so the kinds of key cannot meet.
     fn key(&self) -> String {
         match self {
             Fetch::One(path) => path.to_string(),
             Fetch::Optional(path) => format!("{path} optional"),
-            Fetch::List { path, limit } => format!("{path} limit={limit}"),
+            Fetch::List {
+                path,
+                limit,
+                fields: [],
+            } => format!("{path} limit={limit}"),
+            Fetch::List {
+                path,
+                limit,
+                fields,
+            } => format!("{path} limit={limit} fields={}", fields.join(",")),
         }
     }
 
@@ -220,10 +234,28 @@ impl Fetch<'_> {
                 }),
                 reply => Ok(reply?.map(|data| optional_value(Some(data)))),
             },
-            Fetch::List { path, limit } => Ok(github
+            Fetch::List { path, limit, .. } => Ok(github
                 .get_list(credential, path, *limit, etag)
                 .await?
                 .map(list_value)),
+        }
+    }
+
+    /// Leaves only the members of each item of a list that it keeps, if it names them.
+    fn trim(&self, data: &mut Value) {
+        let Fetch::List { fields, .. } = self else {
+            return;
+        };
+        if fields.is_empty() {
+            return;
+        }
+        let Some(Value::Array(items)) = data.get_mut("items") else {
+            return;
+        };
+        for item in items {
+            if let Value::Object(item) = item {
+                item.retain(|key, _| fields.contains(&key.as_str()));
+            }
         }
     }
 }
@@ -317,7 +349,14 @@ impl Cache {
             flights: Mutex::default(),
             refreshes: Mutex::default(),
             visitors: Visitors::new(limits.visitor_fetches_per_hour),
+            org_repositories: usize::try_from(limits.org_repositories).unwrap_or(usize::MAX),
         }
+    }
+
+    /// The most repositories that an organization's dashboard reads, the most recently
+    /// pushed (FR-ORG-08): `limits.org_repositories`.
+    pub fn org_repositories(&self) -> usize {
+        self.org_repositories
     }
 
     /// One resource, for a dashboard: its path, such as `/owner/repo` or `/org`
@@ -363,7 +402,22 @@ impl Cache {
         path: &Path,
         limit: usize,
     ) -> Result<Outcome<List>, Error> {
-        self.list(viewer, dashboard, path, limit, &ChronoUtc::now)
+        self.get_list_of(viewer, dashboard, path, limit, &[]).await
+    }
+
+    /// Up to `limit` items of a list, as [`Cache::get_list`], with only the members
+    /// `fields` of each item, so that a long list, such as an organization's repositories,
+    /// is quick to store and to read again (NFR-PERF-03). Whether GitHub marks an item
+    /// private is still told from all that it gave (FR-DATA-04).
+    pub async fn get_list_of(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+        limit: usize,
+        fields: &[&str],
+    ) -> Result<Outcome<List>, Error> {
+        self.list(viewer, dashboard, path, limit, fields, &ChronoUtc::now)
             .await
     }
 
@@ -466,9 +520,14 @@ impl Cache {
         dashboard: &str,
         path: &Path,
         limit: usize,
+        fields: &[&str],
         clock: &Clock,
     ) -> Result<Outcome<List>, Error> {
-        let fetch = Fetch::List { path, limit };
+        let fetch = Fetch::List {
+            path,
+            limit,
+            fields,
+        };
         match self.lookup(viewer, dashboard, fetch, clock).await? {
             Outcome::Computing => Ok(Outcome::Computing),
             Outcome::Data(Cached {
@@ -651,7 +710,10 @@ impl Cache {
         let mut stored_data = true;
         let result = match reply {
             Ok(Reply::Fresh { mut data, etag, .. }) => {
-                if scope == Scope::Shared && marks_private(&data) {
+                // Told before trimming, so that no mark is among what is left out.
+                let private = scope == Scope::Shared && marks_private(&data);
+                fetch.trim(&mut data);
+                if private {
                     // GitHub gave it for this viewer's own credential, so it is theirs to
                     // see, but it must never be served to anyone else.
                     warn!(
@@ -1106,7 +1168,21 @@ mod tests {
             limit: usize,
             now: DateTimeUtc,
         ) -> Result<Outcome<List>, Error> {
-            self.list(viewer, dashboard, path, limit, &move || now)
+            self.get_list_of_at(viewer, dashboard, path, limit, &[], now)
+                .await
+        }
+
+        /// [`Cache::get_list_of`] at `now`.
+        async fn get_list_of_at(
+            &self,
+            viewer: &Viewer,
+            dashboard: &str,
+            path: &Path,
+            limit: usize,
+            fields: &[&str],
+            now: DateTimeUtc,
+        ) -> Result<Outcome<List>, Error> {
+            self.list(viewer, dashboard, path, limit, fields, &move || now)
                 .await
         }
 
@@ -1890,6 +1966,99 @@ mod tests {
             .unwrap();
         assert_eq!(data(get_list(2, at(2)).await).data, two.data);
         assert_eq!(setup.stub.requests().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn lists_may_keep_only_some_fields_of_each_item() {
+        let setup = setup().await;
+        setup.answer(|_| {
+            answer(
+                200,
+                &[],
+                r#"[{"name":"a","language":"Rust","owner":{"login":"org"},"permissions":{"admin":true}},
+                    {"name":"b","stargazers_count":3},
+                    "odd"]"#,
+            )
+        });
+        let repos = path(&["orgs", "org", "repos"]).query("sort", "pushed");
+        let fields = ["name", "language"];
+        let visitor = visitor();
+
+        let trimmed = data(
+            setup
+                .cache
+                .get_list_of_at(&visitor, "/org", &repos, 10, &fields, at(0))
+                .await,
+        );
+        let items = vec![
+            json!({"name": "a", "language": "Rust"}),
+            json!({"name": "b"}),
+            json!("odd"),
+        ];
+        assert_eq!(trimmed.data.items, items);
+        let again = setup
+            .cache
+            .get_list_of_at(&visitor, "/org", &repos, 10, &fields, at(1))
+            .await;
+        assert_eq!(data(again).data.items, items);
+        assert_eq!(setup.stub.requests().len(), 1);
+
+        // The whole list is cached apart.
+        let whole = data(
+            setup
+                .cache
+                .get_list_at(&visitor, "/org", &repos, 10, at(1))
+                .await,
+        );
+        assert_eq!(whole.data.items[0]["owner"]["login"], "org");
+        assert_eq!(setup.stub.requests().len(), 2);
+        let rows = setup.rows().await;
+        let keys: Vec<&str> = rows.iter().map(|row| row.resource_key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "/orgs/org/repos?sort=pushed limit=10 fields=name,language",
+                "/orgs/org/repos?sort=pushed limit=10",
+            ]
+        );
+        assert_eq!(rows[0].data, json!({"items": items, "truncated": false}));
+    }
+
+    #[tokio::test]
+    async fn trimmed_lists_marked_private_stay_out_of_the_shared_cache() {
+        let setup = setup().await;
+        setup.answer(|_| {
+            answer(
+                200,
+                &[],
+                r#"[{"name":"a","private":false},{"name":"b","visibility":"internal"}]"#,
+            )
+        });
+        let repos = path(&["orgs", "org", "repos"]);
+        // What marks the second item is not among what is kept of it.
+        let list = data(
+            setup
+                .cache
+                .get_list_of_at(&visitor(), "/org", &repos, 10, &["name"], at(0))
+                .await,
+        );
+        assert_eq!(
+            list.data.items,
+            [json!({"name": "a"}), json!({"name": "b"})]
+        );
+        assert!(setup.rows().await.is_empty());
+
+        // Fetched with a PAT, it is cached, trimmed, for that user.
+        data(
+            setup
+                .cache
+                .get_list_of_at(&setup.alice(), "/org", &repos, 10, &["name"], at(0))
+                .await,
+        );
+        let rows = setup.rows().await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].scope, format!("user:{}", setup.alice));
+        assert_eq!(rows[0].data["items"], json!([{"name": "a"}, {"name": "b"}]));
     }
 
     #[tokio::test]

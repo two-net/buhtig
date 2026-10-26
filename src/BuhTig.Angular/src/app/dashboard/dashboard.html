@@ -20,14 +20,15 @@
       <app-repository-commits [owner]="repository.owner" [repo]="repository.repo" />
       <app-repository-releases [owner]="repository.owner" [repo]="repository.repo" />
     </div>
-  } @else {
-    <div class="summary">
-      <h1>{{ name() }}</h1>
-      @if (summary()?.fetchedAt; as fetchedAt) {
-        <p class="updated">Updated <app-relative-time [value]="fetchedAt" /></p>
-      }
+  } @else if (organization(); as organization) {
+    <app-organization-header
+      [name]="name()"
+      [organization]="summary()?.organization"
+      [fetchedAt]="summary()?.fetchedAt"
+    />
+    <!-- Laid out as a repository's. Its other widgets are still to come (#19 to #21). -->
+    <div class="grid">
+      <app-organization-stats [org]="organization.org" />
     </div>
-    <!-- The organization's widgets (#18 to #21), laid out as a repository's. -->
-    <div class="grid"></div>
   }
 </main>

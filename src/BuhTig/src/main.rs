@@ -7,6 +7,7 @@ mod github;
 mod health;
 mod housekeeping;
 mod navigation;
+mod organizations;
 mod preview;
 mod repositories;
 mod session;

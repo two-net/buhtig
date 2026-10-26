@@ -1,0 +1,51 @@
+@let details = organization();
+<div class="title">
+  @if (details?.avatarUrl; as avatar) {
+    <img class="avatar" [src]="avatar" alt="" width="40" height="40" />
+  }
+  <h1>{{ title() }}</h1>
+  @if (login(); as login) {
+    <span class="login">{{ login }}</span>
+  }
+  @if (details) {
+    @if (details.verified) {
+      <!-- In words, so that color is not all that tells it (NFR-UX-05). -->
+      <ul class="badges">
+        <li class="badge">Verified</li>
+      </ul>
+    }
+    <a class="github" [href]="'https://github.com/' + details.login">Open on GitHub</a>
+  }
+</div>
+@if (details?.description; as description) {
+  <p class="description">{{ description }}</p>
+}
+<div class="facts">
+  @if (details) {
+    <dl>
+      @if (details.location; as location) {
+        <div>
+          <dt>Location</dt>
+          <dd>{{ location }}</dd>
+        </div>
+      }
+      @if (details.website; as website) {
+        <div>
+          <dt>Website</dt>
+          <dd>
+            <a [href]="website">{{ site() }}</a>
+          </dd>
+        </div>
+      }
+      @if (details.createdAt; as createdAt) {
+        <div>
+          <dt>Created</dt>
+          <dd><app-relative-time [value]="createdAt" /></dd>
+        </div>
+      }
+    </dl>
+  }
+  @if (fetchedAt(); as fetchedAt) {
+    <p class="updated">Updated <app-relative-time [value]="fetchedAt" /></p>
+  }
+</div>

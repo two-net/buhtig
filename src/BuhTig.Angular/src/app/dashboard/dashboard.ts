@@ -3,7 +3,8 @@ import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
 import { Router, RouterLink } from '@angular/router';
 import { map, switchMap } from 'rxjs';
 import { Account } from '../account/account';
-import { RelativeTime } from '../format/relative-time';
+import { OrganizationHeader } from '../organization/header';
+import { OrganizationStats } from '../organization/stats';
 import { RepositoryActivity } from '../repository/activity';
 import { RepositoryCommits } from '../repository/commits';
 import { RepositoryContributors } from '../repository/contributors';
@@ -24,16 +25,19 @@ import { Resources, Summary } from './resources';
  * head shows what else the server says of it (FR-REPO-01), and its stat cards lead the grid
  * (FR-REPO-02), before its commit activity (FR-REPO-03), languages (FR-REPO-04), top
  * contributors (FR-REPO-05), issues and pull requests (FR-REPO-06), recent commits (FR-REPO-07)
- * and releases (FR-REPO-08).
+ * and releases (FR-REPO-08). An organization's head shows what the server says of it
+ * (FR-ORG-01), and its stat cards lead the grid (FR-ORG-02). Its other widgets are still to come
+ * (#19 to #21).
  *
  * Once it knows how GitHub spells the names, it moves there, in place of the URL it was opened
- * at (FR-NAV-04, FR-NAV-05). An organization's widgets are still to come (#18 to #21).
+ * at (FR-NAV-04, FR-NAV-05).
  */
 @Component({
   selector: 'app-dashboard',
   imports: [
     Account,
-    RelativeTime,
+    OrganizationHeader,
+    OrganizationStats,
     RepositoryActivity,
     RepositoryCommits,
     RepositoryContributors,
@@ -68,6 +72,12 @@ export class Dashboard {
   protected readonly repository = computed(() => {
     const resource = this.resource();
     return resource.kind === 'repository' ? resource : undefined;
+  });
+
+  /** The organization's login, as the URL has it, if the dashboard is an organization's. */
+  protected readonly organization = computed(() => {
+    const resource = this.resource();
+    return resource.kind === 'organization' ? resource : undefined;
   });
 
   /** What BuhTig knows of the resource, once it says, for each resource anew. */

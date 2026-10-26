@@ -68,17 +68,25 @@ impl Previews {
                 (name.to_owned(), text(&data, "description"), REPOSITORY)
             }
             Dashboard::Organization { org } => {
-                let data = self.read(path, ["users", org]).await?;
-                // Users have no dashboards (FR-SRCH-06).
-                if data.get("type").and_then(Value::as_str) != Some("Organization") {
-                    return None;
-                }
+                // What the dashboard reads, or else what the search box read before it
+                // opened the dashboard (FR-SRCH-06).
+                let (data, about) = match self.read(path, ["orgs", org]).await {
+                    Some(data) => (data, "description"),
+                    None => {
+                        let data = self.read(path, ["users", org]).await?;
+                        // Users have no dashboards (FR-SRCH-06).
+                        if data.get("type").and_then(Value::as_str) != Some("Organization") {
+                            return None;
+                        }
+                        // GitHub gives an organization's description as its `bio` here.
+                        (data, "bio")
+                    }
+                };
                 let login = data
                     .get("login")
                     .and_then(Value::as_str)
                     .filter(|login| is_account_name(login))?;
-                // GitHub gives an organization's description as its `bio` here.
-                (login.to_owned(), text(&data, "bio"), ORGANIZATION)
+                (login.to_owned(), text(&data, about), ORGANIZATION)
             }
         };
         let url = self.public_url.join(&format!("/{name}")).ok()?;
@@ -218,6 +226,17 @@ mod tests {
                     &format!(r#"{{"full_name": "Acme/long", "description": "{long}"}}"#),
                 ),
                 "/repos/acme/odd" => answer(200, &[], r#"{"full_name": "../evil"}"#),
+                "/orgs/acme" => answer(
+                    200,
+                    &[],
+                    r#"{"login": "Acme", "type": "Organization",
+                        "description": "We make widgets, and more."}"#,
+                ),
+                "/orgs/plain" => answer(
+                    200,
+                    &[],
+                    r#"{"login": "Plain", "type": "Organization", "description": null}"#,
+                ),
                 "/users/acme" => answer(
                     200,
                     &[],
@@ -316,6 +335,24 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn organizations_are_previewed_from_what_their_dashboard_reads() {
+        let stub = github();
+        let (previews, cache) = previews(&stub, Duration::from_secs(15 * 60)).await;
+        view(&cache, "/acme", &["users", "acme"]).await;
+        view(&cache, "/acme", &["orgs", "acme"]).await;
+        view(&cache, "/plain", &["orgs", "plain"]).await;
+        assert_eq!(
+            previews.of("/acme").await,
+            preview("Acme", "We make widgets, and more.")
+        );
+        assert_eq!(
+            previews.of("/plain").await,
+            preview("Plain", "A dashboard of the GitHub organization Plain.")
+        );
+    }
+
+    /// As the search box reads them, before it opens their dashboards.
     #[tokio::test]
     async fn organizations_are_previewed_and_users_are_not() {
         let stub = github();

@@ -461,7 +461,7 @@ async fn repository(
 
 /// The data the cache had, or the status that says why it had none: 202 while GitHub is
 /// still computing it, for the dashboard to ask again (FR-REPO-10).
-fn data<T>(result: Result<Outcome<T>, cache::Error>) -> Result<Cached<T>, StatusCode> {
+pub(crate) fn data<T>(result: Result<Outcome<T>, cache::Error>) -> Result<Cached<T>, StatusCode> {
     match result {
         Ok(Outcome::Data(cached)) => Ok(cached),
         Ok(Outcome::Computing) => Err(StatusCode::ACCEPTED),
@@ -726,7 +726,7 @@ fn names(full_name: &str) -> Option<(&str, &str)> {
 }
 
 /// The text of `data`'s member `key`, unless it is empty.
-fn text<'a>(data: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn text<'a>(data: &'a Value, key: &str) -> Option<&'a str> {
     data.get(key)
         .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
@@ -742,7 +742,7 @@ fn first_text<'a>(data: &'a Value, pointers: &[&str]) -> Option<&'a str> {
 }
 
 /// GitHub's visibility of the repository, from `private` if it gives no other.
-fn visibility(data: &Value) -> &'static str {
+pub(crate) fn visibility(data: &Value) -> &'static str {
     let visibility = data.get("visibility").and_then(Value::as_str);
     match visibility.map(str::to_ascii_lowercase).as_deref() {
         Some("public") => "public",
@@ -755,16 +755,16 @@ fn visibility(data: &Value) -> &'static str {
 
 /// `value` as a URL to link to, if it is an absolute one with one of `schemes`
 /// (NFR-SEC-03).
-fn link(value: Option<&Value>, schemes: &[&str]) -> Option<String> {
+pub(crate) fn link(value: Option<&Value>, schemes: &[&str]) -> Option<String> {
     let url = Url::parse(value?.as_str()?.trim()).ok()?;
     schemes.contains(&url.scheme()).then(|| url.into())
 }
 
-fn respond(body: Value) -> Response {
+pub(crate) fn respond(body: Value) -> Response {
     ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
 }
 
-fn status(status: StatusCode) -> Response {
+pub(crate) fn status(status: StatusCode) -> Response {
     (status, [(header::CACHE_CONTROL, "no-store")]).into_response()
 }
 

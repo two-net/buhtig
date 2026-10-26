@@ -42,9 +42,12 @@ describe('Dashboard', () => {
   const title = () => TestBed.inject(Title).getTitle();
   /** When the dashboard says its data was fetched, if it does. */
   const updated = () => page().querySelector('.updated');
-  /** Whether `request` is for a widget's data, such as `/-/api/repositories/owner/repo/stats`. */
+  /**
+   * Whether `request` is for a widget's data, such as `/-/api/repositories/owner/repo/stats` or
+   * `/-/api/organizations/org/stats`.
+   */
   const isWidget = (request: HttpRequest<unknown>) =>
-    /^\/-\/api\/repositories\/[^/]+\/[^/]+\/[^/]+$/.test(request.url);
+    /^\/-\/api\/(repositories\/[^/]+|organizations)\/[^/]+\/[^/]+$/.test(request.url);
   /** The repository's widgets, in the order of the grid. */
   const WIDGETS = [
     'stats',
@@ -97,20 +100,17 @@ describe('Dashboard', () => {
   });
 
   it("moves to GitHub's spelling of an organization's name (FR-NAV-04)", async () => {
-    await open('/ANGULAR', '/-/api/accounts/ANGULAR', { type: 'organization', login: 'angular' });
+    await open('/ANGULAR', '/-/api/organizations/ANGULAR', { name: 'angular' });
     await vi.waitFor(() => expect(router.url).toBe('/angular'));
-    http.expectOne('/-/api/accounts/angular').flush({ type: 'organization', login: 'angular' });
+    http.expectOne('/-/api/organizations/angular').flush({ name: 'angular' });
     await harness.fixture.whenStable();
     expect(heading()).toBe('angular');
   });
 
   it('keeps the query and fragment as it moves', async () => {
-    await open('/ACME?tab=repositories#top', '/-/api/accounts/ACME', {
-      type: 'organization',
-      login: 'acme',
-    });
+    await open('/ACME?tab=repositories#top', '/-/api/organizations/ACME', { name: 'acme' });
     await vi.waitFor(() => expect(router.url).toBe('/acme?tab=repositories#top'));
-    http.expectOne('/-/api/accounts/acme').flush({ type: 'organization', login: 'acme' });
+    http.expectOne('/-/api/organizations/acme').flush({ name: 'acme' });
   });
 
   it('stays where it is when names are spelled as GitHub spells them', async () => {
@@ -197,7 +197,7 @@ describe('Dashboard', () => {
       .dispatchEvent(new Event('submit', { cancelable: true }));
     http.expectOne('/-/api/accounts/angular').flush({ type: 'organization', login: 'angular' });
     await vi.waitFor(() => expect(router.url).toBe('/angular'));
-    http.expectOne('/-/api/accounts/angular').flush({ type: 'organization', login: 'angular' });
+    http.expectOne('/-/api/organizations/angular').flush({ name: 'angular' });
     await harness.fixture.whenStable();
     expect(heading()).toBe('angular');
     expect(title()).toBe('angular · BuhTig');
@@ -210,11 +210,7 @@ describe('Dashboard', () => {
     const now = new Date('2026-10-22T12:04:30Z');
     vi.useFakeTimers({ now, toFake: ['Date'] });
     const fetchedAt = '2026-10-22T12:00:00.000Z';
-    await open('/acme', '/-/api/accounts/acme', {
-      type: 'organization',
-      login: 'acme',
-      fetched_at: fetchedAt,
-    });
+    await open('/acme', '/-/api/organizations/acme', { name: 'acme', fetched_at: fetchedAt });
     expect(shown(updated()!)).toBe(`Updated ${relativeTime(new Date(fetchedAt), now.getTime())}`);
     expect(updated()!.querySelector('time')!.getAttribute('datetime')).toBe(fetchedAt);
     expect(updated()!.querySelector('[role="tooltip"]')!.textContent).toBe(
@@ -361,9 +357,56 @@ describe('Dashboard', () => {
     http.expectOne('/-/api/repositories/acme/gadget').flush({ name: 'acme/gadget' });
   });
 
-  it("has neither a repository's head nor its widgets for an organization", async () => {
-    await open('/acme', '/-/api/accounts/acme', { type: 'organization', login: 'acme' });
-    expect(page().querySelector('app-repository-header, app-widget')).toBeNull();
-    expect(http.match(isWidget)).toEqual([]);
+  it("heads an organization's dashboard with what the server says of it (FR-ORG-01)", async () => {
+    await open('/Acme', '/-/api/organizations/Acme', {
+      name: 'Acme',
+      fetched_at: '2026-10-22T12:00:00.000Z',
+      avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4',
+      display_name: 'Acme Corporation',
+      description: 'Widgets for everyone',
+      location: 'Springfield',
+      website: 'javascript:alert(1)',
+      created_at: 'yesterday',
+      verified: true,
+    });
+    const header = page().querySelector('app-organization-header')!;
+    expect(heading()).toBe('Acme Corporation');
+    expect(header.querySelector('.login')?.textContent?.trim()).toBe('Acme');
+    expect(header.querySelector('img')!.getAttribute('src')).toBe(
+      'https://avatars.githubusercontent.com/u/1?v=4',
+    );
+    expect(header.querySelector('.badge')?.textContent?.trim()).toBe('Verified');
+    expect(header.querySelector('.description')?.textContent).toBe('Widgets for everyone');
+    // Only what it can show safely (NFR-SEC-03).
+    expect([...header.querySelectorAll('dt')].map((label) => label.textContent?.trim())).toEqual([
+      'Location',
+    ]);
+    expect(header.querySelector('.updated')).not.toBeNull();
+    expect(page().querySelector('app-repository-header')).toBeNull();
+  });
+
+  it("loads an organization's stat cards, not a repository's widgets (FR-ORG-02)", async () => {
+    await harness.navigateByUrl('/acme');
+    const widgets = [...page().querySelectorAll('.grid > * > app-widget')];
+    expect(widgets.map((widget) => widget.parentElement!.tagName.toLowerCase())).toEqual([
+      'app-organization-stats',
+    ]);
+    expect(widgets[0].classList.contains('wide')).toBe(true);
+    expect(http.match(isWidget).map((request) => request.request.url)).toEqual([
+      '/-/api/organizations/acme/stats',
+    ]);
+    http.expectOne('/-/api/organizations/acme').flush({ name: 'acme' });
+  });
+
+  it('shows nothing of an answer that names no such organization', async () => {
+    await open('/acme', '/-/api/organizations/acme', {
+      name: 'acme/widget',
+      display_name: 'Acme Corporation',
+      description: 'Widgets for everyone',
+      verified: true,
+    });
+    const header = page().querySelector('app-organization-header')!;
+    expect(heading()).toBe('acme');
+    expect(header.querySelector('.description, .badge, .github, img, dl')).toBeNull();
   });
 });

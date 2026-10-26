@@ -16,6 +16,8 @@ export interface Summary {
   fetchedAt: Date | undefined;
   /** What a repository's header shows, unless the resource is none, or the answer names none. */
   repository: Repository | undefined;
+  /** What an organization's header shows, unless the resource is none, or the answer names none. */
+  organization: Organization | undefined;
 }
 
 /** What a repository's header shows of it (FR-REPO-01). What GitHub does not say is left out. */
@@ -38,6 +40,43 @@ export interface Repository {
   homepage: string | undefined;
   createdAt: Date | undefined;
   pushedAt: Date | undefined;
+}
+
+/** What an organization's header shows of it (FR-ORG-01). What GitHub does not say is left out. */
+export interface Organization {
+  /** Its login, as GitHub spells it. */
+  login: string;
+  /** An `https` URL. */
+  avatarUrl: string | undefined;
+  /** The name it goes by, if it gives one. */
+  displayName: string | undefined;
+  description: string | undefined;
+  location: string | undefined;
+  /** An `http` or `https` URL, the only kinds BuhTig links to (NFR-SEC-03). */
+  website: string | undefined;
+  createdAt: Date | undefined;
+  /** Whether GitHub has verified it. */
+  verified: boolean;
+}
+
+/** What an organization's stat cards show (FR-ORG-02), of the repositories the viewer may see. */
+export interface OrganizationStats {
+  repositories: number;
+  /** Those of the repositories that are private, which only a token user sees (FR-ORG-09). */
+  private: number;
+  /** Those of the repositories that are internal, which only a token user sees (FR-ORG-09). */
+  internal: number;
+  stars: number;
+  forks: number;
+  /** Issues and pull requests together, as GitHub counts them. */
+  openIssuesAndPullRequests: number;
+  /** The primary language of the most repositories, unless none has one. */
+  topLanguage: string | undefined;
+  /**
+   * Whether the organization has more repositories than BuhTig reads, so that the figures are
+   * of those pushed to most recently, `repositories` of them (FR-ORG-08).
+   */
+  truncated: boolean;
 }
 
 /** What a repository's stat cards show (FR-REPO-02). */
@@ -157,6 +196,7 @@ interface Answer {
   name: string;
   fetched_at?: string;
   repository?: RepositoryAnswer;
+  organization?: OrganizationAnswer;
 }
 
 /** The server's answer about a repository, for its header. */
@@ -176,6 +216,31 @@ interface RepositoryAnswer {
   homepage?: string | null;
   created_at?: string | null;
   pushed_at?: string | null;
+}
+
+/** The server's answer about an organization, for its header. */
+interface OrganizationAnswer {
+  name: string;
+  fetched_at?: string;
+  avatar_url?: string | null;
+  display_name?: string | null;
+  description?: string | null;
+  location?: string | null;
+  website?: string | null;
+  created_at?: string | null;
+  verified?: boolean;
+}
+
+/** The server's answer about an organization, for its stat cards. */
+interface OrganizationStatsAnswer {
+  repositories: number;
+  private: number;
+  internal: number;
+  stars: number;
+  forks: number;
+  open_issues_and_pull_requests: number;
+  top_language: string | null;
+  truncated: boolean;
 }
 
 /** The server's answer about a repository, for its stat cards. */
@@ -263,18 +328,20 @@ export class Resources {
             .get<RepositoryAnswer>(repositoryUrl(resource.owner, resource.repo))
             .pipe(map((repository) => ({ ...repository, repository })))
         : this.http
-            .get<{ login: string; fetched_at?: string }>(
-              `/-/api/accounts/${encodeURIComponent(resource.org)}`,
-            )
-            .pipe(map(({ login, fetched_at }) => ({ name: login, fetched_at })));
+            .get<OrganizationAnswer>(organizationUrl(resource.org))
+            .pipe(map((organization) => ({ ...organization, organization })));
     return answer.pipe(
-      map(({ name, fetched_at, repository }) => {
+      map(({ name, fetched_at, repository, organization }) => {
         const path = canonicalPath(name, resource.kind);
         return {
           path,
           fetchedAt: date(fetched_at),
           repository:
             repository !== undefined && path !== undefined ? header(repository) : undefined,
+          organization:
+            organization !== undefined && path !== undefined
+              ? organizationHeader(organization)
+              : undefined,
         };
       }),
       catchError(() => of(undefined)),
@@ -301,6 +368,22 @@ export class Resources {
             : undefined,
         };
       }),
+    );
+  }
+
+  /** The figures of the stat cards of the organization `org`, which fail as it does. */
+  organizationStats(org: string): Observable<OrganizationStats> {
+    return this.http.get<OrganizationStatsAnswer>(`${organizationUrl(org)}/stats`).pipe(
+      map((stats) => ({
+        repositories: stats.repositories,
+        private: stats.private,
+        internal: stats.internal,
+        stars: stats.stars,
+        forks: stats.forks,
+        openIssuesAndPullRequests: stats.open_issues_and_pull_requests,
+        topLanguage: stats.top_language || undefined,
+        truncated: stats.truncated === true,
+      })),
     );
   }
 
@@ -418,6 +501,10 @@ function repositoryUrl(owner: string, repo: string): string {
   return `/-/api/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 }
 
+function organizationUrl(org: string): string {
+  return `/-/api/organizations/${encodeURIComponent(org)}`;
+}
+
 /**
  * The path of the dashboard of `name`, an `owner/repo` or an `org` as the server gives it, if
  * it is one of a resource of `kind`, and nothing that `parse` would make one of, such as a URL.
@@ -451,6 +538,19 @@ function header(answer: RepositoryAnswer): Repository {
     homepage: link(answer.homepage, ['http:', 'https:']),
     createdAt: date(answer.created_at),
     pushedAt: date(answer.pushed_at),
+  };
+}
+
+function organizationHeader(answer: OrganizationAnswer): Organization {
+  return {
+    login: answer.name,
+    avatarUrl: link(answer.avatar_url, ['https:']),
+    displayName: answer.display_name || undefined,
+    description: answer.description || undefined,
+    location: answer.location || undefined,
+    website: link(answer.website, ['http:', 'https:']),
+    createdAt: date(answer.created_at),
+    verified: answer.verified === true,
   };
 }
 

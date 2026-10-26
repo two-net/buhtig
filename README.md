@@ -69,6 +69,9 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   computes a repository's commit activity when it is first asked for, so its chart may say
   "Calculating on GitHub…" for up to a minute while BuhTig asks again. GitHub does not list
   the contributors of its very largest repositories, and their dashboards say so.
+- **Organizations:** an organization's dashboard reads up to `limits.org_repositories` of
+  its repositories, those pushed to most recently, 100 per request to GitHub. A larger
+  organization's figures cover only those, and its dashboard says so.
 - **Cache:** BuhTig keeps the GitHub data it shows in the database, and serves it for
   `cache.ttl` before it asks GitHub again. While GitHub is unreachable or rate-limited,
   dashboards show the latest data they have, with its age. Data fetched with a user's

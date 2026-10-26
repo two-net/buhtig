@@ -1,0 +1,6 @@
+/* The login beside the name the organization goes by. */
+.login {
+  color: var(--muted);
+  font-size: 1.125rem;
+  overflow-wrap: anywhere;
+}
