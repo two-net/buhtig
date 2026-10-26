@@ -61,9 +61,11 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   the environment, so a proxy that inspects TLS does not work. Visitors' requests carry
   the OAuth app's client ID and secret, which earn a higher rate limit than anonymous
   requests. GitHub ignores a client ID it does not know, so check `github.client_id` if
-  visitors run into the rate limit soon. Repository dashboards also count open pull
-  requests with GitHub's search API, which has a separate, much lower rate limit. When it
-  runs out, the stat cards show cached figures, or an error until it resets. GitHub
+  visitors run into the rate limit soon. Repository dashboards also count issues and pull
+  requests with GitHub's search API, which has a separate, much lower rate limit: up to
+  four searches per repository per `cache.ttl` (open, merged and closed pull requests, and
+  closed issues). When it runs out, the stat cards and the issues and pull requests widget
+  show cached figures, or an error until it resets. GitHub
   computes a repository's commit activity when it is first asked for, so its chart may say
   "Calculating on GitHub…" for up to a minute while BuhTig asks again. GitHub does not list
   the contributors of its very largest repositories, and their dashboards say so.

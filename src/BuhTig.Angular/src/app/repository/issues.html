@@ -1,0 +1,48 @@
+<app-widget heading="Issues &amp; pull requests" empty="No issues or pull requests yet.">
+  <ng-template [appLoaded]="issues" let-issues>
+    <dl>
+      <div>
+        <dt>Issues</dt>
+        @if (issues.issues; as counts) {
+          <dd><app-compact-number [value]="counts.open" /> open</dd>
+          <dd><app-compact-number [value]="counts.closed" /> closed</dd>
+        } @else {
+          <dd class="off">{{ turnedOff }}</dd>
+        }
+      </div>
+      <div>
+        <dt>Pull requests</dt>
+        @if (issues.pullRequests; as counts) {
+          <dd><app-compact-number [value]="counts.open" /> open</dd>
+          <dd><app-compact-number [value]="counts.merged" /> merged</dd>
+          <dd><app-compact-number [value]="counts.closed" /> closed</dd>
+        } @else {
+          <dd class="off">{{ turnedOff }}</dd>
+        }
+      </div>
+    </dl>
+    @if (issues.recent.length > 0) {
+      <ol>
+        @for (item of issues.recent; track item.number) {
+          <li>
+            @if (item.url; as url) {
+              <a class="title" [href]="url">{{ item.title }}</a>
+            } @else {
+              <span class="title">{{ item.title }}</span>
+            }
+            <p class="meta">
+              <span class="state" [attr.data-state]="item.state">{{ issueLabel(item) }}</span>
+              #{{ item.number }}
+              @if (item.createdAt; as createdAt) {
+                opened <app-relative-time [value]="createdAt" />
+              }
+              @if (item.author; as author) {
+                by {{ author }}
+              }
+            </p>
+          </li>
+        }
+      </ol>
+    }
+  </ng-template>
+</app-widget>

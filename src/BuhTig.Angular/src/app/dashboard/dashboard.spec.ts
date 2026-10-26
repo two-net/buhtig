@@ -46,7 +46,15 @@ describe('Dashboard', () => {
   const isWidget = (request: HttpRequest<unknown>) =>
     /^\/-\/api\/repositories\/[^/]+\/[^/]+\/[^/]+$/.test(request.url);
   /** The repository's widgets, in the order of the grid. */
-  const WIDGETS = ['stats', 'commit-activity', 'languages', 'contributors'];
+  const WIDGETS = [
+    'stats',
+    'commit-activity',
+    'languages',
+    'contributors',
+    'issues',
+    'commits',
+    'releases',
+  ];
 
   /** The text that `element` shows, without the tooltips that hover and focus show. */
   function shown(element: Element): string | undefined {
@@ -280,9 +288,15 @@ describe('Dashboard', () => {
       'app-repository-activity',
       'app-repository-languages',
       'app-repository-contributors',
+      'app-repository-issues',
+      'app-repository-commits',
+      'app-repository-releases',
     ]);
     expect(widgets.map((widget) => widget.classList.contains('wide'))).toEqual([
       true,
+      false,
+      false,
+      false,
       false,
       false,
       false,

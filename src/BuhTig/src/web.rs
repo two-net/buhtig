@@ -77,6 +77,18 @@ pub fn router(health: Arc<Health>, cache: Arc<Cache>, previews: Option<Previews>
             "/-/api/repositories/{owner}/{repo}/contributors",
             get(repositories::contributors).with_state(cache.clone()),
         )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/issues",
+            get(repositories::issues).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/commits",
+            get(repositories::commits).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/releases",
+            get(repositories::releases).with_state(cache.clone()),
+        )
         .route("/-/api/session", get(session::current))
         .route("/-/api/shortcuts", get(session::shortcuts))
         .route("/-/api/surprise", get(surprise::pick).with_state(cache))

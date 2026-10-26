@@ -105,6 +105,53 @@ export interface Contributor {
   commits: number;
 }
 
+/** A repository's issues and pull requests (FR-REPO-06). */
+export interface IssuesAndPullRequests {
+  /** Its issues in each state, unless the repository has turned them off on GitHub. */
+  issues: { open: number; closed: number } | undefined;
+  /**
+   * Its pull requests in each state, `closed` being those closed without being merged, unless
+   * the repository has turned them off on GitHub.
+   */
+  pullRequests: { open: number; merged: number; closed: number } | undefined;
+  /** Up to 10, those updated last first. */
+  recent: IssueOrPullRequest[];
+}
+
+export interface IssueOrPullRequest {
+  number: number;
+  title: string;
+  kind: 'issue' | 'pull_request';
+  /** Only a pull request is `merged`. One that is `closed` was not. */
+  state: 'open' | 'closed' | 'merged';
+  /** The login of whoever opened it. */
+  author: string | undefined;
+  /** When it was opened. */
+  createdAt: Date | undefined;
+  /** Its page on GitHub (FR-REPO-12). */
+  url: string | undefined;
+}
+
+/** One of the latest commits on a repository's default branch (FR-REPO-07). */
+export interface Commit {
+  sha: string;
+  /** The first line of its message, unless it has none. */
+  message: string | undefined;
+  /** Its author's GitHub login, or else the name the commit gives. */
+  author: string | undefined;
+  /** When it was committed, which for a commit merged from elsewhere is when it landed. */
+  committedAt: Date | undefined;
+  /** Its page on GitHub (FR-REPO-12). */
+  url: string | undefined;
+}
+
+/** One of a repository's latest releases (FR-REPO-08), which is never a draft. */
+export interface ListedRelease extends Release {
+  /** Its name, unless it only repeats the tag. */
+  name: string | undefined;
+  prerelease: boolean;
+}
+
 /** The server's answer about a repository or an organization. */
 interface Answer {
   name: string;
@@ -161,6 +208,43 @@ interface ContributorsAnswer {
     commits: number;
   }[];
   too_large: boolean;
+}
+
+/** The server's answer about a repository, for its issues and pull requests. */
+interface IssuesAnswer {
+  issues: { open: number; closed: number } | null;
+  pull_requests: { open: number; merged: number; closed: number } | null;
+  recent: {
+    number: number;
+    title: string;
+    kind: string;
+    state: string;
+    author: string | null;
+    created_at: string | null;
+    url: string | null;
+  }[];
+}
+
+/** The server's answer about a repository, for its recent commits. */
+interface CommitsAnswer {
+  commits: {
+    sha: string;
+    message: string | null;
+    author: string | null;
+    committed_at: string | null;
+    url: string | null;
+  }[];
+}
+
+/** The server's answer about a repository, for its releases. */
+interface ReleasesAnswer {
+  releases: {
+    tag: string;
+    name: string | null;
+    published_at: string | null;
+    prerelease: boolean;
+    url: string | null;
+  }[];
 }
 
 /** What BuhTig knows of repositories and organizations as a whole. */
@@ -259,6 +343,58 @@ export class Resources {
         })),
         tooLarge: answer.too_large === true,
       })),
+    );
+  }
+
+  /**
+   * The issues and pull requests of the repository `owner/repo`, which fail as `commitActivity`
+   * does.
+   */
+  issues(owner: string, repo: string): Observable<IssuesAndPullRequests> {
+    return this.part<IssuesAnswer>(owner, repo, 'issues').pipe(
+      map((answer): IssuesAndPullRequests => ({
+        issues: answer.issues ?? undefined,
+        pullRequests: answer.pull_requests ?? undefined,
+        recent: answer.recent.map((item) => ({
+          number: item.number,
+          title: item.title,
+          kind: item.kind === 'pull_request' ? 'pull_request' : 'issue',
+          state: item.state === 'closed' || item.state === 'merged' ? item.state : 'open',
+          author: item.author || undefined,
+          createdAt: date(item.created_at),
+          url: link(item.url, ['https:']),
+        })),
+      })),
+    );
+  }
+
+  /** The latest commits of the repository `owner/repo`, which fail as `commitActivity` does. */
+  commits(owner: string, repo: string): Observable<Commit[]> {
+    return this.part<CommitsAnswer>(owner, repo, 'commits').pipe(
+      map(({ commits }) =>
+        commits.map((commit) => ({
+          sha: commit.sha,
+          message: commit.message || undefined,
+          author: commit.author || undefined,
+          committedAt: date(commit.committed_at),
+          url: link(commit.url, ['https:']),
+        })),
+      ),
+    );
+  }
+
+  /** The latest releases of the repository `owner/repo`, which fail as `commitActivity` does. */
+  releases(owner: string, repo: string): Observable<ListedRelease[]> {
+    return this.part<ReleasesAnswer>(owner, repo, 'releases').pipe(
+      map(({ releases }) =>
+        releases.map((release) => ({
+          tag: release.tag,
+          name: release.name || undefined,
+          publishedAt: date(release.published_at),
+          prerelease: release.prerelease === true,
+          url: link(release.url, ['https:']),
+        })),
+      ),
     );
   }
 

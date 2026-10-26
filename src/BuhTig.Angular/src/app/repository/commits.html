@@ -1,0 +1,27 @@
+<app-widget heading="Recent commits" empty="No commits yet.">
+  <ng-template [appLoaded]="commits" let-commits>
+    <ol>
+      @for (commit of commits; track commit.sha) {
+        <li>
+          @if (commit.url; as url) {
+            <a class="subject" [class.none]="!commit.message" [href]="url">{{
+              commit.message ?? noMessage
+            }}</a>
+          } @else {
+            <span class="subject" [class.none]="!commit.message">{{
+              commit.message ?? noMessage
+            }}</span>
+          }
+          <p class="meta">
+            @if (commit.author; as author) {
+              <span class="author">{{ author }}</span>
+            }
+            @if (commit.committedAt; as committedAt) {
+              committed <app-relative-time [value]="committedAt" />
+            }
+          </p>
+        </li>
+      }
+    </ol>
+  </ng-template>
+</app-widget>

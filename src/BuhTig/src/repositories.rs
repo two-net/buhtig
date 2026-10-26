@@ -1,8 +1,11 @@
 //! What a repository's dashboard shows of the repository as a whole: its header
 //! (FR-REPO-01), with its name as GitHub spells it (FR-NAV-04) and its new one if it was
 //! renamed or transferred (FR-NAV-05), its stat cards (FR-REPO-02), its commit activity
-//! (FR-REPO-03), its languages (FR-REPO-04) and its top contributors (FR-REPO-05).
+//! (FR-REPO-03), its languages (FR-REPO-04), its top contributors (FR-REPO-05), its issues
+//! and pull requests (FR-REPO-06), its recent commits (FR-REPO-07) and its releases
+//! (FR-REPO-08).
 
+use std::future::Future;
 use std::sync::Arc;
 
 use axum::Json;
@@ -30,6 +33,19 @@ const LANGUAGES: usize = 8;
 
 /// FR-REPO-05: the contributors the widget lists.
 const CONTRIBUTORS: usize = 10;
+
+/// FR-REPO-06: the issues and pull requests the widget lists.
+const RECENT: usize = 10;
+
+/// FR-REPO-07: the commits the widget lists.
+const COMMITS: usize = 10;
+
+/// FR-REPO-08: the releases the widget lists.
+const RELEASES: usize = 5;
+
+/// The search for a repository's open pull requests. Its stat cards and its issues and
+/// pull requests widget both count them, so the same search is cached once for both.
+const OPEN_PULLS: &str = "is:pr is:open";
 
 /// `/-/api/repositories/{owner}/{repo}`: what the dashboard's header shows (FR-REPO-01),
 ///
@@ -122,12 +138,7 @@ pub async fn stats(
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
-    // GitHub's search counts pull requests apart from issues, in one request that
-    // returns at most one of them.
-    let pulls = github::Path::new(["search", "issues"])
-        .expect("names are neither empty nor dots")
-        .query("q", &format!("repo:{} is:pr is:open", repository.name))
-        .query("per_page", "1");
+    let pulls = search(&repository.name, OPEN_PULLS);
     let latest = repository.path(&["releases", "latest"]);
     let (pulls, latest) = tokio::join!(
         cache.get(&repository.viewer, &repository.dashboard, &pulls),
@@ -263,6 +274,115 @@ pub async fn contributors(
     respond(json!({ "contributors": contributors, "too_large": false }))
 }
 
+/// `/-/api/repositories/{owner}/{repo}/issues`: how many issues and pull requests the
+/// repository has in each state, and the 10 updated last (FR-REPO-06), latest first,
+///
+/// ```json
+/// {"issues": {"open": …, "closed": …} | null,
+///  "pull_requests": {"open": …, "merged": …, "closed": …} | null,
+///  "recent": [{"number": …, "title": …, "kind": "issue" | "pull_request",
+///              "state": "open" | "closed" | "merged", "author": …, "created_at": …,
+///              "url": …}, …]}
+/// ```
+///
+/// Closed pull requests are those closed without being merged. Open issues are counted as
+/// the stat cards count them, so that the two agree. Issues or pull requests that the
+/// repository has turned off on GitHub are `null`, and are not searched for, beyond the open
+/// pull requests that the stat cards count anyway. `url` is each one's page on GitHub
+/// (FR-REPO-12). What BuhTig does not show or link to is `null` (NFR-SEC-03).
+///
+/// Its statuses are those of [`stats`].
+pub async fn issues(
+    State(cache): State<Arc<Cache>>,
+    visitor: Visitor,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, visitor, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    match issues_and_pulls(&cache, &repository).await {
+        Ok(body) => respond(body),
+        Err(code) => status(code),
+    }
+}
+
+/// `/-/api/repositories/{owner}/{repo}/commits`: the 10 latest commits on the repository's
+/// default branch (FR-REPO-07), latest first,
+///
+/// ```json
+/// {"commits": [{"sha": …, "message": …, "author": …, "committed_at": …, "url": …}, …]}
+/// ```
+///
+/// `message` is the first line of the commit's message. `author` is the GitHub login of its
+/// author, or else the name the commit gives. `committed_at` is when it was committed, which
+/// for a commit merged from elsewhere is when it landed. `url` is its page on GitHub
+/// (FR-REPO-12). What BuhTig does not show or link to is `null` (NFR-SEC-03). An empty
+/// repository has none (FR-REPO-11).
+///
+/// Its statuses are those of [`commit_activity`].
+pub async fn commits(
+    State(cache): State<Arc<Cache>>,
+    visitor: Visitor,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, visitor, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    // Without a branch, GitHub lists the default branch's.
+    let path = repository.path(&["commits"]);
+    let list = cache
+        .get_list(&repository.viewer, &repository.dashboard, &path, COMMITS)
+        .await;
+    let list = match list {
+        // GitHub's answer for the commits of an empty repository.
+        Err(cache::Error::GitHub(github::Error::Status { status: 409, .. })) => {
+            return respond(json!({ "commits": [] }));
+        }
+        list => match data(list) {
+            Ok(list) => list.data,
+            Err(code) => return status(code),
+        },
+    };
+    let commits: Vec<Value> = list.items.iter().filter_map(commit).collect();
+    respond(json!({ "commits": commits }))
+}
+
+/// `/-/api/repositories/{owner}/{repo}/releases`: the repository's 5 latest releases
+/// (FR-REPO-08), latest first,
+///
+/// ```json
+/// {"releases": [{"tag": …, "name": …, "published_at": …, "prerelease": false, "url": …},
+///               …]}
+/// ```
+///
+/// Drafts are left out, as from the stat cards' latest release, and so are releases without
+/// a tag. `name` is `null` when it only repeats the tag. `url` is the release's page on
+/// GitHub (FR-REPO-12). A repository without releases has none.
+///
+/// Its statuses are those of [`commit_activity`].
+pub async fn releases(
+    State(cache): State<Arc<Cache>>,
+    visitor: Visitor,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, visitor, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    let path = repository.path(&["releases"]);
+    let list = cache
+        .get_list(&repository.viewer, &repository.dashboard, &path, RELEASES)
+        .await;
+    let list = match data(list) {
+        Ok(list) => list.data,
+        Err(code) => return status(code),
+    };
+    let releases: Vec<Value> = list.items.iter().filter_map(listed_release).collect();
+    respond(json!({ "releases": releases }))
+}
+
 /// Whether `name` can be a GitHub repository's (FR-SRCH-04): up to 100 letters, digits,
 /// hyphens, underscores and periods, other than `.` and `..`. The search box checks the
 /// same rule, in `search/parse.ts`.
@@ -355,20 +475,110 @@ fn data<T>(result: Result<Outcome<T>, cache::Error>) -> Result<Cached<T>, Status
     }
 }
 
+/// What [`issues`] answers for the repository, or the status that says why it cannot.
+async fn issues_and_pulls(cache: &Cache, repository: &Under) -> Result<Value, StatusCode> {
+    let has_issues = enabled(&repository.data, "has_issues");
+    let has_pulls = enabled(&repository.data, "has_pull_requests");
+    let updated = repository
+        .path(&["issues"])
+        .query("state", "all")
+        .query("sort", "updated")
+        .query("direction", "desc");
+    let (open_pulls, closed_issues, merged_pulls, closed_pulls, recent) = tokio::join!(
+        count(cache, repository, OPEN_PULLS),
+        when(has_issues, count(cache, repository, "is:issue is:closed")),
+        when(has_pulls, count(cache, repository, "is:pr is:merged")),
+        when(
+            has_pulls,
+            count(cache, repository, "is:pr is:closed is:unmerged")
+        ),
+        cache.get_list(&repository.viewer, &repository.dashboard, &updated, RECENT),
+    );
+    let open_pulls = open_pulls?;
+    let issues = match closed_issues.transpose()? {
+        Some(closed) => Some(json!({
+            "open": open_issues(&repository.data, open_pulls).ok_or(StatusCode::BAD_GATEWAY)?,
+            "closed": closed,
+        })),
+        None => None,
+    };
+    let pull_requests = match (merged_pulls.transpose()?, closed_pulls.transpose()?) {
+        (Some(merged), Some(closed)) => Some(json!({
+            "open": open_pulls,
+            "merged": merged,
+            "closed": closed,
+        })),
+        _ => None,
+    };
+    let recent: Vec<Value> = data(recent)?
+        .data
+        .items
+        .iter()
+        .filter_map(recent_item)
+        .collect();
+    Ok(json!({ "issues": issues, "pull_requests": pull_requests, "recent": recent }))
+}
+
+/// How many of the repository's issues or pull requests the search for `qualifiers` finds,
+/// or the status that says why it cannot tell: 502 if GitHub left the count out.
+async fn count(cache: &Cache, repository: &Under, qualifiers: &str) -> Result<u64, StatusCode> {
+    let path = search(&repository.name, qualifiers);
+    let found = data(
+        cache
+            .get(&repository.viewer, &repository.dashboard, &path)
+            .await,
+    )?;
+    total(&found.data).ok_or(StatusCode::BAD_GATEWAY)
+}
+
+/// What `future` comes to, if `enabled`. Otherwise it is never started, so it asks GitHub
+/// nothing.
+async fn when<T>(enabled: bool, future: impl Future<Output = T>) -> Option<T> {
+    if enabled { Some(future.await) } else { None }
+}
+
+/// The search for the issues or pull requests of the repository `name`, as `owner/repo`,
+/// that `qualifiers` pick, such as `is:pr is:open`, for their count. GitHub's search counts
+/// pull requests apart from issues, in one request that returns at most one of them.
+fn search(name: &str, qualifiers: &str) -> github::Path {
+    github::Path::new(["search", "issues"])
+        .expect("names are neither empty nor dots")
+        .query("q", &format!("repo:{name} {qualifiers}"))
+        .query("per_page", "1")
+}
+
 /// The stat cards' figures, from the repository, the search for its open pull requests,
 /// and its latest release, if it has one. `None` if GitHub left a count out.
 fn figures(repository: &Value, pulls: &Value, latest: Option<&Value>) -> Option<Value> {
     let count = |data: &Value, key| data.get(key).and_then(Value::as_u64);
-    let open_pulls = count(pulls, "total_count")?;
+    let open_pulls = total(pulls)?;
     Some(json!({
         "stars": count(repository, "stargazers_count")?,
         "forks": count(repository, "forks_count")?,
         "watchers": count(repository, "subscribers_count")?,
-        // The two counts may have been fetched at different times.
-        "open_issues": count(repository, "open_issues_count")?.saturating_sub(open_pulls),
+        "open_issues": open_issues(repository, open_pulls)?,
         "open_pull_requests": open_pulls,
         "latest_release": latest.and_then(release),
     }))
+}
+
+/// The repository's open issues, without its `open_pulls`, which GitHub counts as open
+/// issues too. `None` if GitHub left its count out.
+fn open_issues(repository: &Value, open_pulls: u64) -> Option<u64> {
+    let open = repository.get("open_issues_count")?.as_u64()?;
+    // The two counts may have been fetched at different times.
+    Some(open.saturating_sub(open_pulls))
+}
+
+/// The count of what a search found. `None` if GitHub left it out.
+fn total(search: &Value) -> Option<u64> {
+    search.get("total_count")?.as_u64()
+}
+
+/// Whether the repository has `feature`, such as `has_issues`, one that GitHub lets it turn
+/// off: unless GitHub says it is off.
+fn enabled(repository: &Value, feature: &str) -> bool {
+    repository.get(feature) != Some(&Value::Bool(false))
 }
 
 /// A release as its stat card shows it, unless it has no tag.
@@ -454,6 +664,54 @@ fn contributor(contributor: &Value) -> Option<(u64, Value)> {
     ))
 }
 
+/// An issue or pull request as the widget lists it, unless GitHub left out its number or
+/// title, or gave it a state that BuhTig does not know.
+fn recent_item(item: &Value) -> Option<Value> {
+    let pull_request = item.get("pull_request").filter(|pull| pull.is_object());
+    let state = match (text(item, "state")?, pull_request) {
+        ("open", _) => "open",
+        ("closed", Some(pull)) if text(pull, "merged_at").is_some() => "merged",
+        ("closed", _) => "closed",
+        _ => return None,
+    };
+    Some(json!({
+        "number": item.get("number")?.as_u64()?,
+        "title": text(item, "title")?,
+        "kind": if pull_request.is_some() { "pull_request" } else { "issue" },
+        "state": state,
+        "author": first_text(item, &["/user/login"]),
+        "created_at": text(item, "created_at"),
+        "url": page(item.get("html_url")),
+    }))
+}
+
+/// A commit as the widget lists it, unless GitHub left out its SHA.
+fn commit(commit: &Value) -> Option<Value> {
+    let message = first_text(commit, &["/commit/message"])
+        .and_then(|message| message.lines().next())
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    Some(json!({
+        "sha": text(commit, "sha")?,
+        "message": message,
+        "author": first_text(commit, &["/author/login", "/commit/author/name"]),
+        "committed_at": first_text(commit, &["/commit/committer/date", "/commit/author/date"]),
+        "url": page(commit.get("html_url")),
+    }))
+}
+
+/// A release as the releases widget lists it, unless it is a draft or has no tag.
+fn listed_release(data: &Value) -> Option<Value> {
+    if data.get("draft") == Some(&Value::Bool(true)) {
+        return None;
+    }
+    let mut listed = release(data)?;
+    let tag = text(data, "tag_name")?;
+    listed["name"] = text(data, "name").filter(|name| *name != tag).into();
+    listed["prerelease"] = (data.get("prerelease") == Some(&Value::Bool(true))).into();
+    Some(listed)
+}
+
 /// `value` as a URL to link to, if it is one of a page on GitHub (FR-REPO-12).
 fn page(value: Option<&Value>) -> Option<String> {
     link(value, &["https"])
@@ -472,6 +730,15 @@ fn text<'a>(data: &'a Value, key: &str) -> Option<&'a str> {
     data.get(key)
         .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
+}
+
+/// The text at the first of `pointers`, such as `/author/login`, that has some in `data`.
+fn first_text<'a>(data: &'a Value, pointers: &[&str]) -> Option<&'a str> {
+    pointers.iter().find_map(|pointer| {
+        data.pointer(pointer)
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+    })
 }
 
 /// GitHub's visibility of the repository, from `private` if it gives no other.
@@ -602,6 +869,61 @@ mod tests {
         {"login": "uncounted"}
     ]"#;
 
+    /// The issues and pull requests of `Acme/Widget` updated last, with some that the widget
+    /// must not show as they are.
+    const ISSUES: &str = r#"[
+        {"number": 50, "title": "Widgets wobble", "state": "open",
+         "user": {"login": "alice"}, "created_at": "2026-10-20T08:00:00Z",
+         "html_url": "https://github.com/Acme/Widget/issues/50"},
+        {"number": 49, "title": "Steady the widgets", "state": "closed", "draft": false,
+         "user": {"login": "bob"}, "created_at": "2026-10-19T08:00:00Z",
+         "html_url": "https://github.com/Acme/Widget/pull/49",
+         "pull_request": {"merged_at": "2026-10-21T08:00:00Z"}},
+        {"number": 48, "title": "Paint the widgets", "state": "closed",
+         "user": {"login": "carol"}, "created_at": "2026-10-18T08:00:00Z",
+         "html_url": "https://github.com/Acme/Widget/pull/48",
+         "pull_request": {"merged_at": null}},
+        {"number": 47, "title": "Widgets are too blue", "state": "closed", "user": null,
+         "html_url": "javascript:alert(1)"},
+        {"number": 46, "title": "Square widgets", "state": "open", "draft": true,
+         "user": {"login": "dave"}, "html_url": "https://evil.example/46",
+         "pull_request": {"merged_at": null}},
+        {"number": 45, "title": "Locked widgets", "state": "locked"},
+        {"title": "Numberless", "state": "open"},
+        {"number": 44, "title": "", "state": "open"}
+    ]"#;
+
+    /// The latest commits on `Acme/Widget`'s default branch, with some that the widget must
+    /// not show as they are.
+    const COMMITS: &str = r#"[
+        {"sha": "a1b2c3d", "html_url": "https://github.com/Acme/Widget/commit/a1b2c3d",
+         "author": {"login": "alice"},
+         "commit": {"message": "Steady the widgets (#49)\n\nThey wobbled.",
+                    "author": {"name": "Alice Example", "date": "2026-10-19T08:00:00Z"},
+                    "committer": {"name": "GitHub", "date": "2026-10-21T08:00:00Z"}}},
+        {"sha": "b2c3d4e", "html_url": "javascript:alert(1)", "author": null,
+         "commit": {"message": "  Fix a typo  \r\nin the widgets",
+                    "author": {"name": "Bob Example", "date": "2026-10-18T08:00:00Z"}}},
+        {"sha": "c3d4e5f", "html_url": "https://evil.example/c3d4e5f",
+         "commit": {"message": "", "author": {"name": ""}}},
+        {"html_url": "https://github.com/Acme/Widget/commit/0", "commit": {"message": "Shaless"}}
+    ]"#;
+
+    /// The latest releases of `Acme/Widget`, a draft among them, with some that the widget
+    /// must not show as they are.
+    const RELEASES: &str = r#"[
+        {"tag_name": "v3.0.0", "name": "Widget 3", "draft": true, "prerelease": false},
+        {"tag_name": "v3.0.0-rc.1", "name": "v3.0.0-rc.1", "draft": false, "prerelease": true,
+         "created_at": "2026-10-10T12:00:00Z", "published_at": "2026-10-11T12:00:00Z",
+         "html_url": "https://github.com/Acme/Widget/releases/tag/v3.0.0-rc.1"},
+        {"tag_name": "v2.1.0", "name": "Widget 2.1", "draft": false, "prerelease": false,
+         "created_at": "2026-09-30T12:00:00Z", "published_at": "2026-10-01T12:00:00Z",
+         "html_url": "https://github.com/Acme/Widget/releases/tag/v2.1.0"},
+        {"tag_name": "v2.0.0", "name": "", "created_at": "2026-06-01T12:00:00Z",
+         "published_at": null, "html_url": "https://evil.example/v2.0.0"},
+        {"tag_name": "", "name": "Tagless"}
+    ]"#;
+
     /// GitHub's last 52 weeks of commit activity for `Acme/Widget`, from the week that
     /// starts on Sunday 2025-10-26, with as many commits in each week as weeks before it.
     fn activity() -> String {
@@ -614,15 +936,20 @@ mod tests {
         Value::from(weeks).to_string()
     }
 
-    /// A stub GitHub with the repositories `Acme/Widget`, `acme/bare` and `acme/odd`, one
-    /// that was renamed to `Acme/Widget`, and a few odd answers. Like GitHub, it ignores
-    /// the case of names in paths.
+    /// A stub GitHub with the repositories `Acme/Widget`, `acme/bare` and `acme/odd`, two
+    /// with issues or pull requests turned off, one that was renamed to `Acme/Widget`, and a
+    /// few odd answers. Like GitHub, it ignores the case of names in paths.
     fn github() -> Arc<Stub> {
         Stub::new(|request| {
             let query: HashMap<String, String> =
                 form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
                     .into_owned()
                     .collect();
+            // A search's answer, with as many found.
+            let found = |count: u64| {
+                let body = json!({"total_count": count, "incomplete_results": false, "items": []});
+                answer(200, &[], &body.to_string())
+            };
             match request.uri().path().to_ascii_lowercase().as_str() {
                 "/repos/acme/widget" | "/repositories/42" => answer(200, &[], WIDGET),
                 "/repos/acme/bare" => answer(200, &[], BARE),
@@ -655,21 +982,56 @@ mod tests {
                     &[],
                     r#"{"message": "The history or contributor list is too large to list contributors for this repository via the API.", "status": "403"}"#,
                 ),
+                // Issues are turned off, and on the other also pull requests.
+                "/repos/acme/mirror" => answer(
+                    200,
+                    &[],
+                    r#"{"full_name": "acme/mirror", "private": false, "open_issues_count": 2,
+                        "has_issues": false, "has_pull_requests": true}"#,
+                ),
+                "/repos/acme/locked" => answer(
+                    200,
+                    &[],
+                    r#"{"full_name": "acme/locked", "private": false, "open_issues_count": 0,
+                        "has_issues": false, "has_pull_requests": false}"#,
+                ),
                 "/repos/acme/widget/stats/commit_activity" => answer(200, &[], &activity()),
                 "/repos/acme/widget/languages" => answer(200, &[], LANGUAGES),
                 "/repos/acme/widget/contributors" => answer(200, &[], CONTRIBUTORS),
+                "/repos/acme/widget/issues" => answer(200, &[], ISSUES),
+                "/repos/acme/widget/commits" => answer(200, &[], COMMITS),
+                "/repos/acme/widget/releases" => answer(200, &[], RELEASES),
+                "/repos/acme/mirror/issues" => answer(
+                    200,
+                    &[],
+                    r#"[{"number": 3, "title": "Mirror the widgets", "state": "open",
+                         "user": {"login": "erin"}, "created_at": "2026-10-22T08:00:00Z",
+                         "html_url": "https://github.com/acme/mirror/pull/3",
+                         "pull_request": {"merged_at": null}}]"#,
+                ),
                 // As for an empty repository.
                 "/repos/acme/bare/stats/commit_activity" | "/repos/acme/bare/contributors" => {
                     answer(204, &[], "")
                 }
                 "/repos/acme/bare/languages" => answer(200, &[], "{}"),
+                "/repos/acme/bare/commits" => answer(
+                    409,
+                    &[],
+                    r#"{"message": "Git Repository is empty.", "status": "409"}"#,
+                ),
+                "/repos/acme/bare/issues"
+                | "/repos/acme/bare/releases"
+                | "/repos/acme/locked/issues" => answer(200, &[], "[]"),
                 "/repos/acme/odd/stats/commit_activity" => answer(
                     200,
                     &[],
                     r#"[{"week": 1761436800, "days": [1, 0, 0, 0, 0, 0, 0]}]"#,
                 ),
                 "/repos/acme/odd/languages" => answer(200, &[], r#"["Rust"]"#),
-                "/repos/acme/odd/contributors" => answer(200, &[], r#"{"login": "alice"}"#),
+                "/repos/acme/odd/contributors"
+                | "/repos/acme/odd/issues"
+                | "/repos/acme/odd/commits"
+                | "/repos/acme/odd/releases" => answer(200, &[], r#"{"login": "alice"}"#),
                 "/repos/acme/nameless" => answer(200, &[], r#"{"private": false}"#),
                 "/repos/acme/broken" => answer(500, &[], r#"{"message": "Server Error"}"#),
                 "/repos/acme/widget/releases/latest" => answer(
@@ -688,11 +1050,18 @@ mod tests {
                         r#"{"total_count": 12, "incomplete_results": false,
                             "items": [{"number": 7, "pull_request": {}}]}"#,
                     ),
-                    Some("repo:acme/bare is:pr is:open") => answer(
-                        200,
-                        &[],
-                        r#"{"total_count": 0, "incomplete_results": false, "items": []}"#,
-                    ),
+                    Some("repo:Acme/Widget is:issue is:closed") => found(120),
+                    Some("repo:Acme/Widget is:pr is:merged") => found(300),
+                    Some("repo:Acme/Widget is:pr is:closed is:unmerged") => found(40),
+                    Some("repo:acme/mirror is:pr is:open") => found(2),
+                    Some("repo:acme/mirror is:pr is:merged") => found(5),
+                    Some("repo:acme/mirror is:pr is:closed is:unmerged") => found(1),
+                    Some(q)
+                        if q.starts_with("repo:acme/bare ")
+                            || q.starts_with("repo:acme/locked ") =>
+                    {
+                        found(0)
+                    }
                     Some("repo:acme/racy is:pr is:open") => answer(
                         200,
                         &[],
@@ -739,15 +1108,21 @@ mod tests {
         CommitActivity,
         Languages,
         Contributors,
+        Issues,
+        Commits,
+        Releases,
     }
 
     impl Api {
-        const ALL: [Api; 5] = [
+        const ALL: [Api; 8] = [
             Api::Summary,
             Api::Stats,
             Api::CommitActivity,
             Api::Languages,
             Api::Contributors,
+            Api::Issues,
+            Api::Commits,
+            Api::Releases,
         ];
     }
 
@@ -767,6 +1142,9 @@ mod tests {
             Api::CommitActivity => commit_activity(cache, visitor, names).await,
             Api::Languages => languages(cache, visitor, names).await,
             Api::Contributors => contributors(cache, visitor, names).await,
+            Api::Issues => issues(cache, visitor, names).await,
+            Api::Commits => commits(cache, visitor, names).await,
+            Api::Releases => releases(cache, visitor, names).await,
         };
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let status = response.status();
@@ -1208,7 +1586,244 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_empty_repository_has_nothing_to_chart() {
+    async fn issues_and_pull_requests_are_counted_by_state_and_the_latest_listed() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Issues, "acme", "widget").await,
+            (
+                StatusCode::OK,
+                json!({
+                    // Open issues as the stat cards count them.
+                    "issues": {"open": 33, "closed": 120},
+                    // Closed without being merged.
+                    "pull_requests": {"open": 12, "merged": 300, "closed": 40},
+                    "recent": [
+                        {
+                            "number": 50,
+                            "title": "Widgets wobble",
+                            "kind": "issue",
+                            "state": "open",
+                            "author": "alice",
+                            "created_at": "2026-10-20T08:00:00Z",
+                            "url": "https://github.com/Acme/Widget/issues/50",
+                        },
+                        {
+                            "number": 49,
+                            "title": "Steady the widgets",
+                            "kind": "pull_request",
+                            "state": "merged",
+                            "author": "bob",
+                            "created_at": "2026-10-19T08:00:00Z",
+                            "url": "https://github.com/Acme/Widget/pull/49",
+                        },
+                        {
+                            "number": 48,
+                            "title": "Paint the widgets",
+                            "kind": "pull_request",
+                            "state": "closed",
+                            "author": "carol",
+                            "created_at": "2026-10-18T08:00:00Z",
+                            "url": "https://github.com/Acme/Widget/pull/48",
+                        },
+                        // Links only to GitHub's pages.
+                        {
+                            "number": 47,
+                            "title": "Widgets are too blue",
+                            "kind": "issue",
+                            "state": "closed",
+                            "author": null,
+                            "created_at": null,
+                            "url": null,
+                        },
+                        // A draft is open, as the counts have it.
+                        {
+                            "number": 46,
+                            "title": "Square widgets",
+                            "kind": "pull_request",
+                            "state": "open",
+                            "author": "dave",
+                            "created_at": null,
+                            "url": null,
+                        },
+                    ],
+                })
+            )
+        );
+        assert!(
+            stub.urls().contains(
+                &"https://api.github.com/repos/Acme/Widget/issues?state=all&sort=updated&direction=desc&per_page=10"
+                    .to_owned()
+            ),
+            "{:?}",
+            stub.urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_open_pull_requests_are_searched_once_for_stats_and_issues() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Stats, "acme", "widget").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            ask(&cache, Api::Issues, "acme", "widget").await.0,
+            StatusCode::OK
+        );
+        let open = "https://api.github.com/search/issues?q=repo%3AAcme%2FWidget+is%3Apr+is%3Aopen&per_page=1";
+        let asked = stub.urls();
+        assert_eq!(
+            asked.iter().filter(|url| *url == open).count(),
+            1,
+            "{asked:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn features_turned_off_are_said_to_be_and_not_searched() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Issues, "acme", "mirror").await,
+            (
+                StatusCode::OK,
+                json!({
+                    "issues": null,
+                    "pull_requests": {"open": 2, "merged": 5, "closed": 1},
+                    // GitHub lists pull requests with issues, even with issues turned off.
+                    "recent": [{
+                        "number": 3,
+                        "title": "Mirror the widgets",
+                        "kind": "pull_request",
+                        "state": "open",
+                        "author": "erin",
+                        "created_at": "2026-10-22T08:00:00Z",
+                        "url": "https://github.com/acme/mirror/pull/3",
+                    }],
+                })
+            )
+        );
+        assert_eq!(
+            ask(&cache, Api::Issues, "acme", "locked").await,
+            (
+                StatusCode::OK,
+                json!({"issues": null, "pull_requests": null, "recent": []})
+            )
+        );
+        let mut searches: Vec<String> = stub
+            .urls()
+            .into_iter()
+            .filter(|url| url.contains("/search/"))
+            .collect();
+        searches.sort();
+        // Open pull requests are searched for all the same, as the stat cards search them.
+        assert_eq!(
+            searches,
+            [
+                "https://api.github.com/search/issues?q=repo%3Aacme%2Flocked+is%3Apr+is%3Aopen&per_page=1",
+                "https://api.github.com/search/issues?q=repo%3Aacme%2Fmirror+is%3Apr+is%3Aclosed+is%3Aunmerged&per_page=1",
+                "https://api.github.com/search/issues?q=repo%3Aacme%2Fmirror+is%3Apr+is%3Amerged&per_page=1",
+                "https://api.github.com/search/issues?q=repo%3Aacme%2Fmirror+is%3Apr+is%3Aopen&per_page=1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn commits_show_their_first_line_author_and_time() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Commits, "acme", "widget").await,
+            (
+                StatusCode::OK,
+                json!({
+                    "commits": [
+                        // When it landed, by the account of who wrote it.
+                        {
+                            "sha": "a1b2c3d",
+                            "message": "Steady the widgets (#49)",
+                            "author": "alice",
+                            "committed_at": "2026-10-21T08:00:00Z",
+                            "url": "https://github.com/Acme/Widget/commit/a1b2c3d",
+                        },
+                        // By the name in the commit, without an account on GitHub.
+                        {
+                            "sha": "b2c3d4e",
+                            "message": "Fix a typo",
+                            "author": "Bob Example",
+                            "committed_at": "2026-10-18T08:00:00Z",
+                            "url": null,
+                        },
+                        {
+                            "sha": "c3d4e5f",
+                            "message": null,
+                            "author": null,
+                            "committed_at": null,
+                            "url": null,
+                        },
+                    ],
+                })
+            )
+        );
+        // The default branch's, under the names of the repository it was renamed to.
+        assert!(
+            stub.urls().contains(
+                &"https://api.github.com/repos/Acme/Widget/commits?per_page=10".to_owned()
+            ),
+            "{:?}",
+            stub.urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn releases_are_the_latest_without_drafts() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Releases, "acme", "widget").await,
+            (
+                StatusCode::OK,
+                json!({
+                    "releases": [
+                        // Its name only repeats its tag.
+                        {
+                            "tag": "v3.0.0-rc.1",
+                            "name": null,
+                            "published_at": "2026-10-11T12:00:00Z",
+                            "prerelease": true,
+                            "url": "https://github.com/Acme/Widget/releases/tag/v3.0.0-rc.1",
+                        },
+                        {
+                            "tag": "v2.1.0",
+                            "name": "Widget 2.1",
+                            "published_at": "2026-10-01T12:00:00Z",
+                            "prerelease": false,
+                            "url": "https://github.com/Acme/Widget/releases/tag/v2.1.0",
+                        },
+                        {
+                            "tag": "v2.0.0",
+                            "name": null,
+                            "published_at": "2026-06-01T12:00:00Z",
+                            "prerelease": false,
+                            "url": null,
+                        },
+                    ],
+                })
+            )
+        );
+        assert!(
+            stub.urls().contains(
+                &"https://api.github.com/repos/Acme/Widget/releases?per_page=5".to_owned()
+            ),
+            "{:?}",
+            stub.urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_repository_has_nothing_to_show() {
         let stub = github();
         let cache = cache(&stub, 30).await;
         assert_eq!(
@@ -1225,6 +1840,25 @@ mod tests {
                 StatusCode::OK,
                 json!({"contributors": [], "too_large": false})
             )
+        );
+        assert_eq!(
+            ask(&cache, Api::Issues, "acme", "bare").await,
+            (
+                StatusCode::OK,
+                json!({
+                    "issues": {"open": 0, "closed": 0},
+                    "pull_requests": {"open": 0, "merged": 0, "closed": 0},
+                    "recent": [],
+                })
+            )
+        );
+        assert_eq!(
+            ask(&cache, Api::Commits, "acme", "bare").await,
+            (StatusCode::OK, json!({"commits": []}))
+        );
+        assert_eq!(
+            ask(&cache, Api::Releases, "acme", "bare").await,
+            (StatusCode::OK, json!({"releases": []}))
         );
     }
 
@@ -1246,11 +1880,21 @@ mod tests {
                 );
             }
         }
-        assert_eq!(
-            ask(&cache, Api::Stats, "acme", "unsearchable").await.0,
-            StatusCode::BAD_GATEWAY
-        );
-        for api in [Api::CommitActivity, Api::Languages, Api::Contributors] {
+        for api in [Api::Stats, Api::Issues] {
+            assert_eq!(
+                ask(&cache, api, "acme", "unsearchable").await.0,
+                StatusCode::BAD_GATEWAY,
+                "{api:?}"
+            );
+        }
+        for api in [
+            Api::CommitActivity,
+            Api::Languages,
+            Api::Contributors,
+            Api::Issues,
+            Api::Commits,
+            Api::Releases,
+        ] {
             assert_eq!(
                 ask(&cache, api, "acme", "odd").await.0,
                 StatusCode::BAD_GATEWAY,

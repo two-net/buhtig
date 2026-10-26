@@ -1,0 +1,52 @@
+/* The widget within is the grid's item (UI-05). */
+:host {
+  display: contents;
+}
+
+ol {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+li {
+  min-width: 0;
+}
+
+.subject {
+  display: block;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.subject {
+  text-decoration: none;
+}
+
+a.subject:hover {
+  text-decoration: underline;
+}
+
+.subject.none {
+  font-style: italic;
+  font-weight: 400;
+}
+
+span.subject.none {
+  color: var(--muted);
+}
+
+.meta {
+  margin: 0.125rem 0 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.author {
+  color: var(--text);
+  font-weight: 600;
+}

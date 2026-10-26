@@ -5,9 +5,12 @@ import { map, switchMap } from 'rxjs';
 import { Account } from '../account/account';
 import { RelativeTime } from '../format/relative-time';
 import { RepositoryActivity } from '../repository/activity';
+import { RepositoryCommits } from '../repository/commits';
 import { RepositoryContributors } from '../repository/contributors';
 import { RepositoryHeader } from '../repository/header';
+import { RepositoryIssues } from '../repository/issues';
 import { RepositoryLanguages } from '../repository/languages';
+import { RepositoryReleases } from '../repository/releases';
 import { RepositoryStats } from '../repository/stats';
 import { Search } from '../search/search';
 import { Resource, dashboardPath } from '../search/parse';
@@ -19,11 +22,12 @@ import { Resources, Summary } from './resources';
  * filled in with the resource, and "Sign in" or the avatar menu (UI-03), then the resource,
  * when its data was fetched (FR-DATA-06), and its widgets in a grid (UI-05). A repository's
  * head shows what else the server says of it (FR-REPO-01), and its stat cards lead the grid
- * (FR-REPO-02), before its commit activity (FR-REPO-03), languages (FR-REPO-04) and top
- * contributors (FR-REPO-05).
+ * (FR-REPO-02), before its commit activity (FR-REPO-03), languages (FR-REPO-04), top
+ * contributors (FR-REPO-05), issues and pull requests (FR-REPO-06), recent commits (FR-REPO-07)
+ * and releases (FR-REPO-08).
  *
  * Once it knows how GitHub spells the names, it moves there, in place of the URL it was opened
- * at (FR-NAV-04, FR-NAV-05). The other widgets are still to come (#17 to #20).
+ * at (FR-NAV-04, FR-NAV-05). An organization's widgets are still to come (#18 to #21).
  */
 @Component({
   selector: 'app-dashboard',
@@ -31,9 +35,12 @@ import { Resources, Summary } from './resources';
     Account,
     RelativeTime,
     RepositoryActivity,
+    RepositoryCommits,
     RepositoryContributors,
     RepositoryHeader,
+    RepositoryIssues,
     RepositoryLanguages,
+    RepositoryReleases,
     RepositoryStats,
     RouterLink,
     Search,
