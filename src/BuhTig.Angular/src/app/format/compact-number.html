@@ -1,5 +1,11 @@
-@if (compact() === exact()) {
-  {{ exact() }}
-} @else {
-  <app-exact [value]="exact()">{{ compact() }}</app-exact>
+<!-- While it counts up, the value keeps its room, unseen, for assistive technology to read. -->
+<span [class.final]="counted() !== undefined">
+  @if (compact() === exact()) {
+    {{ exact() }}
+  } @else {
+    <app-exact [value]="exact()">{{ compact() }}</app-exact>
+  }
+</span>
+@if (counted(); as counted) {
+  <span class="count" aria-hidden="true">{{ counted }}</span>
 }

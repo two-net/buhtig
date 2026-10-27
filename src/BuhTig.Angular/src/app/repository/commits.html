@@ -2,7 +2,7 @@
   <ng-template [appLoaded]="commits" let-commits>
     <ol>
       @for (commit of commits; track commit.sha) {
-        <li>
+        <li class="stagger" [style.--i]="$index">
           @if (commit.url; as url) {
             <a class="subject" [class.none]="!commit.message" [href]="url">{{
               commit.message ?? noMessage

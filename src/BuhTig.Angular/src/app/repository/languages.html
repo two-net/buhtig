@@ -25,7 +25,7 @@
     </svg>
     <ul>
       @for (segment of segments(); track $index) {
-        <li>
+        <li class="stagger" [style.--i]="$index">
           <span class="swatch" [style.background]="segment.color"></span>
           <span class="name">{{ segment.name }}</span>
           <span class="share">{{ segment.percent }}</span>

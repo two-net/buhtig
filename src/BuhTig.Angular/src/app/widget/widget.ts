@@ -1,13 +1,20 @@
 import { NgTemplateOutlet } from '@angular/common';
 import {
   Component,
+  DestroyRef,
   Directive,
+  ElementRef,
   TemplateRef,
+  afterNextRender,
   computed,
   contentChild,
+  effect,
   inject,
   input,
+  signal,
+  untracked,
 } from '@angular/core';
+import { ENTRANCE_MS, Entrance, Entrances } from '../motion/entrance';
 import { Loader } from './load';
 import { COMPUTING, FAILED, LOADING } from './messages';
 
@@ -32,13 +39,18 @@ let count = 0;
  * placeholder while it loads, a message when there is nothing to show, or a message and "Try
  * again" when loading failed (FR-REPO-09). While GitHub is still computing its data, it says so
  * over the placeholder (FR-REPO-10).
+ *
+ * The placeholder shimmers (FR-ANIM-04). The content makes its entrance as it is first shown in
+ * view on the page, while the widget has the class `entering`, for what it shows to enter by
+ * (FR-ANIM-07).
  */
 @Component({
   selector: 'app-widget',
   imports: [NgTemplateOutlet],
   templateUrl: './widget.html',
   styleUrl: './widget.css',
-  host: { '[class.wide]': 'wide()' },
+  providers: [Entrance],
+  host: { '[class.wide]': 'wide()', '[class.entering]': 'entrance.playing()' },
 })
 export class Widget {
   readonly heading = input.required<string>();
@@ -51,6 +63,11 @@ export class Widget {
    * labels say what they are.
    */
   readonly hideHeading = input(false);
+
+  private readonly entrances = inject(Entrances);
+  protected readonly entrance = inject(Entrance);
+  /** Whether the widget is in view, as far as the browser tells. */
+  private readonly inView = signal(false);
 
   protected readonly content = contentChild.required(Loaded);
   protected readonly state = computed(() => this.content().loader().state());
@@ -66,6 +83,39 @@ export class Widget {
   protected readonly loading = LOADING;
   protected readonly computing = COMPUTING;
   protected readonly failed = FAILED;
+
+  constructor() {
+    const host = inject<ElementRef<HTMLElement>>(ElementRef).nativeElement;
+    const destroyRef = inject(DestroyRef);
+    // Not every environment can tell what is in view; the tests' jsdom cannot. There, nothing
+    // makes an entrance.
+    afterNextRender(() => {
+      if (typeof IntersectionObserver !== 'function') {
+        return;
+      }
+      const observer = new IntersectionObserver((entries) =>
+        this.inView.set(entries[entries.length - 1].isIntersecting),
+      );
+      observer.observe(host);
+      destroyRef.onDestroy(() => observer.disconnect());
+    });
+
+    // Content shown out of view enters once it scrolls into view.
+    let ending: ReturnType<typeof setTimeout> | undefined;
+    effect(() => {
+      if (this.state().status !== 'ready' || !this.inView()) {
+        return;
+      }
+      untracked(() => {
+        if (this.entrances.claim(this.heading())) {
+          this.entrance.playing.set(true);
+          // Then what it shows anew, such as another page of a table, comes in at once.
+          ending = setTimeout(() => this.entrance.playing.set(false), ENTRANCE_MS);
+        }
+      });
+    });
+    destroyRef.onDestroy(() => clearTimeout(ending));
+  }
 
   protected retry(): void {
     this.content().loader().retry();

@@ -2,7 +2,7 @@
   <ng-template [appLoaded]="releases" let-releases>
     <ol>
       @for (release of releases; track release.tag) {
-        <li>
+        <li class="stagger" [style.--i]="$index">
           @if (release.url; as url) {
             <a class="tag" [href]="url">{{ release.tag }}</a>
           } @else {

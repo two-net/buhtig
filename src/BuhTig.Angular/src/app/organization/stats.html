@@ -3,7 +3,7 @@
     <dl>
       <div class="repositories">
         <dt>Repositories</dt>
-        <dd><app-compact-number [value]="stats.repositories" /></dd>
+        <dd><app-compact-number [value]="stats.repositories" [countUp]="true" /></dd>
         @if (stats.private > 0 || stats.internal > 0) {
           <!-- In words, so that color is not all that tells them (NFR-UX-05). -->
           <dd class="badges">
@@ -18,15 +18,15 @@
       </div>
       <div>
         <dt>Stars</dt>
-        <dd><app-compact-number [value]="stats.stars" /></dd>
+        <dd><app-compact-number [value]="stats.stars" [countUp]="true" /></dd>
       </div>
       <div>
         <dt>Forks</dt>
-        <dd><app-compact-number [value]="stats.forks" /></dd>
+        <dd><app-compact-number [value]="stats.forks" [countUp]="true" /></dd>
       </div>
       <div>
         <dt>Open issues and pull requests</dt>
-        <dd><app-compact-number [value]="stats.openIssuesAndPullRequests" /></dd>
+        <dd><app-compact-number [value]="stats.openIssuesAndPullRequests" [countUp]="true" /></dd>
       </div>
       <div class="language">
         <dt>Top language</dt>

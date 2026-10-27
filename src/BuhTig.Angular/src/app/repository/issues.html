@@ -24,7 +24,7 @@
     @if (issues.recent.length > 0) {
       <ol>
         @for (item of issues.recent; track item.number) {
-          <li>
+          <li class="stagger" [style.--i]="$index">
             @if (item.url; as url) {
               <a class="title" [href]="url">{{ item.title }}</a>
             } @else {

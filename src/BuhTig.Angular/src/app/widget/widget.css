@@ -28,10 +28,36 @@ h2 {
 
 .skeleton span {
   display: block;
+  position: relative;
+  overflow: hidden;
   height: 0.75rem;
   margin-bottom: 0.75rem;
   border-radius: 0.375rem;
   background: var(--raised);
+}
+
+/*
+ * A band of light sweeps across each bar while the content is on its way (FR-ANIM-04), moving
+ * only what the compositor can.
+ */
+.skeleton span::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  translate: -100% 0;
+  background: linear-gradient(90deg, transparent, var(--shimmer), transparent);
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  to {
+    translate: 100% 0;
+  }
+}
+
+/* Without motion, it waits still (FR-ANIM-10). */
+:host-context(.still) .skeleton span::after {
+  display: none;
 }
 
 .skeleton span:nth-child(2) {

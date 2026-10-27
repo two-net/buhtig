@@ -67,7 +67,7 @@
           </thead>
           <tbody>
             @for (repository of page().repositories; track repository.name) {
-              <tr (click)="open($event, repository)">
+              <tr class="stagger" [style.--i]="$index" (click)="open($event, repository)">
                 <td class="name">
                   <a [routerLink]="repository.path">{{ repository.name }}</a>
                   <!-- In words, so that color is not all that tells them (NFR-UX-05). -->

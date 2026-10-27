@@ -5,7 +5,7 @@
     } @else {
       <ol>
         @for (contributor of contributors.contributors; track contributor.login) {
-          <li>
+          <li class="stagger" [style.--i]="$index">
             @if (contributor.avatarUrl; as avatar) {
               <img class="avatar" [src]="avatar" alt="" width="32" height="32" loading="lazy" />
             } @else {

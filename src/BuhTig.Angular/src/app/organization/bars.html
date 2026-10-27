@@ -1,6 +1,6 @@
 <ol>
   @for (bar of bars(); track $index) {
-    <li>
+    <li class="stagger" [style.--i]="$index">
       @if (bar.path; as path) {
         <a class="label" [routerLink]="path">{{ bar.label }}</a>
       } @else {

@@ -145,7 +145,9 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   BuhTig never asks GitHub for one. In private mode, links have no preview.
 - **Motion:** the UI animates, but keeps still for anyone whose browser asks for reduced
   motion, and for everyone when `ui.animations` is `false`. Animations never hold up typing,
-  clicking or navigating.
+  clicking or navigating. Widgets shimmer while their data is on its way. The first time
+  each comes into view, its figures count up, its charts draw in and its lists come in one
+  item after another. A refresh doesn't play that again.
 - **Health:** `GET /-/health` answers `200 ok` while BuhTig can reach its database, and
   `503 unavailable` otherwise. During a database outage, pages show a short "try again"
   notice. BuhTig recovers on its own when the database is back.

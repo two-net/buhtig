@@ -1,0 +1,18 @@
+/* What it shows while it counts up is over the value, which it hides (FR-ANIM-05). */
+:host {
+  position: relative;
+}
+
+.final {
+  color: transparent;
+}
+
+/* Clicks and the pointer go through to the value, and its exact number (FR-ANIM-11). */
+.count {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}

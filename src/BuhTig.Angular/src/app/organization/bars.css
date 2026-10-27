@@ -51,3 +51,15 @@ a.label:hover {
   border-radius: inherit;
   background: var(--accent);
 }
+
+/* The bars grow from their start as the widget around makes its entrance (FR-ANIM-06). */
+:host-context(.entering) .bar {
+  transform-origin: left;
+  animation: grow 600ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes grow {
+  from {
+    scale: 0 1;
+  }
+}

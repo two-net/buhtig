@@ -27,9 +27,17 @@
   white-space: nowrap;
 }
 
+/* It fades in, briefly enough to do so without motion too (FR-ANIM-06, FR-ANIM-10). */
 :host(:hover) [role='tooltip'],
 :host(:focus-visible) [role='tooltip'] {
   display: block;
+  animation: tooltip-in 150ms ease-out;
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+  }
 }
 
 :host(.dismissed) [role='tooltip'] {

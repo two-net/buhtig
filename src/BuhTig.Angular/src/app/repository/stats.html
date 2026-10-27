@@ -3,23 +3,23 @@
     <dl>
       <div>
         <dt>Stars</dt>
-        <dd><app-compact-number [value]="stats.stars" /></dd>
+        <dd><app-compact-number [value]="stats.stars" [countUp]="true" /></dd>
       </div>
       <div>
         <dt>Forks</dt>
-        <dd><app-compact-number [value]="stats.forks" /></dd>
+        <dd><app-compact-number [value]="stats.forks" [countUp]="true" /></dd>
       </div>
       <div>
         <dt>Watchers</dt>
-        <dd><app-compact-number [value]="stats.watchers" /></dd>
+        <dd><app-compact-number [value]="stats.watchers" [countUp]="true" /></dd>
       </div>
       <div>
         <dt>Open issues</dt>
-        <dd><app-compact-number [value]="stats.openIssues" /></dd>
+        <dd><app-compact-number [value]="stats.openIssues" [countUp]="true" /></dd>
       </div>
       <div>
         <dt>Open pull requests</dt>
-        <dd><app-compact-number [value]="stats.openPullRequests" /></dd>
+        <dd><app-compact-number [value]="stats.openPullRequests" [countUp]="true" /></dd>
       </div>
       <div class="release">
         <dt>Latest release</dt>

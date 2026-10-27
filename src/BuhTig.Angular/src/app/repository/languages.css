@@ -35,6 +35,17 @@ svg {
   clip-path: inset(0 round 0.375rem);
 }
 
+/* The bar sweeps in from its start as the widget makes its entrance (FR-ANIM-06). */
+.entering svg {
+  animation: sweep 700ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes sweep {
+  from {
+    clip-path: inset(0 100% 0 0 round 0.375rem);
+  }
+}
+
 .gap {
   stroke: var(--background);
   stroke-width: 2;
