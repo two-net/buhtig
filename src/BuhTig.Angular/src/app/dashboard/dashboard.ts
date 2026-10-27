@@ -4,6 +4,7 @@ import { Router, RouterLink } from '@angular/router';
 import { map, switchMap } from 'rxjs';
 import { Account } from '../account/account';
 import { DeniedNotice } from './denied';
+import { NotFoundOrPrivate } from './not-found-or-private';
 import { OrganizationCreated } from '../organization/created';
 import { OrganizationHeader } from '../organization/header';
 import { OrganizationLanguages } from '../organization/languages';
@@ -20,6 +21,7 @@ import { RepositoryIssues } from '../repository/issues';
 import { RepositoryLanguages } from '../repository/languages';
 import { RepositoryReleases } from '../repository/releases';
 import { RepositoryStats } from '../repository/stats';
+import { Refresh } from './refresh';
 import { Search } from '../search/search';
 import { Resource, dashboardPath } from '../search/parse';
 import { Resources, Summary } from './resources';
@@ -39,13 +41,16 @@ import { Resources, Summary } from './resources';
  *
  * Once it knows how GitHub spells the names, it moves there, in place of the URL it was opened
  * at (FR-NAV-04, FR-NAV-05). When GitHub keeps the resource from the viewer's credential, it
- * says why, and how to get access (FR-PAT-08).
+ * says why, and how to get access (FR-PAT-08). When GitHub says there is no such resource, it
+ * shows nothing of it, and says what the viewer can do (FR-ACC-05). A signed-in user may refresh
+ * it (FR-DATA-07), and its header and widgets then ask for their data again.
  */
 @Component({
   selector: 'app-dashboard',
   imports: [
     Account,
     DeniedNotice,
+    NotFoundOrPrivate,
     OrganizationCreated,
     OrganizationHeader,
     OrganizationLanguages,
@@ -54,6 +59,7 @@ import { Resources, Summary } from './resources';
     OrganizationRepositories,
     OrganizationStats,
     OrganizationTopRepositories,
+    Refresh,
     RepositoryActivity,
     RepositoryCommits,
     RepositoryContributors,
@@ -70,6 +76,10 @@ import { Resources, Summary } from './resources';
 })
 export class Dashboard {
   private readonly router = inject(Router);
+  private readonly resources = inject(Resources);
+
+  /** How many times the viewer has refreshed a dashboard. */
+  protected readonly refreshes = this.resources.refreshes;
 
   readonly owner = input<string>();
   readonly repo = input<string>();
@@ -103,12 +113,13 @@ export class Dashboard {
   });
 
   constructor() {
-    const resources = inject(Resources);
-    toObservable(this.resource)
+    // Asked for again on each refresh.
+    const asked = computed(() => ({ resource: this.resource(), refreshes: this.refreshes() }));
+    toObservable(asked)
       .pipe(
         // A dashboard left behind no longer moves.
-        switchMap((resource) =>
-          resources.summary(resource).pipe(map((summary) => ({ resource, summary }))),
+        switchMap(({ resource }) =>
+          this.resources.summary(resource).pipe(map((summary) => ({ resource, summary }))),
         ),
         takeUntilDestroyed(),
       )

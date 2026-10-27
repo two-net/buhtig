@@ -88,7 +88,11 @@
       }
     </dl>
   }
-  @if (fetchedAt(); as fetchedAt) {
-    <p class="updated">Updated <app-relative-time [value]="fetchedAt" /></p>
-  }
+  <!-- When the data was fetched, and what the dashboard puts beside it, as a way to refresh it. -->
+  <div class="when">
+    @if (fetchedAt(); as fetchedAt) {
+      <p class="updated">Updated <app-relative-time [value]="fetchedAt" /></p>
+    }
+    <ng-content />
+  </div>
 </div>

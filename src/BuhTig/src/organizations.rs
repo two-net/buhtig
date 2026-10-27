@@ -22,7 +22,7 @@ use crate::accounts::is_account_name;
 use crate::cache::{self, Cache, Cached, Outcome, Viewer};
 use crate::github::{self, List};
 use crate::repositories::{
-    data, denied, is_repository_name, link, page, respond, status, text, visibility,
+    data, denied, is_repository_name, link, page, refreshed, respond, status, text, visibility,
 };
 
 /// FR-ORG-04: the languages the chart names. The rest are "Other".
@@ -350,6 +350,20 @@ async fn listed(cache: &Cache, viewer: Viewer, org: &str) -> Result<List, Status
         )
         .await;
     data(list).map(|list| list.data)
+}
+
+/// `POST /-/api/organizations/{org}/refresh`: makes the next requests for the
+/// organization's dashboard ask GitHub, however fresh what is cached (FR-DATA-07), as
+/// [`refreshed`] answers.
+pub async fn refresh(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path(org): Path<String>,
+) -> Response {
+    if !is_account_name(&org) {
+        return status(StatusCode::BAD_REQUEST);
+    }
+    refreshed(cache.refresh(&viewer, &format!("/{org}")))
 }
 
 /// The organization `org`, as the cache has it for the viewer, or the status that says why

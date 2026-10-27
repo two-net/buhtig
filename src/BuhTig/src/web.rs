@@ -24,9 +24,11 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
 
+use crate::access;
 use crate::accounts;
 use crate::auth::{self, Auth};
 use crate::cache::Cache;
+use crate::config::AccessMode;
 use crate::health::{self, Health};
 use crate::navigation;
 use crate::organizations;
@@ -50,8 +52,10 @@ struct Pages {
 }
 
 /// Every request may carry a session, so each has the [`Sessions`] at hand, to tell who
-/// it comes from.
+/// it comes from. In private mode, a gate in front of every route lets visitors through
+/// only to what signing in needs ([`access`]).
 pub fn router(
+    mode: AccessMode,
     health: Arc<Health>,
     cache: Arc<Cache>,
     previews: Option<Previews>,
@@ -63,7 +67,7 @@ pub fn router(
         health: health.clone(),
         previews: previews.map(Arc::new),
     };
-    Router::new()
+    let router = Router::new()
         .route("/-/health", get(health::check))
         .route(
             "/-/auth/sign-in",
@@ -111,6 +115,10 @@ pub fn router(
             get(organizations::members).with_state(cache.clone()),
         )
         .route(
+            "/-/api/organizations/{org}/refresh",
+            post(organizations::refresh).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}",
             get(repositories::summary).with_state(cache.clone()),
         )
@@ -142,6 +150,10 @@ pub fn router(
             "/-/api/repositories/{owner}/{repo}/releases",
             get(repositories::releases).with_state(cache.clone()),
         )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/refresh",
+            post(repositories::refresh).with_state(cache.clone()),
+        )
         .route("/-/api/session", get(session::current))
         .route("/-/api/shortcuts", get(session::shortcuts))
         .route(
@@ -150,7 +162,13 @@ pub fn router(
         )
         .route("/-/api/surprise", get(surprise::pick).with_state(cache))
         .fallback(get(page).with_state(pages))
-        .with_state(health)
+        .with_state(health);
+    let router = match mode {
+        AccessMode::Public => router,
+        AccessMode::Private => router.layer(middleware::from_fn(access::gate::<Ui>)),
+    };
+    router
+        // Outside the gate, which needs them to tell who a request is from.
         .layer(Extension(sessions))
         // Outermost, so that every response is logged, whichever part answered.
         .layer(middleware::from_fn(log_request))

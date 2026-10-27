@@ -91,6 +91,18 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   as when it is revoked or expires, is marked invalid: the user's requests go with their
   sign-in again, and BuhTig asks them to replace the token. Replacing or removing a token
   deletes the data cached with it at once.
+- **Access:** in public mode, the default, anyone may open the home page and the
+  dashboards of public repositories and organizations, with public data only. Settings,
+  shortcuts and refreshing a dashboard need sign-in. With `access.mode = "private"`,
+  every page needs sign-in but the sign-in page, the About and Privacy pages and
+  `/-/health`: a visitor is sent to sign in, and then back to the page they opened. In
+  either mode, private and internal repositories and private organization data are shown
+  only to users whose personal access token can see them on GitHub. GitHub says "not
+  found" both of what does not exist and of what the viewer may not see, so BuhTig shows
+  one "Not found or private" page, which tells the viewer what they can do: sign in, or
+  add a token. Someone who loses access on GitHub loses it in BuhTig once their cached
+  copy is `cache.ttl` old and GitHub answers again. A signed-in user may refresh a
+  dashboard once a minute, so that it asks GitHub at once.
 - **Organizations:** an organization's dashboard reads up to `limits.org_repositories` of
   its repositories, those pushed to most recently, 100 per request to GitHub. A larger
   organization's figures cover only those, and its dashboard says so. Its members widget

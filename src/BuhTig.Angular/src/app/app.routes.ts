@@ -7,6 +7,7 @@ import { Privacy } from './privacy/privacy';
 import { Settings } from './settings/settings';
 import { SignInFailed } from './sign-in/failed';
 import { NotAllowed } from './sign-in/not-allowed';
+import { SignIn } from './sign-in/sign-in';
 
 export const routes: Routes = [
   { path: '', component: Home, title: 'BuhTig' },
@@ -18,6 +19,8 @@ export const routes: Routes = [
       { path: 'about', component: About, title: 'About · BuhTig' },
       { path: 'privacy', component: Privacy, title: 'Privacy · BuhTig' },
       { path: 'settings', component: Settings, title: 'Settings · BuhTig' },
+      // Where private mode sends visitors, to sign in and come back (FR-ACC-03).
+      { path: 'sign-in', component: SignIn, title: 'Sign in · BuhTig' },
       // Where sign-in ends when it does not sign the user in (FR-AUTH-08).
       { path: 'not-allowed', component: NotAllowed, title: 'Not allowed · BuhTig' },
       { path: 'sign-in-failed', component: SignInFailed, title: 'Sign-in failed · BuhTig' },

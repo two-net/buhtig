@@ -4,43 +4,58 @@
   <app-account />
 </header>
 <main>
-  @if (repository(); as repository) {
+  @if (summary()?.notFound) {
+    <app-not-found-or-private [name]="name()" />
+  } @else if (repository(); as repository) {
     <app-repository-header
       [name]="name()"
       [repository]="summary()?.repository"
       [fetchedAt]="summary()?.fetchedAt"
-    />
+    >
+      @if (summary()?.path) {
+        <app-refresh [resource]="repository" />
+      }
+    </app-repository-header>
     @if (summary()?.denied; as denied) {
       <app-denied [denied]="denied" />
     }
-    <!-- The widgets, in two columns, or one on narrow screens (UI-05). -->
-    <div class="grid">
-      <app-repository-stats [owner]="repository.owner" [repo]="repository.repo" />
-      <app-repository-activity [owner]="repository.owner" [repo]="repository.repo" />
-      <app-repository-languages [owner]="repository.owner" [repo]="repository.repo" />
-      <app-repository-contributors [owner]="repository.owner" [repo]="repository.repo" />
-      <app-repository-issues [owner]="repository.owner" [repo]="repository.repo" />
-      <app-repository-commits [owner]="repository.owner" [repo]="repository.repo" />
-      <app-repository-releases [owner]="repository.owner" [repo]="repository.repo" />
-    </div>
+    <!-- The widgets, in two columns, or one on narrow screens (UI-05). Made anew on each refresh,
+         so that each asks for its data again. -->
+    @for (round of [refreshes()]; track round) {
+      <div class="grid">
+        <app-repository-stats [owner]="repository.owner" [repo]="repository.repo" />
+        <app-repository-activity [owner]="repository.owner" [repo]="repository.repo" />
+        <app-repository-languages [owner]="repository.owner" [repo]="repository.repo" />
+        <app-repository-contributors [owner]="repository.owner" [repo]="repository.repo" />
+        <app-repository-issues [owner]="repository.owner" [repo]="repository.repo" />
+        <app-repository-commits [owner]="repository.owner" [repo]="repository.repo" />
+        <app-repository-releases [owner]="repository.owner" [repo]="repository.repo" />
+      </div>
+    }
   } @else if (organization(); as organization) {
     <app-organization-header
       [name]="name()"
       [organization]="summary()?.organization"
       [fetchedAt]="summary()?.fetchedAt"
-    />
+    >
+      @if (summary()?.path) {
+        <app-refresh [resource]="organization" />
+      }
+    </app-organization-header>
     @if (summary()?.denied; as denied) {
       <app-denied [denied]="denied" />
     }
     <!-- Laid out as a repository's. -->
-    <div class="grid">
-      <app-organization-stats [org]="organization.org" />
-      <app-organization-languages [org]="organization.org" />
-      <app-organization-top-repositories [org]="organization.org" />
-      <app-organization-last-push [org]="organization.org" />
-      <app-organization-created [org]="organization.org" />
-      <app-organization-repositories [org]="organization.org" />
-      <app-organization-members [org]="organization.org" />
-    </div>
+    @for (round of [refreshes()]; track round) {
+      <div class="grid">
+        <app-organization-stats [org]="organization.org" />
+        <app-organization-languages [org]="organization.org" />
+        <app-organization-top-repositories [org]="organization.org" />
+        <app-organization-last-push [org]="organization.org" />
+        <app-organization-created [org]="organization.org" />
+        <app-organization-repositories [org]="organization.org" />
+        <app-organization-members [org]="organization.org" />
+      </div>
+    }
   }
 </main>

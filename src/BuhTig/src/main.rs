@@ -1,3 +1,4 @@
+mod access;
 mod accounts;
 mod auth;
 mod cache;
@@ -175,6 +176,7 @@ async fn serve(config: Config) -> ExitCode {
         config.server.public_url.clone(),
     ));
     let app = web::router(
+        config.access.mode,
         Arc::new(Health::new(db.clone())),
         cache,
         previews,

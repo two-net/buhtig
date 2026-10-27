@@ -8,11 +8,23 @@ import type { MockInstance } from 'vitest';
 import { routes } from '../app.routes';
 import { exactTime, relativeTime } from '../format/format';
 import {
+  ADD_TOKEN,
+  ADD_TOKEN_TO_SEE,
   AUTHORIZE_SSO,
   AUTHORIZE_TOKEN,
+  GO_HOME,
+  NOT_FOUND_OR_PRIVATE,
+  REFRESHED_RECENTLY,
+  REFRESH_FAILED,
+  REPLACE_TOKEN,
+  SIGN_IN,
+  SIGN_IN_TO_SEE,
   SSO_REQUIRED,
   THEN_RELOAD,
+  TOKEN_INVALID_TO_SEE,
   TOKEN_REFUSED,
+  notFound,
+  notFoundWithToken,
 } from './messages';
 
 describe('Dashboard', () => {
@@ -130,7 +142,6 @@ describe('Dashboard', () => {
 
   it('stays where it is when BuhTig cannot tell', async () => {
     for (const [status, statusText] of [
-      [404, 'Not Found'],
       [429, 'Too Many Requests'],
       [503, 'Service Unavailable'],
     ] as const) {
@@ -467,5 +478,169 @@ describe('Dashboard', () => {
     const header = page().querySelector('app-organization-header')!;
     expect(heading()).toBe('acme');
     expect(header.querySelector('.description, .badge, .github, img, dl')).toBeNull();
+  });
+
+  /** A signed-in user, as the server describes them. */
+  const MONA = { login: 'mona', name: 'Mona Lisa', avatar_url: 'https://example.com/mona.png' };
+
+  /** What the server says of a personal access token whose status is `status`. */
+  const token = (status: 'valid' | 'invalid') => ({
+    type: 'fine_grained',
+    last_four: 'abcd',
+    scopes: null,
+    expires_at: null,
+    status,
+    last_validated_at: null,
+  });
+
+  describe('when GitHub says there is no such resource (FR-ACC-05)', () => {
+    /**
+     * Opens `url`, whose resource GitHub says is not there when `request` asks, for the viewer
+     * that `session` describes, and returns what the page says and where its link leads.
+     */
+    async function notFoundAt(
+      url: string,
+      request: string,
+      session: object,
+    ): Promise<[string | undefined, string | undefined, string | null | undefined]> {
+      await harness.navigateByUrl(url);
+      http.expectOne(request).flush(null, { status: 404, statusText: 'Not Found' });
+      http.expectOne('/-/api/session').flush(session);
+      await harness.fixture.whenStable();
+      const shownHere = page().querySelector('app-not-found-or-private')!;
+      // Nothing of the resource: not its header, a notice about it, or its widgets.
+      expect(page().querySelector('app-repository-header, app-organization-header')).toBeNull();
+      expect(page().querySelector('app-denied, .grid, app-refresh')).toBeNull();
+      const link = shownHere.querySelector('p a');
+      return [
+        heading(),
+        shown(shownHere.querySelector('p')!),
+        link && `${link.textContent?.trim()} ${link.getAttribute('href')}`,
+      ];
+    }
+
+    it('asks a visitor to sign in, and come back', async () => {
+      expect(
+        await notFoundAt('/owner/secret', '/-/api/repositories/owner/secret', { user: null }),
+      ).toEqual([
+        NOT_FOUND_OR_PRIVATE,
+        `${notFound('owner/secret')} ${SIGN_IN_TO_SEE}`,
+        `${SIGN_IN} /-/auth/sign-in?return_to=%2Fowner%2Fsecret`,
+      ]);
+      expect(router.url).toBe('/owner/secret');
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('asks a signed-in user to add a token', async () => {
+      expect(
+        await notFoundAt('/acme', '/-/api/organizations/acme', { user: MONA, token: null }),
+      ).toEqual([
+        NOT_FOUND_OR_PRIVATE,
+        `${notFound('acme')} ${ADD_TOKEN_TO_SEE}`,
+        `${ADD_TOKEN} /-/settings`,
+      ]);
+    });
+
+    it('asks a signed-in user whose token no longer works to replace it', async () => {
+      expect(
+        await notFoundAt('/owner/secret', '/-/api/repositories/owner/secret', {
+          user: MONA,
+          token: token('invalid'),
+        }),
+      ).toEqual([
+        NOT_FOUND_OR_PRIVATE,
+        `${notFound('owner/secret')} ${TOKEN_INVALID_TO_SEE}`,
+        `${REPLACE_TOKEN} /-/settings`,
+      ]);
+    });
+
+    it("tells a token user that their token can't read it, if it exists", async () => {
+      expect(
+        await notFoundAt('/owner/secret', '/-/api/repositories/owner/secret', {
+          user: MONA,
+          token: token('valid'),
+        }),
+      ).toEqual([NOT_FOUND_OR_PRIVATE, notFoundWithToken('owner/secret'), `${GO_HOME} /`]);
+    });
+
+    it('shows the next dashboard as usual', async () => {
+      await notFoundAt('/owner/secret', '/-/api/repositories/owner/secret', { user: null });
+      await open('/owner/repo', '/-/api/repositories/owner/repo', { name: 'owner/repo' });
+      expect(page().querySelector('app-not-found-or-private')).toBeNull();
+      expect(heading()).toBe('owner/repo');
+      expect(page().querySelector('.grid')).not.toBeNull();
+    });
+  });
+
+  describe('refreshing (FR-DATA-07)', () => {
+    const refreshButton = () => page().querySelector<HTMLButtonElement>('app-refresh button');
+    const note = () => page().querySelector('app-refresh [role="status"]')?.textContent?.trim();
+
+    /** Opens the dashboard of `acme/widget` for the viewer that `session` describes. */
+    async function openWidget(session: object): Promise<void> {
+      await open('/acme/widget', '/-/api/repositories/acme/widget', {
+        name: 'acme/widget',
+        fetched_at: '2026-10-22T12:00:00.000Z',
+      });
+      http.expectOne('/-/api/session').flush(session);
+      await harness.fixture.whenStable();
+    }
+
+    /** Clicks Refresh, and answers the server's part with `answer`, as `status`. */
+    async function refresh(status: number, answer: object | null = null): Promise<void> {
+      refreshButton()!.click();
+      await harness.fixture.whenStable();
+      expect(refreshButton()!.disabled).toBe(true);
+      const request = http.expectOne({
+        method: 'POST',
+        url: '/-/api/repositories/acme/widget/refresh',
+      });
+      request.flush(answer, { status, statusText: `${status}` });
+      await harness.fixture.whenStable();
+      expect(refreshButton()!.disabled).toBe(false);
+    }
+
+    it('is not offered to visitors (FR-ACC-02)', async () => {
+      await openWidget({ user: null });
+      expect(page().querySelector('app-refresh')).not.toBeNull();
+      expect(refreshButton()).toBeNull();
+    });
+
+    it("asks again for the dashboard's data once it is refreshed", async () => {
+      await openWidget({ user: MONA, token: null });
+      expect(http.match(isWidget)).toHaveLength(WIDGETS.length);
+      // Beside when its data was fetched.
+      expect(page().querySelector('.when .updated + app-refresh')).not.toBeNull();
+
+      await refresh(204);
+      expect(note()).toBe('');
+      http
+        .expectOne('/-/api/repositories/acme/widget')
+        .flush({ name: 'acme/widget', fetched_at: '2026-10-22T12:05:00.000Z' });
+      expect(http.match(isWidget).map((request) => request.request.url)).toEqual(
+        WIDGETS.map((widget) => `/-/api/repositories/acme/widget/${widget}`),
+      );
+      await harness.fixture.whenStable();
+      expect(updated()!.querySelector('time')!.getAttribute('datetime')).toBe(
+        '2026-10-22T12:05:00.000Z',
+      );
+    });
+
+    it('says when it is too soon to refresh again', async () => {
+      await openWidget({ user: MONA, token: null });
+      http.match(isWidget);
+      await refresh(429, { until: '2026-10-22T12:01:00.000Z' });
+      expect(note()).toBe(REFRESHED_RECENTLY);
+      http.expectNone('/-/api/repositories/acme/widget');
+      expect(http.match(isWidget)).toEqual([]);
+    });
+
+    it('says when it could not refresh', async () => {
+      await openWidget({ user: MONA, token: null });
+      http.match(isWidget);
+      await refresh(502);
+      expect(note()).toBe(REFRESH_FAILED);
+      http.expectNone('/-/api/repositories/acme/widget');
+    });
   });
 });

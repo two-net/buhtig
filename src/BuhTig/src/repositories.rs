@@ -12,13 +12,14 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use sea_orm::entity::prelude::DateTimeUtc;
+use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
+use sea_orm::sea_query::prelude::chrono::SecondsFormat;
 use serde_json::{Value, json};
 use tracing::error;
 use url::Url;
 
 use crate::accounts::is_account_name;
-use crate::cache::{self, Cache, Cached, Outcome, Viewer};
+use crate::cache::{self, Cache, Cached, Outcome, Refused, Viewer};
 use crate::github;
 
 /// The longest repository name GitHub allows.
@@ -384,6 +385,44 @@ pub async fn releases(
     };
     let releases: Vec<Value> = list.items.iter().filter_map(listed_release).collect();
     respond(json!({ "releases": releases }))
+}
+
+/// `POST /-/api/repositories/{owner}/{repo}/refresh`: makes the next requests for the
+/// repository's dashboard ask GitHub, however fresh what is cached (FR-DATA-07), as
+/// [`refreshed`] answers.
+pub async fn refresh(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    if !is_account_name(&owner) || !is_repository_name(&repo) {
+        return status(StatusCode::BAD_REQUEST);
+    }
+    refreshed(cache.refresh(&viewer, &format!("/{owner}/{repo}")))
+}
+
+/// The answer to a request to refresh a dashboard: 204 once it is, and 401 for a visitor,
+/// since only signed-in users may (FR-ACC-02). 429 if it was refreshed less than a minute
+/// ago, with `Retry-After` and `{"until": …}`, when it may be again.
+///
+/// It changes state, so it is no GET (NFR-SEC-02). Other sites' POSTs carry no session
+/// cookie, which is `SameSite=Lax`, so they are a visitor's.
+pub(crate) fn refreshed(result: Result<(), Refused>) -> Response {
+    match result {
+        Ok(()) => status(StatusCode::NO_CONTENT),
+        Err(Refused::SignInRequired) => status(StatusCode::UNAUTHORIZED),
+        Err(Refused::TooSoon { until }) => {
+            // In whole seconds, rounded up, so that it is not too soon still.
+            let wait = ((until - ChronoUtc::now()).num_milliseconds().max(0) + 999) / 1000;
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::CACHE_CONTROL, "no-store")],
+                [(header::RETRY_AFTER, wait.max(1).to_string())],
+                Json(json!({ "until": until.to_rfc3339_opts(SecondsFormat::Millis, true) })),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// Whether `name` can be a GitHub repository's (FR-SRCH-04): up to 100 letters, digits,
@@ -884,7 +923,7 @@ mod tests {
     /// A repository that says odd things, which the header must not show as they are.
     const ODD: &str = r#"{
         "full_name": "acme/odd",
-        "private": true,
+        "private": false,
         "visibility": "secret",
         "owner": {"login": "acme", "avatar_url": "http://avatars.example/u/2"},
         "description": "",
@@ -1336,8 +1375,8 @@ mod tests {
                     // Only from https URLs.
                     "owner_avatar_url": null,
                     "description": null,
-                    // GitHub's own words, else `private`.
-                    "visibility": "private",
+                    // GitHub's own words, else what `private` says.
+                    "visibility": "public",
                     "archived": false,
                     "template": false,
                     "fork": true,
@@ -2037,6 +2076,9 @@ mod tests {
                 &[],
                 r#"{"message": "The 'acme' organization forbids access via a fine-grained personal access tokens if the token's lifetime is greater than 366 days."}"#,
             ),
+            "/repos/acme/secret" => {
+                answer(200, &[], r#"{"full_name": "acme/secret", "private": true}"#)
+            }
             _ => answer(404, &[], r#"{"message": "Not Found"}"#),
         });
         let cache = cache(&stub, 30).await;
@@ -2095,10 +2137,84 @@ mod tests {
             ask(&signed_in, "policy").await,
             (StatusCode::BAD_GATEWAY, Value::Null)
         );
-        // Nor is there anything to explain about what is not found.
+        // Nor is there anything to explain about what is not found, or private, whoever
+        // asks: 404, and nothing about it (FR-ACC-05, AC-02).
+        for viewer in [&visitor, &signed_in, &token_user] {
+            assert_eq!(
+                ask(viewer, "missing").await,
+                (StatusCode::NOT_FOUND, Value::Null),
+                "{viewer:?}"
+            );
+        }
+        // What GitHub marks private is a token user's alone to see, even if GitHub gave it
+        // to another credential (FR-ACC-04).
+        for viewer in [&visitor, &signed_in] {
+            assert_eq!(
+                ask(viewer, "secret").await,
+                (StatusCode::NOT_FOUND, Value::Null),
+                "{viewer:?}"
+            );
+        }
+        let (status, body) = ask(&token_user, "secret").await;
         assert_eq!(
-            ask(&token_user, "missing").await,
-            (StatusCode::NOT_FOUND, Value::Null)
+            (status, &body["visibility"]),
+            (StatusCode::OK, &json!("private"))
         );
+    }
+
+    #[tokio::test]
+    async fn only_signed_in_users_may_refresh_a_dashboard_once_a_minute() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let signed_in = Viewer::SignedIn {
+            user_id: 1,
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let ask = async |viewer: &Viewer, owner: &str, repo: &str| {
+            let names = Path((owner.to_owned(), repo.to_owned()));
+            let response = refresh(State(cache.clone()), viewer.clone(), names).await;
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let status = response.status();
+            let retry_after = response
+                .headers()
+                .get(header::RETRY_AFTER)
+                .map(|value| value.to_str().unwrap().parse::<u64>().unwrap());
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            (status, retry_after, body)
+        };
+
+        assert_eq!(
+            ask(&visitor, "acme", "widget").await,
+            (StatusCode::UNAUTHORIZED, None, Value::Null)
+        );
+        assert_eq!(
+            ask(&signed_in, "acme", "..").await,
+            (StatusCode::BAD_REQUEST, None, Value::Null)
+        );
+        // To the millisecond, as `until` is told.
+        let before = ChronoUtc::now() - TimeDelta::milliseconds(1);
+        assert_eq!(
+            ask(&signed_in, "acme", "widget").await,
+            (StatusCode::NO_CONTENT, None, Value::Null)
+        );
+        // Once a minute, whatever case the names are in.
+        let (status, retry_after, body) = ask(&signed_in, "Acme", "Widget").await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        let until: DateTimeUtc = body["until"].as_str().unwrap().parse().unwrap();
+        assert!(
+            before + TimeDelta::minutes(1) <= until
+                && until <= ChronoUtc::now() + TimeDelta::minutes(1),
+            "{until}"
+        );
+        assert!((59..=60).contains(&retry_after.unwrap()), "{retry_after:?}");
+        // Refreshing asks GitHub nothing itself.
+        assert_eq!(stub.urls(), Vec::<String>::new());
     }
 }

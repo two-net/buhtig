@@ -392,10 +392,16 @@ fn after(at: DateTimeUtc, duration: Duration) -> Option<DateTimeUtc> {
 /// Who a request is from: the signed-in user whose session it carries, or else a visitor.
 /// It needs the [`Sessions`] as an extension of the request, as [`crate::web::router`]
 /// adds them, and the peer's address, as a [`Visitor`] does.
+///
+/// A request that has been told already, as by private mode's gate ([`crate::access`]),
+/// carries its viewer as an extension, so that its session is read once.
 impl<S: Send + Sync> FromRequestParts<S> for Viewer {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Viewer, Response> {
+        if let Some(viewer) = parts.extensions.get::<Viewer>() {
+            return Ok(viewer.clone());
+        }
         let Extension(sessions) = Extension::<Arc<Sessions>>::from_request_parts(parts, state)
             .await
             .map_err(IntoResponse::into_response)?;

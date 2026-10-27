@@ -4,7 +4,9 @@
 //!
 //! Every entry belongs to a [`Scope`] (FR-DATA-04). Data fetched without a PAT, for a
 //! visitor or a signed-in user, is shared: anyone may be served it, so it must hold only
-//! public information. Data fetched with a PAT is private to that user. A request's
+//! public information. What GitHub marks private or internal is for token users alone
+//! (FR-ACC-04), so fetched without a PAT, it is neither cached nor served, but answered as
+//! not found. Data fetched with a PAT is private to that user. A request's
 //! [`Viewer`] decides both its credential and its scope, so the two cannot disagree, and
 //! no one is served data that another user's PAT fetched (FR-ACC-06). Each private entry
 //! names the PAT that fetched it, and goes when the PAT does (FR-PAT-05).
@@ -19,8 +21,6 @@
 //! Requests that miss the same data in the same scope at the same time wait for one fetch
 //! (FR-DATA-08). Those fetches, and the marks that limit refreshes (FR-DATA-07), are held
 //! in memory alone, which a restart may lose (NFR-REL-02).
-
-#![allow(dead_code, reason = "refreshing is still to come (#24)")]
 
 use std::collections::HashMap;
 use std::fmt;
@@ -839,29 +839,37 @@ impl Cache {
         }
         let mut stored_data = true;
         let result = match reply {
-            Ok(Reply::Fresh { mut data, etag, .. }) => {
-                // Told before trimming, so that no mark is among what is left out.
-                let private = scope == Scope::Shared && marks_private(&data);
-                fetch.trim(&mut data);
-                if private {
-                    // GitHub gave it for this viewer's own credential, so it is theirs to
-                    // see, but it must never be served to anyone else.
-                    warn!(
-                        key,
-                        "GitHub returned data marked private or internal to a request \
-                         without a PAT; it is not cached"
-                    );
-                    // Nor is what was cached while it was public served any longer.
-                    if stored.is_some() {
-                        self.forget(scope, key).await;
-                    }
-                    stored_data = false;
-                } else {
-                    if scope == Scope::Shared {
-                        strip_permissions(&mut data);
-                    }
-                    self.store(scope, viewer.pat(), key, &data, etag, now).await;
+            // Told before trimming, so that no mark is among what is left out.
+            Ok(Reply::Fresh { data, .. }) if scope == Scope::Shared && marks_private(&data) => {
+                // Only token users see what is private or internal (FR-ACC-04), so it is
+                // answered as GitHub answers what the credential may not see, and it is
+                // never served to anyone else.
+                warn!(
+                    key,
+                    "GitHub returned data marked private or internal to a request \
+                     without a PAT; it is answered as not found, and not cached"
+                );
+                // Nor is what was cached while it was public served any longer.
+                if stored.is_some() {
+                    self.forget(scope, key).await;
                 }
+                stored_data = false;
+                match fetch {
+                    // As GitHub's "not found" is for what may not exist.
+                    Fetch::Optional(_) => Ok(Outcome::Data(Cached {
+                        data: optional_value(None),
+                        fetched_at: now,
+                        stale: None,
+                    })),
+                    _ => Err(github::Error::NotFound),
+                }
+            }
+            Ok(Reply::Fresh { mut data, etag, .. }) => {
+                fetch.trim(&mut data);
+                if scope == Scope::Shared {
+                    strip_permissions(&mut data);
+                }
+                self.store(scope, viewer.pat(), key, &data, etag, now).await;
                 debug!(key, "fetched GitHub data");
                 Ok(Outcome::Data(Cached {
                     data,
@@ -1703,6 +1711,7 @@ mod tests {
 
     #[tokio::test]
     async fn data_fetched_with_a_pat_is_served_only_to_its_user() {
+        // AC-03, FR-ACC-06.
         let setup = setup().await;
         let secret = path(&["repos", "owner", "secret"]);
         setup.answer(|request| match header(request, AUTHORIZATION) {
@@ -1744,7 +1753,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn data_marked_private_never_enters_the_shared_cache() {
+    async fn data_marked_private_is_neither_cached_nor_served_without_a_pat() {
         let setup = setup().await;
         setup.answer(|request| match request.uri().path() {
             "/repos/owner/private" => answer(200, &[], r#"{"name":"private","private":true}"#),
@@ -1764,20 +1773,27 @@ mod tests {
         for name in ["private", "fork"] {
             let repo = path(&["repos", "owner", name]);
             for viewer in [visitor(), signed_in("sign-in-bob")] {
-                // GitHub gave it for this viewer's own credential.
-                let fetched = data(setup.get(&viewer, &repo, at(0)).await);
-                assert_eq!(fetched.data["name"], name);
+                // Though GitHub gave it for this viewer's own credential, only token users
+                // see it (FR-ACC-04).
+                assert_eq!(
+                    github_error(setup.get(&viewer, &repo, at(0)).await),
+                    github::Error::NotFound,
+                    "{name} {viewer:?}"
+                );
             }
         }
         let repos = path(&["orgs", "org", "repos"]);
         for viewer in [visitor(), signed_in("sign-in-bob")] {
-            let list = data(
-                setup
-                    .cache
-                    .get_list_at(&viewer, "/org", &repos, 10, at(0))
-                    .await,
+            assert_eq!(
+                github_error(
+                    setup
+                        .cache
+                        .get_list_at(&viewer, "/org", &repos, 10, at(0))
+                        .await
+                ),
+                github::Error::NotFound,
+                "{viewer:?}"
             );
-            assert_eq!(list.data.items.len(), 2);
         }
 
         assert!(setup.rows().await.is_empty());
@@ -1806,7 +1822,10 @@ mod tests {
         data(setup.get(&visitor(), &turned, at(0)).await);
         assert_eq!(setup.rows().await.len(), 2);
         setup.answer(|_| answer(200, &[], r#"{"name":"turned","private":true}"#));
-        data(setup.get(&visitor(), &turned, at(16)).await);
+        assert_eq!(
+            github_error(setup.get(&visitor(), &turned, at(16)).await),
+            github::Error::NotFound
+        );
         assert_eq!(setup.rows().await, rows);
     }
 
@@ -1863,6 +1882,34 @@ mod tests {
         let rows = setup.rows().await;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].fetched_at, at(0));
+    }
+
+    /// FR-ACC-07: a token user who loses access to a private repository on GitHub loses it
+    /// in BuhTig too, once what was cached for them is no longer fresh.
+    #[tokio::test]
+    async fn lost_access_takes_effect_within_one_ttl() {
+        let setup = setup().await;
+        let secret = path(&["repos", "owner", "secret"]);
+        setup.answer(|_| answer(200, &[], r#"{"full_name":"owner/secret","private":true}"#));
+        data(setup.get(&setup.alice(), &secret, at(0)).await);
+
+        // Alice is removed from the repository on GitHub.
+        setup.answer(|_| answer(404, &[], r#"{"message":"Not Found"}"#));
+        // While it is fresh, what was cached is served.
+        data(setup.get(&setup.alice(), &secret, at(14)).await);
+        assert_eq!(setup.stub.requests().len(), 1);
+        // Then GitHub is asked, and what was cached goes.
+        assert_eq!(
+            github_error(setup.get(&setup.alice(), &secret, at(16)).await),
+            github::Error::NotFound
+        );
+        assert!(setup.rows().await.is_empty());
+        // Not even an outage brings it back.
+        setup.answer(|_| Err(github::Error::Unreachable("connection refused".to_owned())));
+        assert!(matches!(
+            github_error(setup.get(&setup.alice(), &secret, at(17)).await),
+            github::Error::Unreachable(_)
+        ));
     }
 
     #[tokio::test]
@@ -2157,8 +2204,9 @@ mod tests {
         let leader = tokio::spawn(setup.spawn_get(signed_in("sign-in-a"), &repo));
         setup.leading().await;
         let follower = setup.cache.get(&visitor(), DASHBOARD, &repo).await;
-        assert_eq!(data(leader.await.unwrap()).data["name"], "secret");
+        assert_eq!(github_error(leader.await.unwrap()), github::Error::NotFound);
         assert_eq!(github_error(follower), github::Error::NotFound);
+        // The follower asked GitHub for itself.
         assert_eq!(setup.sent(), ["Bearer sign-in-a", APP]);
     }
 
@@ -2447,16 +2495,15 @@ mod tests {
             )
         });
         let repos = path(&["orgs", "org", "repos"]);
-        // What marks the second item is not among what is kept of it.
-        let list = data(
-            setup
-                .cache
-                .get_list_of_at(&visitor(), "/org", &repos, 10, &["name"], at(0))
-                .await,
-        );
+        // What marks the second item is not among what is kept of it, yet it is told.
         assert_eq!(
-            list.data.items,
-            [json!({"name": "a"}), json!({"name": "b"})]
+            github_error(
+                setup
+                    .cache
+                    .get_list_of_at(&visitor(), "/org", &repos, 10, &["name"], at(0))
+                    .await
+            ),
+            github::Error::NotFound
         );
         assert!(setup.rows().await.is_empty());
 
@@ -2536,10 +2583,11 @@ mod tests {
             github::Error::Status { status: 500, .. }
         ));
 
-        // What is marked private stays out of the shared cache, found as it is.
+        // What is marked private is not found without a PAT (FR-ACC-04), and stays out of
+        // the shared cache.
         setup.answer(|_| answer(200, &[], r#"{"tag_name":"v2","private":true}"#));
         let private = data(get_optional(signed_in("sign-in-bob"), at(48)).await);
-        assert_eq!(private.data.unwrap()["tag_name"], "v2");
+        assert_eq!((private.data, private.fetched_at), (None, at(48)));
         assert!(setup.rows().await.is_empty());
     }
 

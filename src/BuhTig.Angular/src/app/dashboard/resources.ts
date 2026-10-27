@@ -1,6 +1,6 @@
 import { HttpClient, HttpErrorResponse, HttpStatusCode } from '@angular/common/http';
-import { Injectable, inject } from '@angular/core';
-import { Observable, catchError, map, of } from 'rxjs';
+import { Injectable, inject, signal } from '@angular/core';
+import { Observable, catchError, map, of, tap } from 'rxjs';
 import { Resource, dashboardPath, parse } from '../search/parse';
 import { Computing } from '../widget/load';
 
@@ -20,7 +20,19 @@ export interface Summary {
   organization: Organization | undefined;
   /** Why GitHub keeps the resource from the viewer's credential, when it does (FR-PAT-08). */
   denied: Denied | undefined;
+  /**
+   * Whether GitHub says there is no such resource, which it says too of one that the viewer's
+   * credential may not see (FR-ACC-05).
+   */
+  notFound: boolean;
 }
+
+/** What came of a request to refresh a dashboard (FR-DATA-07). */
+export type Refreshed =
+  | { status: 'refreshed' }
+  /** It was refreshed less than a minute ago, and may be again from `until`, if known. */
+  | { status: 'too-soon'; until: Date | undefined }
+  | { status: 'failed' };
 
 /**
  * Why GitHub keeps a resource from the viewer's credential (FR-PAT-08): an organization requires
@@ -446,9 +458,18 @@ interface ReleasesAnswer {
 export class Resources {
   private readonly http = inject(HttpClient);
 
+  private readonly refreshCount = signal(0);
+
   /**
-   * What BuhTig knows of `resource`, or `undefined` when it cannot tell, as for a resource that
-   * does not exist or is private: the dashboard then says why it has no data.
+   * How many times the viewer has refreshed a dashboard, so that what the dashboard shows is
+   * asked for again each time (FR-DATA-07).
+   */
+  readonly refreshes = this.refreshCount.asReadonly();
+
+  /**
+   * What BuhTig knows of `resource`: what it is, or that GitHub says there is no such resource,
+   * or keeps it from the viewer's credential. `undefined` when BuhTig cannot tell now: the
+   * dashboard then stays as it is.
    */
   summary(resource: Resource): Observable<Summary | undefined> {
     const answer: Observable<Answer> =
@@ -472,20 +493,49 @@ export class Resources {
               ? organizationHeader(organization)
               : undefined,
           denied: undefined,
+          notFound: false,
         };
       }),
       catchError((error: unknown) => {
         const denied = deniedBy(error);
+        const notFound =
+          error instanceof HttpErrorResponse && error.status === HttpStatusCode.NotFound;
         return of(
-          denied && {
-            path: undefined,
-            fetchedAt: undefined,
-            repository: undefined,
-            organization: undefined,
-            denied,
-          },
+          denied || notFound
+            ? {
+                path: undefined,
+                fetchedAt: undefined,
+                repository: undefined,
+                organization: undefined,
+                denied,
+                notFound,
+              }
+            : undefined,
         );
       }),
+    );
+  }
+
+  /**
+   * Asks the server to fetch `resource`'s dashboard from GitHub anew, which only signed-in
+   * users may, once a minute (FR-DATA-07, FR-ACC-02). Once it has, what the dashboard shows is
+   * asked for again.
+   */
+  refresh(resource: Resource): Observable<Refreshed> {
+    const url =
+      resource.kind === 'repository'
+        ? repositoryUrl(resource.owner, resource.repo)
+        : organizationUrl(resource.org);
+    return this.http.post(`${url}/refresh`, null).pipe(
+      tap(() => this.refreshCount.update((count) => count + 1)),
+      map((): Refreshed => ({ status: 'refreshed' })),
+      catchError((error: unknown) =>
+        of<Refreshed>(
+          error instanceof HttpErrorResponse && error.status === HttpStatusCode.TooManyRequests
+            ? { status: 'too-soon', until: date((error.error as { until?: string } | null)?.until) }
+            : { status: 'failed' },
+        ),
+      ),
     );
   }
 

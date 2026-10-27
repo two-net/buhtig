@@ -104,6 +104,14 @@ dd {
   overflow-wrap: anywhere;
 }
 
+/* When the data was fetched, and the way to refresh it beside that. */
+.when {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+}
+
 .updated {
   margin: 0;
 }

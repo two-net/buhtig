@@ -53,8 +53,11 @@ client_secret = "CHANGE-ME"
 encryption_key = "CHANGE-ME"
 
 [access]
-# "public" lets anyone view public dashboards; "private" requires sign-in for
-# every page.
+# "public" lets anyone view the dashboards of public repositories and
+# organizations. "private" requires sign-in for every page but the sign-in,
+# About and Privacy pages and /-/health; visitors are sent to sign in, then
+# back. Either way, private data is shown only to users whose personal access
+# token can see it on GitHub.
 # mode = "public"
 # GitHub logins allowed to sign in, ignoring case. Empty means anyone.
 # allowed_users = []

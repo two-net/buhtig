@@ -36,10 +36,7 @@ BuhTig.</p>
 /// The path is looked up as it is, without percent-decoding: the build names its files in
 /// plain ASCII. A path that leads out of the folder names no file.
 pub fn asset<A: RustEmbed>(path: &str) -> Option<Response> {
-    let name = path.strip_prefix('/').unwrap_or(path);
-    if name.is_empty() || name == INDEX {
-        return None;
-    }
+    let name = file_name(path)?;
     let file = A::get(name)?;
     let cache = if is_hashed(name) {
         "public, max-age=31536000, immutable"
@@ -56,6 +53,18 @@ pub fn asset<A: RustEmbed>(path: &str) -> Option<Response> {
         )
             .into_response(),
     )
+}
+
+/// Whether `path` names a file of the UI, which [`asset`] serves.
+pub fn is_asset<A: RustEmbed>(path: &str) -> bool {
+    file_name(path).is_some_and(|name| A::get(name).is_some())
+}
+
+/// The name of the file that `path` would name, unless it is a route of the app whatever
+/// files there are: the app's page is served for every route, never as a file.
+fn file_name(path: &str) -> Option<&str> {
+    let name = path.strip_prefix('/').unwrap_or(path);
+    (!name.is_empty() && name != INDEX).then_some(name)
 }
 
 /// The app's page, whatever the route, with `head`, such as a link preview's tags, at the
@@ -155,6 +164,9 @@ mod tests {
 
     #[test]
     fn other_paths_are_routes_of_the_app() {
+        for path in ["/main-ABCDEFGH.js", "/favicon.ico"] {
+            assert!(is_asset::<Built>(path), "{path}");
+        }
         for path in [
             "/",
             "/index.html",
@@ -168,6 +180,7 @@ mod tests {
             "/../../../Cargo.toml",
         ] {
             assert!(asset::<Built>(path).is_none(), "{path}");
+            assert!(!is_asset::<Built>(path), "{path}");
         }
     }
 
