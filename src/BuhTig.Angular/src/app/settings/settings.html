@@ -5,8 +5,16 @@
 <main class="prose">
   <h1>Settings</h1>
   @if (user() === null) {
-    <p>{{ SIGN_IN_FIRST }}</p>
-    <p><a class="button primary" [href]="signIn">Sign in</a></p>
+    @if (deleted()) {
+      <p #deletedNote id="data-deleted" tabindex="-1">{{ DATA_DELETED }}</p>
+      <p>
+        {{ GITHUB_ACCESS }}
+        <a href="https://github.com/settings/applications">{{ REVIEW_GITHUB_ACCESS }}</a>
+      </p>
+    } @else {
+      <p>{{ SIGN_IN_FIRST }}</p>
+      <p><a class="button primary" [href]="signIn">Sign in</a></p>
+    }
   } @else if (user()) {
     <section aria-labelledby="token-heading">
       <h2 id="token-heading">Personal access token</h2>
@@ -88,5 +96,6 @@
       </p>
     </section>
     <app-shortcut-settings />
+    <app-data-deletion />
   }
 </main>

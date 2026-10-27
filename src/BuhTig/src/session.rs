@@ -18,6 +18,12 @@
 //! sign-in credential otherwise (FR-PAT-06). A PAT that has expired, or cannot be decrypted
 //! because `security.encryption_key` changed, is marked invalid as it is found, for the user
 //! to replace (DR-03, [`crate::tokens`]).
+//!
+//! A signed-in user may delete all that BuhTig keeps of theirs (FR-PERS-04): their user,
+//! and with it, as the database deletes what belongs to a user, their sessions,
+//! credentials, private cache, history and pins (DR-04). They are signed out everywhere.
+//! BuhTig stays among the apps they authorized on GitHub until they revoke it there, since
+//! BuhTig changes nothing on GitHub (CON-08).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -370,6 +376,17 @@ pub async fn end_all(db: &DatabaseConnection, user_id: i64) -> Result<(), DbErr>
     txn.commit().await
 }
 
+/// Deletes the user `user_id` and all that BuhTig keeps of theirs (FR-PERS-04). The
+/// database deletes their sessions, credentials, private cache, history and pins with them,
+/// in the same statement (DR-04), so that either all of it goes or none.
+pub async fn delete_user(db: &DatabaseConnection, user_id: i64) -> Result<(), DbErr> {
+    let deleted = user::Entity::delete_by_id(user_id).exec(db).await?;
+    if deleted.rows_affected > 0 {
+        info!(user_id, "deleted a user and all their data");
+    }
+    Ok(())
+}
+
 /// What the database keeps of a session ID (DR-02). The ID is random enough that a hash
 /// needs no salt.
 fn id_hash(id: &str) -> Vec<u8> {
@@ -458,6 +475,38 @@ pub async fn current(
         }
         Err(error) => {
             error!("cannot read the session: {error}");
+            status(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
+}
+
+/// `DELETE /-/api/user`: deletes the signed-in user and all that BuhTig keeps of theirs, as
+/// [`delete_user`] does (FR-PERS-04). 204 once it is gone, with the session cookie removed
+/// from the browser, and 401 for a visitor.
+///
+/// It changes state, so it is no GET (NFR-SEC-02). Other sites' requests carry no session
+/// cookie, which is `SameSite=Lax`, and a browser asks BuhTig before it sends another site's
+/// DELETE, which BuhTig never allows.
+pub async fn delete(Extension(sessions): Extension<Arc<Sessions>>, headers: HeaderMap) -> Response {
+    let user_id = match sessions.resolve(&headers).await {
+        Ok(Some(signed_in)) => signed_in.user.id,
+        Ok(None) => return status(StatusCode::UNAUTHORIZED),
+        Err(error) => {
+            error!("cannot read the session: {error}");
+            return status(StatusCode::SERVICE_UNAVAILABLE);
+        }
+    };
+    match delete_user(&sessions.db, user_id).await {
+        Ok(()) => (
+            StatusCode::NO_CONTENT,
+            [
+                (header::SET_COOKIE, sessions.removal()),
+                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            ],
+        )
+            .into_response(),
+        Err(error) => {
+            error!("cannot delete a user: {error}");
             status(StatusCode::SERVICE_UNAVAILABLE)
         }
     }
@@ -1067,5 +1116,217 @@ mod tests {
         }
         // The user stays signed in with the credential they signed in with.
         assert_eq!(resolve(21).await.sign_in.expose(), "gho_mona");
+    }
+
+    fn bob() -> Profile {
+        Profile {
+            github_id: 2,
+            login: "bob".to_owned(),
+            name: None,
+            avatar_url: "https://avatars.githubusercontent.com/u/2".to_owned(),
+        }
+    }
+
+    /// Signs `profile` in on two browsers, and gives them a PAT, data cached with it, a
+    /// history entry and a pin. Returns the cookies of both browsers, and the user's ID.
+    async fn everything_of(
+        db: &DatabaseConnection,
+        sessions: &Sessions,
+        profile: Profile,
+    ) -> (HeaderValue, HeaderValue, i64) {
+        use crate::entity::cache_entry::{self, Scope};
+        use crate::entity::credential::PatType;
+        use crate::entity::{ResourceKind, history_entry, pin};
+        use sea_orm::ActiveModelTrait;
+
+        let github_id = profile.github_id;
+        let here = sessions
+            .sign_in(profile.clone(), &token("gho_x"), &HeaderMap::new())
+            .await
+            .unwrap();
+        let elsewhere = sessions
+            .sign_in(profile, &token("gho_x"), &HeaderMap::new())
+            .await
+            .unwrap();
+        let user_id = user::Entity::find()
+            .filter(user::Column::GithubId.eq(github_id))
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        let pat = credential::ActiveModel {
+            user_id: Set(user_id),
+            kind: Set(Kind::Pat),
+            encrypted_value: Set(Sealer::new(KEY).seal(b"ghp_x", &tokens::context(user_id))),
+            pat_type: Set(Some(PatType::Classic)),
+            last_four: Set(Some("ghpx".to_owned())),
+            status: Set(Some(PatStatus::Valid)),
+            last_validated_at: Set(Some(at(0))),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+        let scope = Scope::User(user_id);
+        cache_entry::ActiveModel {
+            scope: Set(scope.key()),
+            resource_key: Set("/owner/secret".to_owned()),
+            user_id: Set(scope.user_id()),
+            credential_id: Set(Some(pat.id)),
+            data: Set(json!({ "private": true })),
+            fetched_at: Set(at(0)),
+            expires_at: Set(at(15)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+        history_entry::ActiveModel {
+            user_id: Set(user_id),
+            resource_kind: Set(ResourceKind::Repository),
+            resource_name: Set("owner/repo".to_owned()),
+            last_viewed_at: Set(at(0)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+        pin::ActiveModel {
+            user_id: Set(user_id),
+            resource_kind: Set(ResourceKind::Organization),
+            resource_name: Set("acme".to_owned()),
+            position: Set(0),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+        (here, elsewhere, user_id)
+    }
+
+    /// How many rows of the user `user_id` each table holds: users, sessions, credentials,
+    /// cache entries, history entries and pins.
+    async fn rows_of(db: &DatabaseConnection, user_id: i64) -> [usize; 6] {
+        use crate::entity::{cache_entry, history_entry, pin};
+
+        [
+            user::Entity::find_by_id(user_id)
+                .all(db)
+                .await
+                .unwrap()
+                .len(),
+            session::Entity::find()
+                .filter(session::Column::UserId.eq(user_id))
+                .all(db)
+                .await
+                .unwrap()
+                .len(),
+            credential::Entity::find()
+                .filter(credential::Column::UserId.eq(user_id))
+                .all(db)
+                .await
+                .unwrap()
+                .len(),
+            cache_entry::Entity::find()
+                .filter(cache_entry::Column::UserId.eq(user_id))
+                .all(db)
+                .await
+                .unwrap()
+                .len(),
+            history_entry::Entity::find()
+                .filter(history_entry::Column::UserId.eq(user_id))
+                .all(db)
+                .await
+                .unwrap()
+                .len(),
+            pin::Entity::find()
+                .filter(pin::Column::UserId.eq(user_id))
+                .all(db)
+                .await
+                .unwrap()
+                .len(),
+        ]
+    }
+
+    #[tokio::test]
+    async fn deleting_a_user_deletes_all_of_theirs_and_nothing_else() {
+        use crate::entity::cache_entry::{self, Scope};
+        use sea_orm::ActiveModelTrait;
+
+        let db = database().await;
+        let sessions = Arc::new(sessions(&db, KEY, settings(&[])));
+        let (here, elsewhere, mona_id) = everything_of(&db, &sessions, mona()).await;
+        let (_, _, bob_id) = everything_of(&db, &sessions, bob()).await;
+        cache_entry::ActiveModel {
+            scope: Set(Scope::Shared.key()),
+            resource_key: Set("/owner/repo".to_owned()),
+            user_id: Set(Scope::Shared.user_id()),
+            data: Set(json!({ "private": false })),
+            fetched_at: Set(at(0)),
+            expires_at: Set(at(15)),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let shared = async || {
+            cache_entry::Entity::find()
+                .filter(cache_entry::Column::UserId.is_null())
+                .all(&db)
+                .await
+                .unwrap()
+                .len()
+        };
+        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 1, 1]);
+        let bobs = rows_of(&db, bob_id).await;
+        assert_eq!(bobs, [1, 2, 2, 1, 1, 1]);
+        let delete = async |headers| delete(Extension(sessions.clone()), headers).await;
+
+        // A visitor has no one to delete.
+        assert_eq!(
+            parts(delete(HeaderMap::new()).await).await,
+            (
+                StatusCode::UNAUTHORIZED,
+                "no-store".to_owned(),
+                String::new()
+            )
+        );
+        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 1, 1]);
+
+        // FR-PERS-04, DR-04: all of Mona's goes, and the browser forgets her session.
+        let response = delete(carrying(&here)).await;
+        assert_eq!(response.headers()[header::SET_COOKIE], sessions.removal());
+        assert_eq!(
+            parts(response).await,
+            (StatusCode::NO_CONTENT, "no-store".to_owned(), String::new())
+        );
+        assert_eq!(rows_of(&db, mona_id).await, [0; 6]);
+        // Bob's and the shared cache stay.
+        assert_eq!(rows_of(&db, bob_id).await, bobs);
+        assert_eq!(shared().await, 1);
+
+        // She is signed out on every browser, and has nothing left to delete.
+        for cookie in [&here, &elsewhere] {
+            assert!(sessions.resolve(&carrying(cookie)).await.unwrap().is_none());
+            assert_eq!(
+                parts(delete(carrying(cookie)).await).await.0,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+
+        // Signing in again starts afresh.
+        sessions
+            .sign_in(mona(), &token("gho_mona"), &HeaderMap::new())
+            .await
+            .unwrap();
+        let again = user::Entity::find()
+            .filter(user::Column::GithubId.eq(mona().github_id))
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(again.id, mona_id);
+        assert_eq!(rows_of(&db, again.id).await, [1, 1, 1, 0, 0, 0]);
     }
 }

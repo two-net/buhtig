@@ -1,7 +1,7 @@
 import { HttpClient, HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { Injectable, Injector, computed, inject, linkedSignal, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { catchError, map, of, tap } from 'rxjs';
+import { Observable, catchError, map, of, tap } from 'rxjs';
 
 /** A signed-in user, as the server describes them (FR-AUTH-04). */
 export interface User {
@@ -60,20 +60,28 @@ export class Session {
   );
 
   private readonly endedNow = signal(false);
+  private readonly deletedNow = signal(false);
 
   /**
    * Whether the user was signed in when the page loaded, and has been signed out since, as when
-   * GitHub no longer takes the credential they signed in with (FR-AUTH-09).
+   * GitHub no longer takes the credential they signed in with (FR-AUTH-09). Not when they deleted
+   * their data, which signed them out as they asked.
    */
-  readonly ended = computed(() => this.endedNow() && !!this.loaded()?.user);
+  readonly ended = computed(() => this.endedNow() && !this.deletedNow() && !!this.loaded()?.user);
+
+  /** Whether the user deleted all their data since the page loaded, which signed them out. */
+  readonly deleted = this.deletedNow.asReadonly();
+
+  /** Whether the user who was signed in when the page loaded no longer is. */
+  private readonly gone = computed(() => this.ended() || this.deleted());
 
   /**
    * The signed-in user, `null` for a visitor, or `undefined` until BuhTig knows. A visitor
    * also when the server cannot tell, so that it never stands in the way (NFR-UX-01).
    */
-  readonly user = computed(() => (this.ended() ? null : this.loaded()?.user));
+  readonly user = computed(() => (this.gone() ? null : this.loaded()?.user));
 
-  private readonly currentToken = linkedSignal(() => (this.ended() ? null : this.loaded()?.token));
+  private readonly currentToken = linkedSignal(() => (this.gone() ? null : this.loaded()?.token));
 
   /**
    * The signed-in user's personal access token, `null` if they have none or are a visitor, or
@@ -99,6 +107,15 @@ export class Session {
   /** Takes note that the user has put away the note about their token. */
   dismissTokenNote(): void {
     this.tokenNoteDismissed.set(true);
+  }
+
+  /**
+   * Deletes the signed-in user and all that BuhTig keeps of theirs: their account, sessions,
+   * credentials, private cache, history and pins (FR-PERS-04). That signs them out on every
+   * browser, this one too.
+   */
+  deleteUser(): Observable<void> {
+    return this.http.delete<void>('/-/api/user').pipe(tap(() => this.deletedNow.set(true)));
   }
 }
 

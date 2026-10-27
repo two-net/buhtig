@@ -117,3 +117,26 @@ export function movedDown(name: string): string {
 export function unpinned(name: string): string {
   return `Unpinned ${name}.`;
 }
+
+/** FR-PERS-04: what deleting one's data deletes, and what comes of it. */
+export const DELETION_PURPOSE =
+  'You can delete everything BuhTig keeps about you: your account here, your sign-ins on every ' +
+  'browser, the access GitHub gave BuhTig when you signed in, your token and the data BuhTig ' +
+  "read with it, your history and your pins. You'll be signed out everywhere. If you sign in " +
+  'again later, you start afresh.';
+
+/** FR-PERS-04: BuhTig's access to the user's GitHub account is removed on GitHub. */
+export const GITHUB_ACCESS =
+  "Deleting your data doesn't remove BuhTig from the apps you've authorized on GitHub. You can " +
+  'revoke its access in your GitHub settings.';
+
+export const REVIEW_GITHUB_ACCESS = 'Review your authorized apps on GitHub';
+
+/** FR-PERS-04: what the user confirms before anything is deleted. */
+export const CONFIRM_DELETION = "Delete all your BuhTig data? This can't be undone.";
+
+/** FR-PERS-04 */
+export const DATA_DELETED =
+  "All your BuhTig data is deleted, and you're signed out on every browser.";
+
+export const DELETE_FAILED = "BuhTig couldn't delete your data. Try again in a moment.";

@@ -96,6 +96,11 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   header. The home page shows up to 8 of them below the search box, pins first. In
   Settings, users can reorder or unpin their pins and clear their history. Housekeeping
   trims each user's history to 20 entries.
+- **Deleting data:** in Settings, once they confirm, signed-in users can delete everything
+  BuhTig keeps of theirs: their account, sessions, credentials, the data cached with their
+  token, their history and their pins. This signs them out on every browser. BuhTig stays
+  among their authorized OAuth apps on GitHub until they revoke it there, which Settings
+  links to, since BuhTig changes nothing on GitHub.
 - **Access:** in public mode, the default, anyone may open the home page and the
   dashboards of public repositories and organizations, with public data only. Settings,
   shortcuts and refreshing a dashboard need sign-in. With `access.mode = "private"`,

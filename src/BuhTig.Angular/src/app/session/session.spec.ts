@@ -124,6 +124,32 @@ describe('Session', () => {
     expect(session.token()).toBeNull();
   });
 
+  it('forgets a user who deleted their data, without saying that they were signed out (FR-PERS-04)', () => {
+    http.expectOne('/-/api/session').flush({ user: MONA, token: CLASSIC });
+    let done = false;
+    session.deleteUser().subscribe(() => (done = true));
+    expect(session.deleted()).toBe(false);
+    const request = http.expectOne('/-/api/user');
+    expect(request.request.method).toBe('DELETE');
+    request.flush(null, { status: 204, statusText: 'No Content' });
+    expect(done).toBe(true);
+    expect(session.deleted()).toBe(true);
+    expect(session.user()).toBeNull();
+    expect(session.token()).toBeNull();
+    expect(session.ended()).toBe(false);
+    // Nor later, when BuhTig's own requests meet a 401.
+    answer('/-/api/shortcuts', 401);
+    expect(session.ended()).toBe(false);
+  });
+
+  it('keeps the user signed in when their data could not be deleted', () => {
+    http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+    session.deleteUser().subscribe({ error: () => undefined });
+    http.expectOne('/-/api/user').flush(null, { status: 503, statusText: 'Unavailable' });
+    expect(session.deleted()).toBe(false);
+    expect(session.user()).toEqual(MONA);
+  });
+
   it('remembers for the visit that the user put away the note about their token', () => {
     http.expectOne('/-/api/session');
     expect(session.tokenNoted()).toBe(false);

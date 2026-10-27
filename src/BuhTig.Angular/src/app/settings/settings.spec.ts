@@ -4,6 +4,8 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { Session, noticeSignOut } from '../session/session';
 import {
+  DATA_DELETED,
+  GITHUB_ACCESS,
   NEVER_EXPIRES,
   PERMISSIONS_UNKNOWN,
   REMOVED,
@@ -98,7 +100,8 @@ describe('Settings', () => {
     await signedIn(null);
     expect(text()).toContain(TOKEN_PURPOSE);
     expect(text()).toContain(TOKEN_ADVICE);
-    const links = [...main().querySelectorAll('a')].map((link) => link.getAttribute('href'));
+    const section = main().querySelector('section[aria-labelledby="token-heading"]')!;
+    const links = [...section.querySelectorAll('a')].map((link) => link.getAttribute('href'));
     expect(links).toEqual([
       'https://github.com/settings/personal-access-tokens/new',
       'https://github.com/settings/tokens',
@@ -215,6 +218,28 @@ describe('Settings', () => {
     expect(text()).toContain(TOKEN_INVALID);
     // Settings says so itself, so the account corner need not.
     expect(page().querySelector('app-account .note')).toBeNull();
+  });
+
+  it("says that all of the user's data is deleted, and that they are signed out (FR-PERS-04)", async () => {
+    await signedIn(CLASSIC);
+    button('Delete all my data…')!.click();
+    await fixture.whenStable();
+    button('Delete all my data')!.click();
+    await fixture.whenStable();
+    http
+      .expectOne({ method: 'DELETE', url: '/-/api/user' })
+      .flush(null, { status: 204, statusText: 'No Content' });
+    await fixture.whenStable();
+
+    expect(text()).toContain(DATA_DELETED);
+    expect(text()).toContain(GITHUB_ACCESS);
+    expect(text()).not.toContain(SIGN_IN_FIRST);
+    expect(document.activeElement).toBe(main().querySelector('#data-deleted'));
+    // Nothing of theirs is left to show.
+    expect(main().querySelectorAll('section')).toHaveLength(0);
+    // The corner offers to sign in, without saying that they were signed out unasked.
+    expect(page().querySelector('app-account .sign-in')).not.toBeNull();
+    expect(page().querySelector('app-account [role="alert"]')).toBeNull();
   });
 
   it('asks a user signed out meanwhile to sign in again', async () => {

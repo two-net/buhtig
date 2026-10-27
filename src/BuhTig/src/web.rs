@@ -181,6 +181,7 @@ pub fn router(
                 .with_state(shortcuts.clone()),
         )
         .route("/-/api/session", get(session::current))
+        .route("/-/api/user", delete(session::delete))
         .route(
             "/-/api/shortcuts",
             get(shortcuts::list).with_state(shortcuts.clone()),

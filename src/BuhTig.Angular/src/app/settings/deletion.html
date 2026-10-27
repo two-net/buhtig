@@ -1,0 +1,28 @@
+<section aria-labelledby="deletion-heading">
+  <h2 id="deletion-heading">Delete your data</h2>
+  <p>{{ DELETION_PURPOSE }}</p>
+  <p>
+    {{ GITHUB_ACCESS }}
+    <a href="https://github.com/settings/applications">{{ REVIEW_GITHUB_ACCESS }}</a>
+  </p>
+  @if (confirming()) {
+    <div role="group" aria-labelledby="deletion-question">
+      <p id="deletion-question" tabindex="-1">
+        <strong>{{ CONFIRM_DELETION }}</strong>
+      </p>
+      <div class="actions">
+        <button type="button" class="primary" [disabled]="busy()" (click)="delete()">
+          Delete all my data
+        </button>
+        <button type="button" [disabled]="busy()" (click)="cancel()">Cancel</button>
+      </div>
+    </div>
+  } @else {
+    <div class="actions">
+      <button id="delete-data" type="button" (click)="ask()">Delete all my data…</button>
+    </div>
+  }
+  @if (problem(); as problem) {
+    <p class="problem" role="alert">{{ problem }}</p>
+  }
+</section>

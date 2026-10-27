@@ -92,6 +92,7 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         "DELETE /-/api/repositories/owner/repo/pin",
         "PUT /-/api/pins",
         "DELETE /-/api/history",
+        "DELETE /-/api/user",
     ] {
         let response = send(&running, request);
         assert_status(&response, 401);
@@ -155,6 +156,7 @@ fn public_mode_lets_visitors_view_dashboards() {
         "PUT /-/api/repositories/owner/repo/pin",
         "DELETE /-/api/organizations/acme/pin",
         "DELETE /-/api/history",
+        "DELETE /-/api/user",
     ] {
         let response = send(&running, request);
         assert_status(&response, 401);

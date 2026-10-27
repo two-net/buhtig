@@ -1,17 +1,29 @@
-import { Component, computed, inject, signal } from '@angular/core';
+import {
+  Component,
+  ElementRef,
+  afterRenderEffect,
+  computed,
+  inject,
+  signal,
+  viewChild,
+} from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Account } from '../account/account';
 import { exactTime } from '../format/format';
 import { RelativeTime } from '../format/relative-time';
 import { Session, Token, signInUrl } from '../session/session';
+import { DataDeletion } from './deletion';
 import {
   CREATE_TOKEN,
+  DATA_DELETED,
+  GITHUB_ACCESS,
   MANAGE_TOKENS,
   NEVER_EXPIRES,
   NO_SCOPES,
   PERMISSIONS_UNKNOWN,
   REMOVED,
   REMOVE_FAILED,
+  REVIEW_GITHUB_ACCESS,
   SAVED,
   SIGN_IN_FIRST,
   TOKEN_ADVICE,
@@ -29,11 +41,12 @@ import { SaveProblem, Tokens } from './tokens';
  * save, replace or remove at any time (FR-PAT-01, FR-PAT-05). Settings shows what the token is
  * for, and what BuhTig recommends (FR-PAT-09), and once one is saved, what BuhTig may show of
  * it, never the token itself (FR-PAT-04). Below it, their pins and history (§4.8), which they
- * may reorder, unpin and clear. Visitors are asked to sign in (FR-ACC-02).
+ * may reorder, unpin and clear, and last, a way to delete all their data (FR-PERS-04), which
+ * signs them out. Visitors are asked to sign in (FR-ACC-02).
  */
 @Component({
   selector: 'app-settings',
-  imports: [Account, RelativeTime, RouterLink, ShortcutSettings],
+  imports: [Account, DataDeletion, RelativeTime, RouterLink, ShortcutSettings],
   templateUrl: './settings.html',
   styleUrl: './settings.css',
 })
@@ -43,7 +56,11 @@ export class Settings {
 
   protected readonly user = this.session.user;
   protected readonly token = this.session.token;
+  protected readonly deleted = this.session.deleted;
   protected readonly signIn = signInUrl('/-/settings');
+
+  /** The note that the user's data is deleted, once it shows. */
+  private readonly deletedNote = viewChild<ElementRef<HTMLElement>>('deletedNote');
 
   /** What the token input holds. */
   protected readonly draft = signal('');
@@ -70,6 +87,15 @@ export class Settings {
   protected readonly NO_SCOPES = NO_SCOPES;
   protected readonly NEVER_EXPIRES = NEVER_EXPIRES;
   protected readonly TYPE_LABELS = TYPE_LABELS;
+  protected readonly DATA_DELETED = DATA_DELETED;
+  protected readonly GITHUB_ACCESS = GITHUB_ACCESS;
+  protected readonly REVIEW_GITHUB_ACCESS = REVIEW_GITHUB_ACCESS;
+
+  constructor() {
+    // The button that deleted the data went with the rest of Settings, so focus goes to what
+    // came of it.
+    afterRenderEffect(() => this.deletedNote()?.nativeElement.focus());
+  }
 
   /** A token's expiry in full, such as "Nov 25, 2026, 12:00 PM". */
   protected expiry(token: Token): string {

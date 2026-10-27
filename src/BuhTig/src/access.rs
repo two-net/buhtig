@@ -162,6 +162,7 @@ mod tests {
             "/-/api/history",
             "/-/api/pins",
             "/-/api/token",
+            "/-/api/user",
             "/-/api/repositories/owner/repo",
             "/-/api/repositories/owner/repo/pin",
             "/-/api/organizations/acme/view",
