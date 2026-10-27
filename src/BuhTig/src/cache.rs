@@ -74,6 +74,14 @@ pub enum Viewer {
 }
 
 impl Viewer {
+    /// The signed-in user's `users.id`, unless the viewer is a visitor.
+    pub fn user_id(&self) -> Option<i64> {
+        match self {
+            Viewer::Visitor(_) => None,
+            Viewer::SignedIn { user_id, .. } | Viewer::TokenUser { user_id, .. } => Some(*user_id),
+        }
+    }
+
     fn scope(&self) -> Scope {
         match self {
             Viewer::Visitor(_) | Viewer::SignedIn { .. } => Scope::Shared,

@@ -14,6 +14,9 @@ import {
   AUTHORIZE_TOKEN,
   GO_HOME,
   NOT_FOUND_OR_PRIVATE,
+  PIN,
+  PIN_FAILED,
+  PIN_LIMIT,
   REFRESHED_RECENTLY,
   REFRESH_FAILED,
   REPLACE_TOKEN,
@@ -23,6 +26,7 @@ import {
   THEN_RELOAD,
   TOKEN_INVALID_TO_SEE,
   TOKEN_REFUSED,
+  UNPIN,
   notFound,
   notFoundWithToken,
 } from './messages';
@@ -49,9 +53,12 @@ describe('Dashboard', () => {
 
   afterEach(() => {
     // Who is viewing is the header's own business, and each widget's data its own, which
-    // these tests leave to them.
+    // these tests leave to them, as they leave a signed-in user's history and pins to those
+    // that test them.
     http.match('/-/api/session');
     http.match(isWidget);
+    http.match('/-/api/shortcuts');
+    http.match(isView);
     http.verify();
     vi.useRealTimers();
   });
@@ -66,7 +73,11 @@ describe('Dashboard', () => {
    * `/-/api/organizations/org/stats`.
    */
   const isWidget = (request: HttpRequest<unknown>) =>
+    request.method === 'GET' &&
     /^\/-\/api\/(repositories\/[^/]+|organizations)\/[^/]+\/[^/]+$/.test(request.url);
+  /** Whether `request` records that a signed-in user viewed a dashboard (FR-PERS-01). */
+  const isView = (request: HttpRequest<unknown>) =>
+    request.method === 'POST' && request.url.endsWith('/view');
   /** The repository's widgets, in the order of the grid. */
   const WIDGETS = [
     'stats',
@@ -510,7 +521,7 @@ describe('Dashboard', () => {
       const shownHere = page().querySelector('app-not-found-or-private')!;
       // Nothing of the resource: not its header, a notice about it, or its widgets.
       expect(page().querySelector('app-repository-header, app-organization-header')).toBeNull();
-      expect(page().querySelector('app-denied, .grid, app-refresh')).toBeNull();
+      expect(page().querySelector('app-denied, .grid, app-refresh, app-pin')).toBeNull();
       const link = shownHere.querySelector('p a');
       return [
         heading(),
@@ -641,6 +652,172 @@ describe('Dashboard', () => {
       await refresh(502);
       expect(note()).toBe(REFRESH_FAILED);
       http.expectNone('/-/api/repositories/acme/widget');
+    });
+  });
+
+  describe('history (FR-PERS-01)', () => {
+    /** The views recorded since last asked, as the URLs they were recorded at. */
+    const views = () => http.match(isView).map((request) => request.request.url);
+
+    it("records a signed-in user's view once the dashboard is at GitHub's spelling", async () => {
+      await open('/ACME/Widget', '/-/api/repositories/ACME/Widget', { name: 'acme/widget' });
+      http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+      await vi.waitFor(() => expect(router.url).toBe('/acme/widget'));
+      await harness.fixture.whenStable();
+      expect(views()).toEqual([]);
+
+      http.expectOne('/-/api/repositories/acme/widget').flush({ name: 'acme/widget' });
+      await harness.fixture.whenStable();
+      expect(views()).toEqual(['/-/api/repositories/acme/widget/view']);
+    });
+
+    it("records an organization's dashboard, for a user known only after it loads", async () => {
+      await open('/acme', '/-/api/organizations/acme', { name: 'acme' });
+      expect(views()).toEqual([]);
+      http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+      await harness.fixture.whenStable();
+      expect(views()).toEqual(['/-/api/organizations/acme/view']);
+    });
+
+    it('records nothing more on a refresh, nor when the server could not record it', async () => {
+      await open('/acme/widget', '/-/api/repositories/acme/widget', { name: 'acme/widget' });
+      http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+      await harness.fixture.whenStable();
+      http
+        .expectOne({ method: 'POST', url: '/-/api/repositories/acme/widget/view' })
+        .flush(null, { status: 503, statusText: 'Unavailable' });
+      await harness.fixture.whenStable();
+      expect(heading()).toBe('acme/widget');
+
+      page().querySelector<HTMLButtonElement>('app-refresh button')!.click();
+      http
+        .expectOne({ method: 'POST', url: '/-/api/repositories/acme/widget/refresh' })
+        .flush(null, { status: 204, statusText: 'No Content' });
+      await harness.fixture.whenStable();
+      http.expectOne('/-/api/repositories/acme/widget').flush({ name: 'acme/widget' });
+      await harness.fixture.whenStable();
+      expect(views()).toEqual([]);
+    });
+
+    it('records each dashboard opened, again when opened again', async () => {
+      await open('/acme/widget', '/-/api/repositories/acme/widget', { name: 'acme/widget' });
+      http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+      await harness.fixture.whenStable();
+      await open('/acme', '/-/api/organizations/acme', { name: 'acme' });
+      await open('/acme/widget', '/-/api/repositories/acme/widget', { name: 'acme/widget' });
+      expect(views()).toEqual([
+        '/-/api/repositories/acme/widget/view',
+        '/-/api/organizations/acme/view',
+        '/-/api/repositories/acme/widget/view',
+      ]);
+    });
+
+    it("records no visitor's views", async () => {
+      await open('/acme/widget', '/-/api/repositories/acme/widget', { name: 'acme/widget' });
+      http.expectOne('/-/api/session').flush({ user: null });
+      await harness.fixture.whenStable();
+      expect(views()).toEqual([]);
+    });
+
+    it('records nothing that GitHub says is not there, or keeps from the viewer', async () => {
+      await harness.navigateByUrl('/acme/gone');
+      http
+        .expectOne('/-/api/repositories/acme/gone')
+        .flush(null, { status: 404, statusText: 'Not Found' });
+      http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+      await harness.fixture.whenStable();
+      await harness.navigateByUrl('/acme/sso');
+      http
+        .expectOne('/-/api/repositories/acme/sso')
+        .flush(
+          { denied: 'sso', url: 'https://github.com/orgs/acme/sso' },
+          { status: 403, statusText: 'Forbidden' },
+        );
+      await harness.fixture.whenStable();
+      expect(views()).toEqual([]);
+    });
+  });
+
+  describe('pinning (FR-PERS-02)', () => {
+    const pinButton = () => page().querySelector<HTMLButtonElement>('app-pin button');
+    const label = () => pinButton()?.textContent?.trim();
+    const note = () => page().querySelector('app-pin [role="status"]')?.textContent?.trim();
+    const WIDGET = { kind: 'repository', name: 'acme/widget' };
+
+    /**
+     * Opens the dashboard of `acme/widget` for a signed-in user, and answers what they pinned
+     * with `pins`.
+     */
+    async function openWidget(pins: object[]): Promise<void> {
+      await open('/acme/widget', '/-/api/repositories/acme/widget', {
+        name: 'acme/widget',
+        fetched_at: '2026-10-22T12:00:00.000Z',
+      });
+      http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+      await harness.fixture.whenStable();
+      http.expectOne('/-/api/shortcuts').flush({ pins, recent: [] });
+      await harness.fixture.whenStable();
+    }
+
+    /** Clicks the button, and answers the server's part, `method`, with `answer` as `status`. */
+    async function toggle(method: string, status: number, answer: object | null): Promise<void> {
+      pinButton()!.click();
+      await harness.fixture.whenStable();
+      expect(pinButton()!.disabled).toBe(true);
+      http
+        .expectOne({ method, url: '/-/api/repositories/acme/widget/pin' })
+        .flush(answer, { status, statusText: `${status}` });
+      await harness.fixture.whenStable();
+      expect(pinButton()!.disabled).toBe(false);
+    }
+
+    it('is not offered to visitors (FR-ACC-02)', async () => {
+      await open('/acme/widget', '/-/api/repositories/acme/widget', { name: 'acme/widget' });
+      http.expectOne('/-/api/session').flush({ user: null });
+      await harness.fixture.whenStable();
+      expect(pinButton()).toBeNull();
+      expect(http.match('/-/api/shortcuts')).toEqual([]);
+    });
+
+    it('pins a dashboard, and unpins it', async () => {
+      await openWidget([{ kind: 'organization', name: 'acme' }]);
+      expect(label()).toBe(PIN);
+      // After Refresh, beside when its data was fetched.
+      expect(page().querySelector('.when app-refresh + app-pin')).not.toBeNull();
+
+      await toggle('PUT', 200, { pins: [{ kind: 'organization', name: 'acme' }, WIDGET] });
+      expect(label()).toBe(UNPIN);
+      expect(note()).toBe('');
+      await toggle('DELETE', 200, { pins: [{ kind: 'organization', name: 'acme' }] });
+      expect(label()).toBe(PIN);
+    });
+
+    it('knows a dashboard pinned already, whatever the case of its name', async () => {
+      await openWidget([{ kind: 'repository', name: 'ACME/Widget' }]);
+      expect(label()).toBe(UNPIN);
+    });
+
+    it('says when 12 dashboards are pinned already', async () => {
+      await openWidget([]);
+      await toggle('PUT', 409, { error: 'too_many_pins' });
+      expect(note()).toBe(PIN_LIMIT);
+      expect(label()).toBe(PIN);
+    });
+
+    it('says when it could not change the pins', async () => {
+      await openWidget([WIDGET]);
+      await toggle('DELETE', 503, null);
+      expect(note()).toBe(PIN_FAILED);
+      expect(label()).toBe(UNPIN);
+    });
+
+    it('is not offered when the server cannot say what is pinned', async () => {
+      await open('/acme/widget', '/-/api/repositories/acme/widget', { name: 'acme/widget' });
+      http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+      await harness.fixture.whenStable();
+      http.expectOne('/-/api/shortcuts').flush(null, { status: 503, statusText: 'Unavailable' });
+      await harness.fixture.whenStable();
+      expect(pinButton()).toBeNull();
     });
   });
 });

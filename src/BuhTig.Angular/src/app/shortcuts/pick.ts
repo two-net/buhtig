@@ -1,3 +1,5 @@
+import { Resource } from '../search/parse';
+
 /** A dashboard that a signed-in user pinned or viewed recently (§4.8). */
 export interface Shortcut {
   kind: 'repository' | 'organization';
@@ -18,6 +20,27 @@ export function pick(pins: Shortcut[], recent: Shortcut[]): Shortcut[] {
     0,
     MAX_SHORTCUTS,
   );
+}
+
+/** Whether `a` and `b` are the same dashboard, whatever the case of their names. */
+export function sameDashboard(a: Shortcut, b: Shortcut): boolean {
+  return key(a) === key(b);
+}
+
+/** The shortcut to `resource`'s dashboard. */
+export function shortcutOf(resource: Resource): Shortcut {
+  return resource.kind === 'repository'
+    ? { kind: 'repository', name: `${resource.owner}/${resource.repo}` }
+    : { kind: 'organization', name: resource.org };
+}
+
+/** The resource whose dashboard `shortcut` leads to. */
+export function resourceOf({ kind, name }: Shortcut): Resource {
+  if (kind === 'organization') {
+    return { kind, org: name };
+  }
+  const [owner, repo] = name.split('/');
+  return { kind, owner, repo };
 }
 
 /** What tells dashboards apart. GitHub's names ignore letter case. */

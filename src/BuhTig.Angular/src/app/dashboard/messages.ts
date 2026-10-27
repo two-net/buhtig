@@ -70,3 +70,15 @@ export const REFRESHED_RECENTLY =
   'This dashboard was refreshed less than a minute ago. Try again in a moment.';
 
 export const REFRESH_FAILED = "BuhTig couldn't refresh this dashboard. Try again in a moment.";
+
+/** FR-PERS-02: the button that pins a dashboard, so that it comes first on the home page. */
+export const PIN = 'Pin';
+
+/** FR-PERS-02: the button that unpins a pinned dashboard. */
+export const UNPIN = 'Unpin';
+
+/** FR-PERS-02: a user may pin up to 12 dashboards. */
+export const PIN_LIMIT =
+  "You've pinned 12 dashboards, the most BuhTig keeps. Unpin one in Settings to pin this one.";
+
+export const PIN_FAILED = "BuhTig couldn't change your pins. Try again in a moment.";

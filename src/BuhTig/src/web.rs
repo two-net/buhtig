@@ -18,7 +18,7 @@ use axum::extract::{Request, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Extension, Router};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -35,6 +35,7 @@ use crate::organizations;
 use crate::preview::Previews;
 use crate::repositories;
 use crate::session::{self, Sessions};
+use crate::shortcuts::{self, Shortcuts};
 use crate::surprise;
 use crate::tokens::{self, Tokens};
 use crate::ui::{self, Ui};
@@ -54,6 +55,10 @@ struct Pages {
 /// Every request may carry a session, so each has the [`Sessions`] at hand, to tell who
 /// it comes from. In private mode, a gate in front of every route lets visitors through
 /// only to what signing in needs ([`access`]).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a part of BuhTig that its routes serve"
+)]
 pub fn router(
     mode: AccessMode,
     health: Arc<Health>,
@@ -62,6 +67,7 @@ pub fn router(
     sessions: Arc<Sessions>,
     auth: Arc<Auth>,
     tokens: Arc<Tokens>,
+    shortcuts: Arc<Shortcuts>,
 ) -> Router {
     let pages = Pages {
         health: health.clone(),
@@ -119,6 +125,16 @@ pub fn router(
             post(organizations::refresh).with_state(cache.clone()),
         )
         .route(
+            "/-/api/organizations/{org}/view",
+            post(shortcuts::view).with_state(shortcuts.clone()),
+        )
+        .route(
+            "/-/api/organizations/{org}/pin",
+            put(shortcuts::pin)
+                .delete(shortcuts::unpin)
+                .with_state(shortcuts.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}",
             get(repositories::summary).with_state(cache.clone()),
         )
@@ -154,8 +170,26 @@ pub fn router(
             "/-/api/repositories/{owner}/{repo}/refresh",
             post(repositories::refresh).with_state(cache.clone()),
         )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/view",
+            post(shortcuts::view).with_state(shortcuts.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/pin",
+            put(shortcuts::pin)
+                .delete(shortcuts::unpin)
+                .with_state(shortcuts.clone()),
+        )
         .route("/-/api/session", get(session::current))
-        .route("/-/api/shortcuts", get(session::shortcuts))
+        .route(
+            "/-/api/shortcuts",
+            get(shortcuts::list).with_state(shortcuts.clone()),
+        )
+        .route(
+            "/-/api/history",
+            delete(shortcuts::clear_history).with_state(shortcuts.clone()),
+        )
+        .route("/-/api/pins", put(shortcuts::reorder).with_state(shortcuts))
         .route(
             "/-/api/token",
             put(tokens::save).delete(tokens::remove).with_state(tokens),

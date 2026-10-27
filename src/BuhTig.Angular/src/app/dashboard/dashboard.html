@@ -14,6 +14,7 @@
     >
       @if (summary()?.path) {
         <app-refresh [resource]="repository" />
+        <app-pin [resource]="repository" />
       }
     </app-repository-header>
     @if (summary()?.denied; as denied) {
@@ -40,6 +41,7 @@
     >
       @if (summary()?.path) {
         <app-refresh [resource]="organization" />
+        <app-pin [resource]="organization" />
       }
     </app-organization-header>
     @if (summary()?.denied; as denied) {

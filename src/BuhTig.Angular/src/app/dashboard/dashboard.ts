@@ -1,7 +1,7 @@
 import { Component, computed, inject, input, linkedSignal } from '@angular/core';
 import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
 import { Router, RouterLink } from '@angular/router';
-import { map, switchMap } from 'rxjs';
+import { filter, map, mergeMap, switchMap } from 'rxjs';
 import { Account } from '../account/account';
 import { DeniedNotice } from './denied';
 import { NotFoundOrPrivate } from './not-found-or-private';
@@ -21,9 +21,13 @@ import { RepositoryIssues } from '../repository/issues';
 import { RepositoryLanguages } from '../repository/languages';
 import { RepositoryReleases } from '../repository/releases';
 import { RepositoryStats } from '../repository/stats';
+import { Pin } from './pin';
 import { Refresh } from './refresh';
 import { Search } from '../search/search';
 import { Resource, dashboardPath } from '../search/parse';
+import { Session } from '../session/session';
+import { Personal } from '../shortcuts/personal';
+import { shortcutOf } from '../shortcuts/pick';
 import { Resources, Summary } from './resources';
 
 /**
@@ -43,7 +47,9 @@ import { Resources, Summary } from './resources';
  * at (FR-NAV-04, FR-NAV-05). When GitHub keeps the resource from the viewer's credential, it
  * says why, and how to get access (FR-PAT-08). When GitHub says there is no such resource, it
  * shows nothing of it, and says what the viewer can do (FR-ACC-05). A signed-in user may refresh
- * it (FR-DATA-07), and its header and widgets then ask for their data again.
+ * it (FR-DATA-07), and its header and widgets then ask for their data again. Their view of it is
+ * recorded in their history, and they may pin it, to find it on the home page (FR-PERS-01,
+ * FR-PERS-02).
  */
 @Component({
   selector: 'app-dashboard',
@@ -59,6 +65,7 @@ import { Resources, Summary } from './resources';
     OrganizationRepositories,
     OrganizationStats,
     OrganizationTopRepositories,
+    Pin,
     Refresh,
     RepositoryActivity,
     RepositoryCommits,
@@ -77,6 +84,8 @@ import { Resources, Summary } from './resources';
 export class Dashboard {
   private readonly router = inject(Router);
   private readonly resources = inject(Resources);
+  private readonly personal = inject(Personal);
+  private readonly user = inject(Session).user;
 
   /** How many times the viewer has refreshed a dashboard. */
   protected readonly refreshes = this.resources.refreshes;
@@ -112,6 +121,16 @@ export class Dashboard {
     computation: () => undefined,
   });
 
+  /**
+   * The resource, for a signed-in user, once its dashboard is at its URL as GitHub spells it:
+   * what their history records (FR-PERS-01). Not one that GitHub says is not there, or keeps
+   * from the viewer, which has no path.
+   */
+  private readonly viewed = computed(() => {
+    const resource = this.resource();
+    return this.user() && this.summary()?.path === dashboardPath(resource) ? resource : undefined;
+  });
+
   constructor() {
     // Asked for again on each refresh.
     const asked = computed(() => ({ resource: this.resource(), refreshes: this.refreshes() }));
@@ -137,5 +156,14 @@ export class Dashboard {
           });
         }
       });
+
+    // Once for each dashboard opened, and not again on a refresh, which keeps the resource.
+    toObservable(this.viewed)
+      .pipe(
+        filter((resource) => resource !== undefined),
+        mergeMap((resource) => this.personal.record(shortcutOf(resource))),
+        takeUntilDestroyed(),
+      )
+      .subscribe();
   }
 }

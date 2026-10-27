@@ -36,10 +36,10 @@ fn buhtig(access: &str) -> (Running, Vec<String>, tempfile::TempDir) {
     (running, log, dir)
 }
 
-/// Sends `POST path` with no body, as a visitor.
-fn post(running: &Running, path: &str) -> String {
+/// Sends `request`, such as `POST /path`, with no body, as a visitor.
+fn send(running: &Running, request: &str) -> String {
     running.request(&format!(
-        "POST {path} HTTP/1.1\r\nHost: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "{request} HTTP/1.1\r\nHost: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         running.address
     ))
 }
@@ -85,10 +85,18 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         assert_status(&response, 401);
         assert_eq!(body(&response), "", "{path}");
     }
-    assert_status(
-        &post(&running, "/-/api/repositories/owner/repo/refresh"),
-        401,
-    );
+    for request in [
+        "POST /-/api/repositories/owner/repo/refresh",
+        "POST /-/api/repositories/owner/repo/view",
+        "PUT /-/api/organizations/acme/pin",
+        "DELETE /-/api/repositories/owner/repo/pin",
+        "PUT /-/api/pins",
+        "DELETE /-/api/history",
+    ] {
+        let response = send(&running, request);
+        assert_status(&response, 401);
+        assert_eq!(body(&response), "", "{request}");
+    }
 
     // What signing in needs stays open.
     let health = running.get("/-/health");
@@ -125,7 +133,8 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
     assert_eq!(header(&callback, "location"), Some("/-/sign-in-failed"));
 }
 
-/// FR-ACC-02: in public mode, a visitor may open any dashboard, but not refresh it.
+/// FR-ACC-02: in public mode, a visitor may open any dashboard, but neither refresh it nor
+/// keep it in a history or among pins.
 #[test]
 fn public_mode_lets_visitors_view_dashboards() {
     let (running, log, _dir) = buhtig(r#"mode = "public""#);
@@ -138,12 +147,20 @@ fn public_mode_lets_visitors_view_dashboards() {
         assert_status(&response, 200);
         assert_eq!(header(&response, "location"), None, "{path}");
     }
-    for path in [
-        "/-/api/repositories/owner/repo/refresh",
-        "/-/api/organizations/acme/refresh",
+    for request in [
+        "POST /-/api/repositories/owner/repo/refresh",
+        "POST /-/api/organizations/acme/refresh",
+        "POST /-/api/repositories/owner/repo/view",
+        "POST /-/api/organizations/acme/view",
+        "PUT /-/api/repositories/owner/repo/pin",
+        "DELETE /-/api/organizations/acme/pin",
+        "DELETE /-/api/history",
     ] {
-        let response = post(&running, path);
+        let response = send(&running, request);
         assert_status(&response, 401);
-        assert_eq!(body(&response), "", "{path}");
+        assert_eq!(body(&response), "", "{request}");
     }
+    let shortcuts = running.get("/-/api/shortcuts");
+    assert_status(&shortcuts, 401);
+    assert_eq!(body(&shortcuts), "");
 }

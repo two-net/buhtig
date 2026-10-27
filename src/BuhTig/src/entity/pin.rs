@@ -4,6 +4,9 @@ use sea_orm::entity::prelude::*;
 
 use super::ResourceKind;
 
+/// How many dashboards a user may pin.
+pub const MAX_PER_USER: u64 = 12;
+
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "pins")]

@@ -1,4 +1,4 @@
-import { MAX_SHORTCUTS, Shortcut, pick } from './pick';
+import { MAX_SHORTCUTS, Shortcut, pick, resourceOf, sameDashboard, shortcutOf } from './pick';
 
 function repository(name: string): Shortcut {
   return { kind: 'repository', name };
@@ -40,5 +40,29 @@ describe('pick', () => {
 
   it('is empty when there is nothing to show', () => {
     expect(pick([], [])).toEqual([]);
+  });
+});
+
+describe('sameDashboard', () => {
+  it('tells dashboards apart by their kind and name, whatever its case', () => {
+    expect(sameDashboard(repository('Owner/Repo'), repository('owner/repo'))).toBe(true);
+    expect(sameDashboard(organization('acme'), organization('ACME'))).toBe(true);
+    expect(sameDashboard(repository('owner/repo'), repository('owner/other'))).toBe(false);
+    expect(sameDashboard(organization('acme'), repository('acme'))).toBe(false);
+  });
+});
+
+describe('shortcutOf and resourceOf', () => {
+  it("lead from a resource to its dashboard's shortcut, and back", () => {
+    expect(shortcutOf({ kind: 'repository', owner: 'owner', repo: 're.po' })).toEqual(
+      repository('owner/re.po'),
+    );
+    expect(shortcutOf({ kind: 'organization', org: 'acme' })).toEqual(organization('acme'));
+    expect(resourceOf(repository('owner/re.po'))).toEqual({
+      kind: 'repository',
+      owner: 'owner',
+      repo: 're.po',
+    });
+    expect(resourceOf(organization('acme'))).toEqual({ kind: 'organization', org: 'acme' });
   });
 });

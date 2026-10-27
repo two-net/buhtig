@@ -69,6 +69,9 @@ describe('Settings', () => {
   async function signedIn(token: object | null): Promise<void> {
     http.expectOne('/-/api/session').flush({ user: MONA, token });
     await fixture.whenStable();
+    // Pins and history, which `shortcuts.spec.ts` tests.
+    http.expectOne('/-/api/shortcuts').flush({ pins: [], recent: [] });
+    await fixture.whenStable();
   }
 
   /** Types `value` into the token input, and saves it. */

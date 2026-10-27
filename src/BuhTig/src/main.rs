@@ -15,6 +15,7 @@ mod organizations;
 mod preview;
 mod repositories;
 mod session;
+mod shortcuts;
 mod surprise;
 mod throttle;
 mod tokens;
@@ -46,6 +47,7 @@ use crate::crypto::Sealer;
 use crate::health::Health;
 use crate::preview::Previews;
 use crate::session::Sessions;
+use crate::shortcuts::Shortcuts;
 use crate::tokens::Tokens;
 
 /// Where the config file is read from unless `--config` says otherwise (FR-CFG-01).
@@ -170,6 +172,7 @@ async fn serve(config: Config) -> ExitCode {
         },
     ));
     let tokens = Arc::new(Tokens::new(db.clone(), sealer, github.clone()));
+    let shortcuts = Arc::new(Shortcuts::new(db.clone()));
     let auth = Arc::new(Auth::new(
         sessions.clone(),
         github,
@@ -183,6 +186,7 @@ async fn serve(config: Config) -> ExitCode {
         sessions,
         auth,
         tokens,
+        shortcuts,
     );
 
     let listen = config.server.listen;

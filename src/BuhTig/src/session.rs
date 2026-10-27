@@ -1,7 +1,7 @@
 //! Sessions (SRS §4.5): which signed-in user a browser belongs to, so that their requests
 //! carry their own credential rather than a visitor's (FR-DATA-02). The UI asks who is
-//! viewing so as to show "Sign in" or the user's avatar menu (UI-02), and the signed-in
-//! user's shortcuts on the home page (FR-SRCH-08).
+//! viewing so as to show "Sign in" or the user's avatar menu (UI-02), and their own
+//! history, pins and settings ([`crate::shortcuts`], [`crate::tokens`]).
 //!
 //! A session's ID is 256 random bits in the session cookie, and the database keeps only
 //! its hash (DR-02), so that what the database holds signs no one in. Each sign-in starts
@@ -18,8 +18,6 @@
 //! sign-in credential otherwise (FR-PAT-06). A PAT that has expired, or cannot be decrypted
 //! because `security.encryption_key` changed, is marked invalid as it is found, for the user
 //! to replace (DR-03, [`crate::tokens`]).
-//!
-//! Pins and history come with #25.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -458,25 +456,6 @@ pub async fn current(
                 .map(tokens::describe);
             respond(json!({ "user": user, "token": token }))
         }
-        Err(error) => {
-            error!("cannot read the session: {error}");
-            status(StatusCode::SERVICE_UNAVAILABLE)
-        }
-    }
-}
-
-/// `/-/api/shortcuts`: 401 for a visitor, who has none (FR-ACC-02). For a signed-in user,
-/// `{"pins": […], "recent": […]}`, which are empty until there are pins and history (#25).
-/// Each item is `{"kind": "repository" | "organization", "name": "owner/repo" | "org"}`.
-/// Pins are in the user's order, and recent dashboards newest first. The UI picks the
-/// shortcuts from them.
-pub async fn shortcuts(
-    Extension(sessions): Extension<Arc<Sessions>>,
-    headers: HeaderMap,
-) -> Response {
-    match sessions.resolve(&headers).await {
-        Ok(Some(_)) => respond(json!({ "pins": [], "recent": [] })),
-        Ok(None) => status(StatusCode::UNAUTHORIZED),
         Err(error) => {
             error!("cannot read the session: {error}");
             status(StatusCode::SERVICE_UNAVAILABLE)
@@ -951,30 +930,16 @@ mod tests {
             .unwrap();
         let current =
             async |headers| parts(current(Extension(sessions.clone()), headers).await).await;
-        let shortcuts =
-            async |headers| parts(shortcuts(Extension(sessions.clone()), headers).await).await;
 
         assert_eq!(
             current(HeaderMap::new()).await,
             ok(r#"{"token":null,"user":null}"#)
         );
         assert_eq!(
-            shortcuts(HeaderMap::new()).await,
-            (
-                StatusCode::UNAUTHORIZED,
-                "no-store".to_owned(),
-                String::new()
-            )
-        );
-        assert_eq!(
             current(carrying(&cookie)).await,
             ok(
                 r#"{"token":null,"user":{"avatar_url":"https://avatars.githubusercontent.com/u/583231","login":"Mona","name":"Mona Lisa"}}"#
             )
-        );
-        assert_eq!(
-            shortcuts(carrying(&cookie)).await,
-            ok(r#"{"pins":[],"recent":[]}"#)
         );
     }
 

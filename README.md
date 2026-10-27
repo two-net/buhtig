@@ -91,6 +91,11 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   as when it is revoked or expires, is marked invalid: the user's requests go with their
   sign-in again, and BuhTig asks them to replace the token. Replacing or removing a token
   deletes the data cached with it at once.
+- **Shortcuts:** for signed-in users, BuhTig remembers the last 20 dashboards they opened,
+  only which ones and when, and lets them pin up to 12 with the Pin button in a dashboard's
+  header. The home page shows up to 8 of them below the search box, pins first. In
+  Settings, users can reorder or unpin their pins and clear their history. Housekeeping
+  trims each user's history to 20 entries.
 - **Access:** in public mode, the default, anyone may open the home page and the
   dashboards of public repositories and organizations, with public data only. Settings,
   shortcuts and refreshing a dashboard need sign-in. With `access.mode = "private"`,

@@ -21,17 +21,19 @@ import {
   TYPE_LABELS,
   saveProblemMessage,
 } from './messages';
+import { ShortcutSettings } from './shortcuts';
 import { SaveProblem, Tokens } from './tokens';
 
 /**
  * The signed-in user's settings, at `/-/settings`: their personal access token, which they may
  * save, replace or remove at any time (FR-PAT-01, FR-PAT-05). Settings shows what the token is
  * for, and what BuhTig recommends (FR-PAT-09), and once one is saved, what BuhTig may show of
- * it, never the token itself (FR-PAT-04). Visitors are asked to sign in (FR-ACC-02).
+ * it, never the token itself (FR-PAT-04). Below it, their pins and history (§4.8), which they
+ * may reorder, unpin and clear. Visitors are asked to sign in (FR-ACC-02).
  */
 @Component({
   selector: 'app-settings',
-  imports: [Account, RelativeTime, RouterLink],
+  imports: [Account, RelativeTime, RouterLink, ShortcutSettings],
   templateUrl: './settings.html',
   styleUrl: './settings.css',
 })

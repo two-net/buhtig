@@ -522,11 +522,7 @@ export class Resources {
    * asked for again.
    */
   refresh(resource: Resource): Observable<Refreshed> {
-    const url =
-      resource.kind === 'repository'
-        ? repositoryUrl(resource.owner, resource.repo)
-        : organizationUrl(resource.org);
-    return this.http.post(`${url}/refresh`, null).pipe(
+    return this.http.post(`${resourceUrl(resource)}/refresh`, null).pipe(
       tap(() => this.refreshCount.update((count) => count + 1)),
       map((): Refreshed => ({ status: 'refreshed' })),
       catchError((error: unknown) =>
@@ -804,6 +800,13 @@ function deniedBy(error: unknown): Denied | undefined {
     default:
       return undefined;
   }
+}
+
+/** Where the server answers about `resource`, and under which it refreshes, records and pins it. */
+export function resourceUrl(resource: Resource): string {
+  return resource.kind === 'repository'
+    ? repositoryUrl(resource.owner, resource.repo)
+    : organizationUrl(resource.org);
 }
 
 function repositoryUrl(owner: string, repo: string): string {

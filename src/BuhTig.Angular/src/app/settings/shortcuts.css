@@ -1,0 +1,42 @@
+:host {
+  display: block;
+}
+
+.pins {
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The name, and its buttons after it, or below it on narrow screens. */
+.pins li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--line);
+}
+
+.pins li:last-child {
+  border-bottom: 1px solid var(--line);
+}
+
+.pins a {
+  overflow-wrap: anywhere;
+}
+
+.pins .actions {
+  gap: 0.5rem;
+  margin-top: 0;
+}
+
+.pins button {
+  padding: 0.25rem 0.875rem;
+}
+
+/* The first can go no higher, and the last no lower. */
+.pins button:disabled {
+  cursor: default;
+}

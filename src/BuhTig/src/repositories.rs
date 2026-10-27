@@ -806,7 +806,7 @@ pub(crate) fn page(value: Option<&Value>) -> Option<String> {
 }
 
 /// `owner/repo` as its two names, if it is a repository's.
-fn names(full_name: &str) -> Option<(&str, &str)> {
+pub(crate) fn names(full_name: &str) -> Option<(&str, &str)> {
     full_name
         .split_once('/')
         .filter(|(owner, repo)| is_account_name(owner) && is_repository_name(repo))

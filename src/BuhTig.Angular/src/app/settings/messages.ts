@@ -78,3 +78,42 @@ export function saveProblemMessage(problem: SaveProblem): string {
 }
 
 export const REMOVE_FAILED = "BuhTig couldn't remove the token. Try again in a moment.";
+
+/** FR-PERS-02, FR-SRCH-08: what pins are for, and how to pin a dashboard. */
+export const PINS_PURPOSE =
+  'Pinned dashboards come first below the search box on the home page. Pin a dashboard with ' +
+  'the Pin button at its top. You can pin up to 12.';
+
+export const NO_PINS = "You haven't pinned any dashboards.";
+
+/** FR-PERS-01, FR-SRCH-08: what history is for, and all it keeps. */
+export const HISTORY_PURPOSE =
+  'BuhTig remembers the last 20 dashboards you opened, and offers them below the search box on ' +
+  'the home page. It keeps only which dashboards you opened, and when.';
+
+export const NO_HISTORY = 'Your history is empty.';
+
+/** FR-PERS-03 */
+export const HISTORY_CLEARED = 'History cleared. Your pins stay.';
+
+export const CLEAR_FAILED = "BuhTig couldn't clear your history. Try again in a moment.";
+
+export const PINS_FAILED = "BuhTig couldn't change your pins. Try again in a moment.";
+
+export const SHORTCUTS_UNAVAILABLE =
+  "BuhTig couldn't load your pins and history. Reload the page to try again.";
+
+/** FR-PERS-05 */
+export function movedUp(name: string): string {
+  return `Moved ${name} up.`;
+}
+
+/** FR-PERS-05 */
+export function movedDown(name: string): string {
+  return `Moved ${name} down.`;
+}
+
+/** FR-PERS-02 */
+export function unpinned(name: string): string {
+  return `Unpinned ${name}.`;
+}

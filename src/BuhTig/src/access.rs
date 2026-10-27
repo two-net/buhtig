@@ -159,8 +159,12 @@ mod tests {
             "/-/health/../owner/repo",
             "/-/api/surprise",
             "/-/api/shortcuts",
+            "/-/api/history",
+            "/-/api/pins",
             "/-/api/token",
             "/-/api/repositories/owner/repo",
+            "/-/api/repositories/owner/repo/pin",
+            "/-/api/organizations/acme/view",
             "/-/api/session/../repositories/owner/repo",
         ] {
             assert!(!is_open::<Built>(path), "{path}");
