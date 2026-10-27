@@ -187,6 +187,7 @@ async fn serve(config: Config) -> ExitCode {
         auth,
         tokens,
         shortcuts,
+        config.ui.animations,
     );
 
     let listen = config.server.listen;

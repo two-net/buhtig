@@ -1,4 +1,12 @@
-import { Component, computed, inject, input, linkedSignal } from '@angular/core';
+import {
+  Component,
+  afterNextRender,
+  computed,
+  inject,
+  input,
+  linkedSignal,
+  viewChild,
+} from '@angular/core';
 import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
 import { Router, RouterLink } from '@angular/router';
 import { filter, map, mergeMap, switchMap } from 'rxjs';
@@ -21,6 +29,7 @@ import { RepositoryIssues } from '../repository/issues';
 import { RepositoryLanguages } from '../repository/languages';
 import { RepositoryReleases } from '../repository/releases';
 import { RepositoryStats } from '../repository/stats';
+import { Glide } from '../motion/glide';
 import { Pin } from './pin';
 import { Refresh } from './refresh';
 import { Search } from '../search/search';
@@ -50,6 +59,8 @@ import { Resources, Summary } from './resources';
  * it (FR-DATA-07), and its header and widgets then ask for their data again. Their view of it is
  * recorded in their history, and they may pin it, to find it on the home page (FR-PERS-01,
  * FR-PERS-02).
+ *
+ * Opened from the home page, it fades in as the search box glides into its header (FR-ANIM-03).
  */
 @Component({
   selector: 'app-dashboard',
@@ -80,12 +91,20 @@ import { Resources, Summary } from './resources';
   ],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
+  host: { '[class.arriving]': 'glidingFrom !== undefined' },
 })
 export class Dashboard {
   private readonly router = inject(Router);
   private readonly resources = inject(Resources);
   private readonly personal = inject(Personal);
   private readonly user = inject(Session).user;
+  private readonly search = viewChild.required(Search);
+
+  /**
+   * Where the search box was on the home page, if the dashboard is opened from there. Taken as
+   * the dashboard is made, while the navigation that opens it is in progress.
+   */
+  protected readonly glidingFrom = inject(Glide).take();
 
   /** How many times the viewer has refreshed a dashboard. */
   protected readonly refreshes = this.resources.refreshes;
@@ -132,6 +151,12 @@ export class Dashboard {
   });
 
   constructor() {
+    const from = this.glidingFrom;
+    if (from !== undefined) {
+      // Before the first paint, so that the search box is never seen in its place too soon.
+      afterNextRender(() => this.search().glideFrom(from));
+    }
+
     // Asked for again on each refresh.
     const asked = computed(() => ({ resource: this.resource(), refreshes: this.refreshes() }));
     toObservable(asked)

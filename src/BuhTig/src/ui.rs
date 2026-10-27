@@ -30,6 +30,11 @@ const NOT_BUILT: &str = "<!doctype html>
 BuhTig.</p>
 ";
 
+/// What the app's page carries in its `<head>` when `ui.animations` is `false`, so that it
+/// keeps still for everyone from its first render, as it does for a browser that asks for
+/// reduced motion (FR-ANIM-10).
+pub const STILL: &str = "<meta name=\"buhtig-animations\" content=\"off\">\n";
+
 /// A file of the UI, such as `/main-E5OAMLPD.js` or `/favicon.ico`, or `None` if `path`
 /// names no file and is therefore a route of the app, such as `/owner/repo`.
 ///

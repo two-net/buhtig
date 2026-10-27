@@ -14,6 +14,26 @@ input {
   background: var(--background);
   color: var(--text);
   font: inherit;
+  transition:
+    box-shadow 200ms ease-out,
+    translate 200ms ease-out;
+}
+
+/* It lifts with a soft shadow as it is hovered or focused (FR-ANIM-02). */
+input:hover,
+input:focus {
+  translate: 0 -1px;
+  box-shadow: var(--lift);
+}
+
+/* Without motion, the shadow alone, in a short fade (FR-ANIM-10). */
+:host-context(.still) input {
+  transition-duration: 150ms;
+}
+
+:host-context(.still) input:hover,
+:host-context(.still) input:focus {
+  translate: none;
 }
 
 input::placeholder {

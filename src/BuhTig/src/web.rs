@@ -50,6 +50,8 @@ struct Pages {
     health: Arc<Health>,
     /// Link previews of dashboards (FR-NAV-06), unless there are none to give.
     previews: Option<Arc<Previews>>,
+    /// `ui.animations`: whether the UI may move (FR-ANIM-10).
+    animations: bool,
 }
 
 /// Every request may carry a session, so each has the [`Sessions`] at hand, to tell who
@@ -68,10 +70,12 @@ pub fn router(
     auth: Arc<Auth>,
     tokens: Arc<Tokens>,
     shortcuts: Arc<Shortcuts>,
+    animations: bool,
 ) -> Router {
     let pages = Pages {
         health: health.clone(),
         previews: previews.map(Arc::new),
+        animations,
     };
     let router = Router::new()
         .route("/-/health", get(health::check))
@@ -211,7 +215,8 @@ pub fn router(
 
 /// Every other path: a file of the UI, a redirect from a page beneath a dashboard to the
 /// dashboard, or else the app, which takes the path as its route (`/owner/repo`,
-/// `/-/about`, …). A dashboard's page carries its link preview, if it has one.
+/// `/-/about`, …). A dashboard's page carries its link preview, if it has one, and every
+/// page says when the UI is to keep still.
 async fn page(State(pages): State<Pages>, uri: Uri) -> Response {
     if let Some(asset) = ui::asset::<Ui>(uri.path()) {
         return asset;
@@ -229,7 +234,17 @@ async fn page(State(pages): State<Pages>, uri: Uri) -> Response {
         Some(previews) => previews.of(uri.path()).await,
         None => None,
     };
-    ui::app::<Ui>(preview.map(|preview| preview.tags()).as_deref())
+    ui::app::<Ui>(head(preview.map(|preview| preview.tags()), pages.animations).as_deref())
+}
+
+/// What the app's page adds to its `<head>`: a dashboard's link preview `tags`, and
+/// [`ui::STILL`] unless `animations` are on. `None` if that is nothing.
+fn head(tags: Option<String>, animations: bool) -> Option<String> {
+    let mut head = tags.unwrap_or_default();
+    if !animations {
+        head.push_str(ui::STILL);
+    }
+    (!head.is_empty()).then_some(head)
 }
 
 /// The response to a request for a page beneath `dashboard`, or another path to it.
@@ -428,6 +443,19 @@ mod tests {
         );
         stop.send(()).unwrap();
         server.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn pages_say_to_keep_still_only_when_animations_are_off() {
+        assert_eq!(head(None, true), None);
+        assert_eq!(head(None, false).as_deref(), Some(ui::STILL));
+
+        let tags = "<meta name=\"description\" content=\"x\">\n";
+        assert_eq!(head(Some(tags.into()), true).as_deref(), Some(tags));
+        assert_eq!(
+            head(Some(tags.into()), false),
+            Some(format!("{tags}{}", ui::STILL))
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

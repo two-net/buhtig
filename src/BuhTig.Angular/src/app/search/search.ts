@@ -9,6 +9,7 @@ import {
   viewChild,
 } from '@angular/core';
 import { Router } from '@angular/router';
+import { Motion } from '../motion/motion';
 import { Accounts } from './accounts';
 import { problemMessage, resourceMessage, userMessage } from './messages';
 import { dashboardPath, isUnfinished, parse } from './parse';
@@ -18,6 +19,9 @@ import { dashboardPath, isUnfinished, parse } from './parse';
  * recognizes as the user types (FR-SRCH-09), and opens its dashboard on Enter or "Show
  * dashboard" (SRS §4.1). `/` focuses it and Esc clears it (FR-SRCH-07). Its content goes
  * beside "Show dashboard", as the home page's "Surprise me" does (FR-SRCH-10).
+ *
+ * It lifts as it is hovered or focused (FR-ANIM-02), and shakes as it says why it opens no
+ * dashboard (FR-ANIM-09).
  *
  * In a dashboard's header it is compact, and filled in with the dashboard's resource (UI-03).
  */
@@ -30,6 +34,7 @@ import { dashboardPath, isUnfinished, parse } from './parse';
 export class Search {
   private readonly router = inject(Router);
   private readonly accounts = inject(Accounts);
+  private readonly motion = inject(Motion);
   private readonly box = viewChild.required<ElementRef<HTMLInputElement>>('box');
 
   /** Whether to focus the input once it is shown, on desktop only (FR-SRCH-07). */
@@ -102,7 +107,7 @@ export class Search {
     const attempt = ++this.attempt;
     const parsed = parse(this.query());
     if (!parsed.ok) {
-      this.message.set(problemMessage(parsed.problem));
+      this.refuse(problemMessage(parsed.problem));
       return;
     }
     const { resource } = parsed;
@@ -113,13 +118,72 @@ export class Search {
         return;
       }
       if (isUser) {
-        this.message.set(userMessage(resource.org));
+        this.refuse(userMessage(resource.org));
         return;
       }
     }
     await this.router.navigateByUrl(dashboardPath(resource));
   }
+
+  /** Says why the input opens no dashboard, with a shake each time (FR-ANIM-09). */
+  private refuse(message: string): void {
+    this.message.set(message);
+    this.animate(SHAKE, { duration: 280, easing: 'ease-in-out' });
+  }
+
+  /** Where the input is on the page, for it to glide from on the next page (FR-ANIM-03). */
+  bounds(): DOMRect {
+    return this.box().nativeElement.getBoundingClientRect();
+  }
+
+  /**
+   * Moves the input from `from`, where it was on the page before, to where it is, as the home
+   * page gives way to a dashboard (FR-ANIM-03). Only its transform changes, so that it can be
+   * clicked and typed into on its way (FR-ANIM-11).
+   */
+  glideFrom(from: DOMRect): void {
+    const to = this.bounds();
+    if (to.width === 0 || to.height === 0) {
+      return;
+    }
+    const x = from.left - to.left;
+    const y = from.top - to.top;
+    this.animate(
+      [
+        {
+          transformOrigin: 'top left',
+          transform: `translate(${x}px, ${y}px) scale(${from.width / to.width}, ${from.height / to.height})`,
+        },
+        { transformOrigin: 'top left', transform: 'none' },
+      ],
+      { duration: 400, easing: 'cubic-bezier(0.2, 0, 0, 1)' },
+    );
+  }
+
+  /**
+   * Plays `keyframes` on the input while motion is on (FR-ANIM-10). Not every environment can;
+   * the tests' jsdom cannot.
+   */
+  private animate(keyframes: Keyframe[], options: KeyframeAnimationOptions): void {
+    const box = this.box().nativeElement;
+    if (this.motion.full() && typeof box.animate === 'function') {
+      box.animate(keyframes, options);
+    }
+  }
 }
+
+/**
+ * A brief shake from side to side, which moves the input's `transform`, so that it adds to the
+ * lift's `translate` (FR-ANIM-09).
+ */
+const SHAKE: Keyframe[] = [
+  { transform: 'none' },
+  { transform: 'translateX(-6px)' },
+  { transform: 'translateX(5px)' },
+  { transform: 'translateX(-3px)' },
+  { transform: 'translateX(2px)' },
+  { transform: 'none' },
+];
 
 /**
  * Whether the page is on a desktop, with a mouse or touchpad. On a touch screen, focusing the

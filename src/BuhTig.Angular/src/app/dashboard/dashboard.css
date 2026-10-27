@@ -57,3 +57,23 @@ main {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/*
+ * Opened from the home page, it fades in while the search box glides into the header, above
+ * what is there (FR-ANIM-03). Faded content can be clicked all along (FR-ANIM-11).
+ */
+:host(.arriving) header > :not(app-search),
+:host(.arriving) main {
+  animation: arrive 400ms ease-out both;
+}
+
+:host(.arriving) app-search {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes arrive {
+  from {
+    opacity: 0;
+  }
+}

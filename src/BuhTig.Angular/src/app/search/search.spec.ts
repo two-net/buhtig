@@ -1,19 +1,29 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import type { MockInstance } from 'vitest';
+import type { Mock, MockInstance } from 'vitest';
+import { Motion } from '../motion/motion';
 import { Search } from './search';
 
 describe('Search', () => {
   let fixture: ComponentFixture<Search>;
   let http: HttpTestingController;
   let navigate: MockInstance<Router['navigateByUrl']>;
+  /** Whether motion is on, as `Motion` would say (FR-ANIM-10). */
+  let motion: ReturnType<typeof signal<boolean>>;
 
   beforeEach(async () => {
+    motion = signal(true);
     TestBed.configureTestingModule({
       imports: [Search],
-      providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: Motion, useValue: { full: motion } },
+      ],
     });
     navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     http = TestBed.inject(HttpTestingController);
@@ -318,6 +328,85 @@ describe('Search', () => {
       expect(input().value).toBe('github.com/acme');
       expect(message()).toBeUndefined();
       expect(hint()).toBe('');
+    });
+  });
+  describe('motion', () => {
+    let animate: Mock<HTMLElement['animate']>;
+
+    beforeEach(() => {
+      // jsdom has no Web Animations.
+      animate = vi.fn();
+      HTMLElement.prototype.animate = animate;
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, 'animate');
+    });
+
+    /** The transforms that the input was last animated through, and for how long. */
+    function animation(): { transforms: unknown[]; duration: unknown } {
+      expect(animate.mock.contexts.at(-1)).toBe(input());
+      const [keyframes, options] = animate.mock.lastCall!;
+      return {
+        transforms: (keyframes as Keyframe[]).map((keyframe) => keyframe['transform']),
+        duration: (options as KeyframeAnimationOptions).duration,
+      };
+    }
+
+    it('shakes as it says why it opens no dashboard, each time (FR-ANIM-09)', async () => {
+      search('gitlab.com/owner/repo');
+      await fixture.whenStable();
+      expect(animate).toHaveBeenCalledOnce();
+      const { transforms, duration } = animation();
+      expect(transforms).toEqual([
+        'none',
+        'translateX(-6px)',
+        'translateX(5px)',
+        'translateX(-3px)',
+        'translateX(2px)',
+        'none',
+      ]);
+      expect(duration).toBeLessThanOrEqual(300);
+
+      search('gitlab.com/owner/repo');
+      await fixture.whenStable();
+      expect(animate).toHaveBeenCalledTimes(2);
+    });
+
+    it("shakes as it says that an account is a user's", async () => {
+      search('octocat');
+      http.expectOne('/-/api/accounts/octocat').flush({ type: 'user' });
+      await vi.waitFor(() => expect(message()).toBe(USER_MESSAGE));
+      expect(animate).toHaveBeenCalledOnce();
+    });
+
+    it('does not shake as it opens a dashboard', async () => {
+      search('owner/repo');
+      await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith('/owner/repo'));
+      expect(animate).not.toHaveBeenCalled();
+    });
+
+    it('glides to where it is from where it was (FR-ANIM-03)', () => {
+      vi.spyOn(input(), 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 50, 400, 40));
+      fixture.componentInstance.glideFrom(new DOMRect(50, 300, 600, 48));
+      const { transforms, duration } = animation();
+      expect(transforms).toEqual(['translate(-50px, 250px) scale(1.5, 1.2)', 'none']);
+      expect(duration).toBeLessThanOrEqual(400);
+    });
+
+    it('does not glide while it is not laid out', () => {
+      fixture.componentInstance.glideFrom(new DOMRect(50, 300, 600, 48));
+      expect(animate).not.toHaveBeenCalled();
+    });
+
+    it('neither shakes nor glides without motion (FR-ANIM-10)', async () => {
+      motion.set(false);
+      search('gitlab.com/owner/repo');
+      await fixture.whenStable();
+      expect(message()).toBe('BuhTig supports github.com URLs only.');
+      vi.spyOn(input(), 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 50, 400, 40));
+      fixture.componentInstance.glideFrom(new DOMRect(50, 300, 600, 48));
+      expect(animate).not.toHaveBeenCalled();
     });
   });
 });

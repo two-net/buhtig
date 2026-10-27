@@ -13,6 +13,8 @@
   --line: #85828f;
   --accent: #5b3fc4;
   --on-accent: #ffffff;
+  /* The soft shadow of what lifts, such as the search box (FR-ANIM-02). */
+  --lift: 0 2px 12px rgb(28 27 34 / 0.16);
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
@@ -25,6 +27,7 @@
     --line: #7a7786;
     --accent: #b2a3ff;
     --on-accent: #16151b;
+    --lift: 0 2px 14px rgb(0 0 0 / 0.6);
   }
 }
 

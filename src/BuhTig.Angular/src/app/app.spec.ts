@@ -4,6 +4,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { Title } from '@angular/platform-browser';
 import { Router, provideRouter, withComponentInputBinding } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
+import type { Mock } from 'vitest';
 import { routes } from './app.routes';
 
 describe('routes', () => {
@@ -110,5 +111,75 @@ describe('routes', () => {
     expect(title()).toBe('angular · BuhTig');
     await harness.navigateByUrl('/');
     expect(title()).toBe('BuhTig');
+  });
+  describe('motion', () => {
+    let animate: Mock<HTMLElement['animate']>;
+
+    beforeEach(() => {
+      // Each test is a browser session of its own.
+      sessionStorage.clear();
+      // jsdom has no Web Animations, and lays nothing out: here the search box is in the middle
+      // of the home page, and in a dashboard's header.
+      animate = vi.fn();
+      HTMLElement.prototype.animate = animate;
+      vi.spyOn(HTMLInputElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+        this: HTMLInputElement,
+      ) {
+        return this.closest('app-home')
+          ? new DOMRect(100, 300, 600, 48)
+          : new DOMRect(150, 12, 600, 40);
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, 'animate');
+      document.documentElement.classList.remove('still');
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
+    const wordmark = (harness: RouterTestingHarness) =>
+      harness.routeNativeElement!.querySelector('h1')!;
+
+    it("makes the wordmark's entrance on the session's first home page alone (FR-ANIM-01)", async () => {
+      const harness = await RouterTestingHarness.create('/');
+      expect(wordmark(harness).classList).toContain('entrance');
+      await harness.navigateByUrl('/-/about');
+      await harness.navigateByUrl('/');
+      expect(wordmark(harness).classList).not.toContain('entrance');
+    });
+
+    it('glides the search box into the header of a dashboard opened from home, as it fades in (FR-ANIM-03)', async () => {
+      const harness = await RouterTestingHarness.create('/');
+      await harness.navigateByUrl('/owner/repo');
+      const dashboard = harness.routeNativeElement!;
+      expect(dashboard.classList).toContain('arriving');
+      expect(animate).toHaveBeenCalledOnce();
+      expect(animate.mock.contexts[0]).toBe(dashboard.querySelector('header input'));
+      const [keyframes] = animate.mock.calls[0];
+      expect((keyframes as Keyframe[])[0]['transform']).toBe(
+        'translate(-50px, 288px) scale(1, 1.2)',
+      );
+    });
+
+    it('opens a dashboard at once unless it is opened from home', async () => {
+      const harness = await RouterTestingHarness.create('/owner/repo');
+      expect(harness.routeNativeElement!.classList).not.toContain('arriving');
+      // Nor from home by way of another page.
+      await harness.navigateByUrl('/');
+      await harness.navigateByUrl('/-/about');
+      await harness.navigateByUrl('/acme');
+      expect(harness.routeNativeElement!.classList).not.toContain('arriving');
+      expect(animate).not.toHaveBeenCalled();
+    });
+
+    it('keeps still while the browser asks for reduced motion (FR-ANIM-10)', async () => {
+      vi.stubGlobal('matchMedia', () => ({ matches: true }));
+      const harness = await RouterTestingHarness.create('/');
+      expect(wordmark(harness).classList).not.toContain('entrance');
+      await harness.navigateByUrl('/owner/repo');
+      expect(harness.routeNativeElement!.classList).not.toContain('arriving');
+      expect(animate).not.toHaveBeenCalled();
+    });
   });
 });

@@ -87,7 +87,8 @@ encryption_key = "CHANGE-ME"
 # visitor_fetches_per_hour = 30
 
 [ui]
-# false turns off non-essential motion for everyone.
+# false turns off non-essential motion for everyone, as a browser's
+# reduced-motion setting does for the person using it.
 # animations = true
 
 [log]
