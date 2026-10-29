@@ -16,3 +16,10 @@
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* Forced colors show the value, however transparent, so the count would overlap it. */
+@media (forced-colors: active) {
+  .count {
+    display: none;
+  }
+}

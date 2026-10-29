@@ -8,4 +8,14 @@
   </p>
   <p>BuhTig only reads from GitHub. It never changes anything there.</p>
   <p>BuhTig is an independent product. It is not affiliated with or endorsed by GitHub.</p>
+  <h2>Keyboard</h2>
+  <p>
+    Press <kbd>/</kbd> anywhere but in a text field to jump to the search box, and <kbd>Esc</kbd> in
+    the search box to clear it. In a chart of columns, <kbd>←</kbd> and <kbd>→</kbd> step from one
+    to the next, and <kbd>Home</kbd> and <kbd>End</kbd> go to the first and last.
+  </p>
+  <label>
+    <input type="checkbox" [checked]="slash()" (change)="setSlash(box.checked)" #box />
+    <span>Use <kbd>/</kbd> to jump to the search box</span>
+  </label>
 </main>

@@ -55,13 +55,15 @@ export class DataDeletion {
       error: () => {
         this.busy.set(false);
         this.problem.set(DELETE_FAILED);
+        // Back on the button, disabled meanwhile, to try again.
+        this.focus('#confirm-deletion');
       },
     });
   }
 
   /**
    * Focuses what `selector` finds, once the page shows the change, in place of the button that
-   * made it, which is gone.
+   * made it, which is gone or was disabled meanwhile.
    */
   private focus(selector: string): void {
     afterNextRender(() => this.host.nativeElement.querySelector<HTMLElement>(selector)?.focus(), {

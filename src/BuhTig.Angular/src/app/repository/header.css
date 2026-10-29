@@ -40,9 +40,11 @@ ul {
   overflow-wrap: anywhere;
 }
 
+/* Underlined, so that its color is not all that tells it is a link (NFR-UX-05). */
 a.badge {
   color: var(--accent);
-  text-decoration: none;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
 }
 
 a.badge:hover {

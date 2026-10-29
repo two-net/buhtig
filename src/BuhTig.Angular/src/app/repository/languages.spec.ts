@@ -44,6 +44,12 @@ describe('RepositoryLanguages', () => {
   const element = () => fixture.nativeElement as HTMLElement;
   const segments = () => [...element().querySelectorAll<SVGRectElement>('svg rect')];
 
+  /** The chart's table, row by row, its headers first. */
+  const table = () =>
+    [...element().querySelectorAll('tr')].map((row) =>
+      [...row.children].map((cell) => cell.textContent?.trim()),
+    );
+
   /** Each entry of the legend, as its name and its share. */
   const legend = () =>
     [...element().querySelectorAll('li')].map((entry) => [
@@ -78,6 +84,37 @@ describe('RepositoryLanguages', () => {
       expect(bar[index][0]).toBeCloseTo(x);
       expect(bar[index][1]).toBeCloseTo(width);
     }
+  });
+
+  it('says which languages have the most code, and lists them all in a table (NFR-UX-04)', async () => {
+    await answer(WIDGET);
+    expect(element().querySelector('.summary')?.textContent?.trim()).toBe(
+      `Rust has the largest share of the code, ${percent(0.6)}, then TypeScript, ${percent(0.3)}.`,
+    );
+    expect(table()).toEqual([
+      ['Language', 'Share'],
+      ['Rust', percent(0.6)],
+      ['TypeScript', percent(0.3)],
+      ['CSS', percent(0.099)],
+      ['Other', percent(0.001)],
+    ]);
+  });
+
+  it('says so when one language has all the code, or all but Other', async () => {
+    await answer({ languages: [{ name: 'Rust', bytes: 100 }], other: 0 });
+    expect(element().querySelector('.summary')?.textContent?.trim()).toBe(
+      'All of the code is in Rust.',
+    );
+
+    fixture.componentInstance.repo.set('gadget');
+    await fixture.whenStable();
+    http
+      .expectOne('/-/api/repositories/acme/gadget/languages')
+      .flush({ languages: [{ name: 'Rust', bytes: 90 }], other: 10 });
+    await fixture.whenStable();
+    expect(element().querySelector('.summary')?.textContent?.trim()).toBe(
+      `${percent(0.9)} of the code is in Rust.`,
+    );
   });
 
   it('tells the languages apart by name, not by color alone (NFR-UX-05)', async () => {

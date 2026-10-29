@@ -78,7 +78,8 @@ export class ShortcutSettings {
         const button = step < 0 === onward ? 'up' : 'down';
         this.focus(`.pins > li:nth-child(${at + 1}) .${button}`);
       },
-      error: () => this.fail(PINS_FAILED),
+      error: () =>
+        this.fail(PINS_FAILED, `.pins > li:nth-child(${index + 1}) .${step < 0 ? 'up' : 'down'}`),
     });
   }
 
@@ -100,7 +101,7 @@ export class ShortcutSettings {
             : '#pins-heading',
         );
       },
-      error: () => this.fail(PINS_FAILED),
+      error: () => this.fail(PINS_FAILED, `.pins > li:nth-child(${index + 1}) .unpin`),
     });
   }
 
@@ -116,7 +117,7 @@ export class ShortcutSettings {
         this.finish(HISTORY_CLEARED);
         this.focus('#history-heading');
       },
-      error: () => this.fail(CLEAR_FAILED),
+      error: () => this.fail(CLEAR_FAILED, '.clear'),
     });
   }
 
@@ -131,9 +132,11 @@ export class ShortcutSettings {
     this.done.set(done);
   }
 
-  private fail(problem: string): void {
+  /** Says why a change did not happen, with focus back on the button, `selector`, to try again. */
+  private fail(problem: string, selector: string): void {
     this.busy.set(false);
     this.problem.set(problem);
+    this.focus(selector);
   }
 
   /**

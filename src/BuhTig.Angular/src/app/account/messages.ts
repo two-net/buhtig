@@ -1,8 +1,12 @@
 // What the account corner says, kept apart from its logic so that it can be translated
 // (NFR-UX-07). Each message says what happened and what to do next (NFR-UX-06).
 
-/** FR-AUTH-09: shown beside "Sign in" once the server has signed the user out. */
-export const ENDED = 'GitHub ended your sign-in. Please sign in again.';
+/**
+ * FR-AUTH-06, FR-AUTH-09: shown beside "Sign in" once the server has signed the user out, as when
+ * their session timed out, or GitHub rejected their sign-in.
+ */
+export const ENDED =
+  'Your sign-in has ended. Sign in again to keep your shortcuts and settings at hand.';
 
 /**
  * FR-PAT-07, DR-03: shown once the user's personal access token no longer works, because GitHub

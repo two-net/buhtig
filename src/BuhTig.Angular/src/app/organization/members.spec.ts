@@ -86,12 +86,28 @@ describe('OrganizationMembers', () => {
     expect(
       members().map((member) => {
         const link = member.querySelector('a')!;
-        return [link.getAttribute('href'), link.getAttribute('title')];
+        return [link.getAttribute('href'), link.querySelector('.login')?.textContent?.trim()];
       }),
     ).toEqual([
       ['https://github.com/alice', 'alice'],
       ['https://github.com/bob', 'bob'],
     ]);
+  });
+
+  it('shows a login on hover and focus alike, until Esc hides it (NFR-UX-03, WCAG 1.4.13)', async () => {
+    await answer(ACME);
+    const link = members()[0].querySelector('a')!;
+    // The avatar's alternative text names the link already.
+    expect(link.querySelector('.login')!.getAttribute('aria-hidden')).toBe('true');
+    expect(link.getAttribute('title')).toBeNull();
+
+    link.focus();
+    link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await fixture.whenStable();
+    expect(link.classList.contains('dismissed')).toBe(true);
+    link.blur();
+    await fixture.whenStable();
+    expect(link.classList.contains('dismissed')).toBe(false);
   });
 
   it('says "member" of one', async () => {
@@ -112,7 +128,7 @@ describe('OrganizationMembers', () => {
     const avatar = members()[0].querySelector('[role="img"]')!;
     expect(avatar.getAttribute('aria-label')).toBe('mallory');
     expect(avatar.textContent?.trim()).toBe('m');
-    expect(members()[0].querySelector('a')!.getAttribute('title')).toBe('mallory');
+    expect(members()[0].querySelector('.login')?.textContent?.trim()).toBe('mallory');
   });
 
   it('spans the grid', async () => {
@@ -146,7 +162,7 @@ describe('OrganizationMembers', () => {
     fixture.componentInstance.org.set('globex');
     await fixture.whenStable();
     await answer({ count: 1, members: [ACME.members[1]] }, 'globex');
-    expect(members().map((member) => member.querySelector('a')?.getAttribute('title'))).toEqual([
+    expect(members().map((member) => member.querySelector('.login')?.textContent?.trim())).toEqual([
       'bob',
     ]);
   });

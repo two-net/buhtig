@@ -36,6 +36,10 @@ describe('SignInFailed', () => {
       TestBed.resetTestingModule();
       const text = (await page('/owner/repo', reason)).textContent;
       expect(text).toContain("BuhTig couldn't finish signing you in with GitHub.");
+      // What the user can check before trying again (NFR-UX-06).
+      expect(text?.replace(/\s+/g, ' ')).toContain(
+        'Signing in also needs your browser to accept cookies from this site.',
+      );
       expect(text).not.toContain('Too many sign-ins');
     }
   });

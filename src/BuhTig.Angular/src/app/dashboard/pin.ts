@@ -4,19 +4,22 @@ import { catchError, map, of, switchMap } from 'rxjs';
 import { Session } from '../session/session';
 import { Personal, PinProblem } from '../shortcuts/personal';
 import { Shortcut, sameDashboard, shortcutOf } from '../shortcuts/pick';
-import { PIN, PIN_FAILED, PIN_LIMIT, UNPIN } from './messages';
+import { PIN, PINNED, PIN_FAILED, PIN_LIMIT, UNPIN, UNPINNED } from './messages';
 import { Resource } from '../search/parse';
 
 /**
  * The button that pins a dashboard, so that it comes first among the shortcuts on the home page,
  * or unpins it, for signed-in users alone (FR-PERS-02, FR-ACC-02). A user may pin 12, and the
  * button says so when they have.
+ *
+ * While the server is asked, the button does nothing, but keeps focus (NFR-UX-03). It then says
+ * what came of it.
  */
 @Component({
   selector: 'app-pin',
   template: `
     @if (user() && pinned() !== undefined) {
-      <button type="button" [disabled]="busy()" (click)="toggle()">
+      <button type="button" [attr.aria-disabled]="busy() ? 'true' : null" (click)="toggle()">
         {{ pinned() ? UNPIN : PIN }}
       </button>
       <!-- Present before it says anything, so that what it says is announced. -->
@@ -41,11 +44,13 @@ import { Resource } from '../search/parse';
       cursor: pointer;
     }
 
-    button:hover:not(:disabled) {
+    button:hover:not([aria-disabled='true']) {
       background: var(--raised);
     }
 
-    button:disabled {
+    /* Dimmed, not only recolored, while the server is asked (NFR-UX-05). */
+    button[aria-disabled='true'] {
+      opacity: 0.6;
       cursor: progress;
     }
   `,
@@ -66,7 +71,7 @@ export class Pin {
   /** Whether the server is being asked. */
   protected readonly busy = signal(false);
 
-  /** What came of the last change, if it did not change the pins. */
+  /** What came of the last change. */
   protected readonly note = signal('');
 
   constructor() {
@@ -88,13 +93,18 @@ export class Pin {
   }
 
   protected toggle(): void {
+    if (this.busy()) {
+      return;
+    }
     const shortcut = this.shortcut();
     this.busy.set(true);
     this.note.set('');
     (this.pinned() ? this.personal.unpin(shortcut) : this.personal.pin(shortcut)).subscribe({
       next: (pins) => {
+        const pinned = isPinned(pins, shortcut);
         this.busy.set(false);
-        this.pinned.set(isPinned(pins, shortcut));
+        this.pinned.set(pinned);
+        this.note.set(pinned ? PINNED : UNPINNED);
       },
       error: (problem: PinProblem) => {
         this.busy.set(false);

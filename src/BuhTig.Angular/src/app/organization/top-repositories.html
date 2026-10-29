@@ -1,5 +1,10 @@
 <app-widget heading="Top repositories" empty="No starred repositories yet.">
   <ng-template [appLoaded]="repositories">
-    <app-organization-bars [bars]="bars()" [unit]="unit" />
+    <app-organization-bars
+      [bars]="bars()"
+      [unit]="unit"
+      [summary]="summary()"
+      [headers]="headers"
+    />
   </ng-template>
 </app-widget>

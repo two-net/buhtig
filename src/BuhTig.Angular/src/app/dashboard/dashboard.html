@@ -4,7 +4,9 @@
   <app-account />
 </header>
 <main>
-  @if (summary()?.notFound) {
+  @if (summary()?.invalid) {
+    <app-not-found-or-private [name]="name()" [invalid]="true" />
+  } @else if (summary()?.notFound) {
     <app-not-found-or-private [name]="name()" />
   } @else if (repository(); as repository) {
     <app-repository-header

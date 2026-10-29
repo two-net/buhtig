@@ -46,7 +46,9 @@
   <p>{{ HISTORY_PURPOSE }}</p>
   @if (hasHistory() === true) {
     <div class="actions">
-      <button type="button" [disabled]="busy()" (click)="clearHistory()">Clear history</button>
+      <button type="button" class="clear" [disabled]="busy()" (click)="clearHistory()">
+        Clear history
+      </button>
     </div>
   } @else if (hasHistory() === false) {
     <p>{{ NO_HISTORY }}</p>

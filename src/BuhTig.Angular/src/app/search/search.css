@@ -85,6 +85,11 @@ p {
   min-height: 0;
 }
 
+/* Only while the search box has focus, so that it never covers what has (WCAG 2.4.11). */
+:host(.compact) form:not(:focus-within) .feedback {
+  display: none;
+}
+
 :host(.compact) p:not(:empty) {
   padding: 0.5rem 1rem;
   border: 1px solid var(--line);

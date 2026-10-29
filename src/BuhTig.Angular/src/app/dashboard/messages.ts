@@ -5,16 +5,13 @@
 /** FR-PAT-08: an organization requires single sign-on, before the link to authorize. */
 export const SSO_REQUIRED =
   "An organization requires single sign-on for this, and hasn't authorized your GitHub " +
-  'access for it yet.';
+  "access for it yet. Once you've authorized it, reload this page.";
 
 /** FR-PAT-08: the link to where to authorize, when GitHub says where. */
 export const AUTHORIZE_SSO = 'Authorize it on GitHub';
 
 /** FR-PAT-08: the link to where to authorize a token, when GitHub does not say where. */
 export const AUTHORIZE_TOKEN = 'Authorize your token for the organization on GitHub';
-
-/** FR-PAT-08: after either link. */
-export const THEN_RELOAD = 'then reload this page.';
 
 /** FR-PAT-08: an organization does not let the user's token in. */
 export const TOKEN_REFUSED =
@@ -60,10 +57,24 @@ export function notFoundWithToken(name: string): string {
   );
 }
 
+/** FR-SRCH-04: the heading of a dashboard whose name cannot be a repository's or organization's. */
+export const NO_SUCH_NAME = 'No such repository or organization';
+
+/** FR-SRCH-04: a name, as of a URL typed by hand, that GitHub would never give anything. */
+export function invalidName(name: string): string {
+  return (
+    `${name} can't be the name of a GitHub repository or organization. Check the address, or ` +
+    'search for one from the home page.'
+  );
+}
+
 export const GO_HOME = 'Go to the home page';
 
 /** FR-DATA-07: the button that fetches a dashboard's data from GitHub anew. */
 export const REFRESH = 'Refresh';
+
+/** FR-DATA-07: a dashboard fetched from GitHub anew. */
+export const REFRESHED = 'Refreshed from GitHub.';
 
 /** FR-DATA-07: a dashboard may be refreshed once a minute. */
 export const REFRESHED_RECENTLY =
@@ -76,6 +87,10 @@ export const PIN = 'Pin';
 
 /** FR-PERS-02: the button that unpins a pinned dashboard. */
 export const UNPIN = 'Unpin';
+
+/** FR-PERS-02: a dashboard just pinned, or unpinned. */
+export const PINNED = 'Pinned. It comes first on the home page.';
+export const UNPINNED = 'Unpinned.';
 
 /** FR-PERS-02: a user may pin up to 12 dashboards. */
 export const PIN_LIMIT =

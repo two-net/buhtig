@@ -31,6 +31,15 @@ describe('Privacy', () => {
     expect(cookies).toEqual(['buhtig_session', 'buhtig_sign_in']);
   });
 
+  it("says what BuhTig notes in the browser's storage, and that it stays there", async () => {
+    const text = (await page()).textContent?.replace(/\s+/g, ' ');
+    expect(text).toContain("notes in your browser's session storage that it has played");
+    expect(text).toContain(
+      "If you turn off the / shortcut on the About page, BuhTig notes that in your browser's " +
+        'local storage, so that it stays off. That note never leaves your browser either.',
+    );
+  });
+
   it('says where to delete it all, and where to revoke access on GitHub (FR-PERS-04)', async () => {
     const links = [...(await page()).querySelectorAll('a')].map((link) => [
       link.textContent?.trim(),

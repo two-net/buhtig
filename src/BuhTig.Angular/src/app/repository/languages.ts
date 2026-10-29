@@ -1,8 +1,10 @@
 import { Component, computed, inject, input } from '@angular/core';
+import { ChartAlternative, Row } from '../chart/alternative';
 import { Languages, Resources } from '../dashboard/resources';
 import { percent } from '../format/format';
 import { load } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
+import { LANGUAGES_HEADERS, OTHER, languagesDescription } from './messages';
 
 /** One language's part of the chart, or that of all the others, "Other". */
 interface Segment {
@@ -19,12 +21,12 @@ interface Segment {
 /**
  * How much of a repository's code is in each language (FR-REPO-04), as one bar split into
  * the 8 languages with the most code, most first, and the rest as "Other". The legend names
- * each with its share, in the same order, so that no one needs the colors (NFR-UX-05), and
- * it is the chart's text alternative too (NFR-UX-04).
+ * each with its share, in the same order, so that no one needs the colors (NFR-UX-05). Its text
+ * alternative says which languages have the most, and lists them all on request (NFR-UX-04).
  */
 @Component({
   selector: 'app-repository-languages',
-  imports: [Loaded, Widget],
+  imports: [ChartAlternative, Loaded, Widget],
   templateUrl: './languages.html',
   styleUrl: './languages.css',
 })
@@ -44,6 +46,23 @@ export class RepositoryLanguages {
     const state = this.languages.state();
     return state.status === 'ready' ? segments(state.data) : [];
   });
+
+  protected readonly summary = computed(() => {
+    const state = this.languages.state();
+    if (state.status !== 'ready') {
+      return '';
+    }
+    const { languages, total } = state.data;
+    return languagesDescription(
+      languages.map(({ name, bytes }) => ({ name, share: bytes / total })),
+    );
+  });
+
+  protected readonly rows = computed<Row[]>(() =>
+    this.segments().map(({ name, percent }) => ({ label: name, value: percent })),
+  );
+
+  protected readonly headers = LANGUAGES_HEADERS;
 }
 
 function segments({ languages, other, total }: Languages): Segment[] {
@@ -53,7 +72,7 @@ function segments({ languages, other, total }: Languages): Segment[] {
     color: `var(--language-${index + 1})`,
   }));
   if (other > 0) {
-    parts.push({ name: 'Other', bytes: other, color: 'var(--language-other)' });
+    parts.push({ name: OTHER, bytes: other, color: 'var(--language-other)' });
   }
   let at = 0;
   return parts.map(({ name, bytes, color }) => {

@@ -6,7 +6,12 @@ import { Bar, OrganizationBars } from './bars';
 
 @Component({
   imports: [OrganizationBars],
-  template: `<app-organization-bars [bars]="bars()" [unit]="unit" />`,
+  template: `<app-organization-bars
+    [bars]="bars()"
+    [unit]="unit"
+    summary="widget has the most things."
+    [headers]="['Thing', 'Count']"
+  />`,
 })
 class Host {
   readonly bars = signal<Bar[]>([]);
@@ -69,6 +74,24 @@ describe('OrganizationBars', () => {
     await show([{ label: 'widget', value: 3 }]);
     expect(element().querySelector('ol')).not.toBeNull();
     expect(element().querySelector('.track')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('says what it shows in a sentence, and its figures in full in a table (NFR-UX-04)', async () => {
+    await show([
+      { label: 'widget', value: 12_345 },
+      { label: 'gadget', value: 1 },
+    ]);
+    expect(element().querySelector('.summary')?.textContent?.trim()).toBe(
+      'widget has the most things.',
+    );
+    const cells = [...element().querySelectorAll('table tr')].map((row) =>
+      [...row.children].map((cell) => cell.textContent?.trim()),
+    );
+    expect(cells).toEqual([
+      ['Thing', 'Count'],
+      ['widget', exactNumber(12_345)],
+      ['gadget', '1'],
+    ]);
   });
 
   it("opens a bar's dashboard from its label, if it has one", async () => {

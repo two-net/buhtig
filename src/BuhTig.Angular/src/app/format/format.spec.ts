@@ -2,6 +2,7 @@ import {
   compactNumber,
   exactNumber,
   exactTime,
+  list,
   monthLabel,
   percent,
   relativeTime,
@@ -124,6 +125,11 @@ describe('format', () => {
     expect(plain(weekDate(sunday, 'de-DE'))).toBe('26.10.2025');
     expect(monthLabel(sunday, 'en-US')).toBe('Oct');
     expect(monthLabel(new Date('2025-11-01T00:00:00Z'), 'en-US')).toBe('Nov');
+  });
+
+  it('lists items as the locale does', () => {
+    expect(list(['repo', 'read:org', 'gist'], 'en-US')).toBe('repo, read:org, gist');
+    expect(list(['repo'], 'en-US')).toBe('repo');
   });
 
   it('shows shares of a whole in percent, for the locale', () => {

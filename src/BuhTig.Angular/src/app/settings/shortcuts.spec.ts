@@ -166,12 +166,18 @@ describe('ShortcutSettings', () => {
     await change('Move up acme', 'PUT', '/-/api/pins', null, 503);
     expect(alert()).toBe(PINS_FAILED);
     expect(listed().map(([name]) => name)).toEqual(['owner/repo', 'acme', 'acme/widget']);
+    // Focus is back on the button, disabled meanwhile, to try again (NFR-UX-03).
+    expect(document.activeElement).toBe(button('Move up acme'));
+    await change('Move down acme', 'PUT', '/-/api/pins', null, 503);
+    expect(document.activeElement).toBe(button('Move down acme'));
     await change('Unpin acme', 'DELETE', '/-/api/organizations/acme/pin', null, 503);
     expect(alert()).toBe(PINS_FAILED);
     expect(listed()).toHaveLength(3);
+    expect(document.activeElement).toBe(button('Unpin acme'));
     await change('Clear history', 'DELETE', '/-/api/history', null, 503);
     expect(alert()).toBe(CLEAR_FAILED);
     expect(button('Clear history')).toBeDefined();
+    expect(document.activeElement).toBe(button('Clear history'));
     expect(status()).toBe('');
   });
 

@@ -3,7 +3,7 @@ import { LanguageCounts, Resources } from '../dashboard/resources';
 import { load } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
 import { Bar, OrganizationBars } from './bars';
-import { OTHER, repositoriesLabel } from './messages';
+import { LANGUAGES_HEADERS, OTHER, languagesDescription, repositoriesLabel } from './messages';
 
 /**
  * How many of an organization's repositories have each primary language (FR-ORG-04): the 8
@@ -32,7 +32,19 @@ export class OrganizationLanguages {
     return state.status === 'ready' ? bars(state.data) : [];
   });
 
+  protected readonly summary = computed(() => {
+    const state = this.languages.state();
+    const top = state.status === 'ready' ? state.data.languages[0] : undefined;
+    return top === undefined ? '' : languagesDescription(top, sum(this.bars()));
+  });
+
   protected readonly unit = repositoriesLabel;
+  protected readonly headers = LANGUAGES_HEADERS;
+}
+
+/** The figures of `bars` together. */
+function sum(bars: Bar[]): number {
+  return bars.reduce((sum, bar) => sum + bar.value, 0);
 }
 
 function bars({ languages, other }: LanguageCounts): Bar[] {

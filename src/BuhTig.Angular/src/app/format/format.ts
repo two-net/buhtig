@@ -88,6 +88,11 @@ export function monthLabel(day: Date, locale?: string): string {
   return new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(day);
 }
 
+/** Items one after another, such as "repo, read:org", as the browser's language lists them. */
+export function list(items: string[], locale?: string): string {
+  return new Intl.ListFormat(locale, { style: 'short', type: 'unit' }).format(items);
+}
+
 /** A share of a whole, such as "62.4%", or "<0.1%" for a share too small to show so. */
 export function percent(share: number, locale?: string): string {
   const format = new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 });

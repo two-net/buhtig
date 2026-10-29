@@ -6,6 +6,7 @@ import { Router, provideRouter } from '@angular/router';
 import type { Mock, MockInstance } from 'vitest';
 import { Motion } from '../motion/motion';
 import { Search } from './search';
+import { Shortcut } from './shortcut';
 
 describe('Search', () => {
   let fixture: ComponentFixture<Search>;
@@ -244,6 +245,22 @@ describe('Search', () => {
       const event = press(document.body, '/');
       expect(document.activeElement).toBe(input());
       expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('leaves / be once the user has turned it off (WCAG 2.1.4)', () => {
+      const shortcut = TestBed.inject(Shortcut);
+      shortcut.set(false);
+      try {
+        const event = press(document.body, '/');
+        expect(document.activeElement).not.toBe(input());
+        expect(event.defaultPrevented).toBe(false);
+
+        shortcut.set(true);
+        press(document.body, '/');
+        expect(document.activeElement).toBe(input());
+      } finally {
+        shortcut.set(true);
+      }
     });
 
     it('leaves / to other fields, to the input itself, and to shortcuts', () => {

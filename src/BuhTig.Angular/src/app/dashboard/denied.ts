@@ -5,7 +5,6 @@ import {
   AUTHORIZE_TOKEN,
   REPLACE_TOKEN,
   SSO_REQUIRED,
-  THEN_RELOAD,
   TOKEN_REFUSED,
 } from './messages';
 import { Denied } from './resources';
@@ -24,13 +23,10 @@ import { Denied } from './resources';
         <p role="alert">
           {{ SSO_REQUIRED }}
           @if (url(); as url) {
-            <a [href]="url">{{ AUTHORIZE_SSO }}</a
-            >,
+            <a [href]="url">{{ AUTHORIZE_SSO }}</a>
           } @else {
-            <a href="https://github.com/settings/tokens">{{ AUTHORIZE_TOKEN }}</a
-            >,
+            <a href="https://github.com/settings/tokens">{{ AUTHORIZE_TOKEN }}</a>
           }
-          {{ THEN_RELOAD }}
         </p>
       }
       @case ('token') {
@@ -61,7 +57,6 @@ export class DeniedNotice {
   protected readonly SSO_REQUIRED = SSO_REQUIRED;
   protected readonly AUTHORIZE_SSO = AUTHORIZE_SSO;
   protected readonly AUTHORIZE_TOKEN = AUTHORIZE_TOKEN;
-  protected readonly THEN_RELOAD = THEN_RELOAD;
   protected readonly TOKEN_REFUSED = TOKEN_REFUSED;
   protected readonly REPLACE_TOKEN = REPLACE_TOKEN;
 }

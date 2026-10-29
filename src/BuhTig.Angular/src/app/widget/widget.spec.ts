@@ -2,10 +2,11 @@ import { HttpClient, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Component, inject, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { Router, provideRouter } from '@angular/router';
 import { map } from 'rxjs';
 import { ENTRANCE_MS, Entrance } from '../motion/entrance';
 import { Computing, load } from './load';
-import { COMPUTING, FAILED, LOADING } from './messages';
+import { COMPUTING, FAILED, HELD, LOADED, LOADING, UNAVAILABLE } from './messages';
 import { Loaded, Widget } from './widget';
 
 @Component({
@@ -44,7 +45,7 @@ describe('Widget', () => {
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([])],
     });
     http = TestBed.inject(HttpTestingController);
     fixture = TestBed.createComponent(Host);
@@ -126,6 +127,61 @@ describe('Widget', () => {
     http.expectOne('/releases/acme/widget').flush(['v1.0.0']);
     await fixture.whenStable();
     expect(releases().querySelector('li')?.textContent?.trim()).toBe('v1.0.0');
+  });
+
+  it('says what failed, and what to do about it (NFR-UX-06)', async () => {
+    http
+      .expectOne('/releases/acme/widget')
+      .flush(null, { status: 503, statusText: 'Service Unavailable' });
+    http
+      .expectOne('/languages/acme/widget')
+      .flush(null, { status: 502, statusText: 'Bad Gateway' });
+    await fixture.whenStable();
+    expect(message(releases())).toBe(UNAVAILABLE);
+    expect(releases().querySelector('button')?.textContent?.trim()).toBe('Try again');
+    expect(message(languages())).toBe(FAILED);
+    expect(languages().querySelector('button')?.textContent?.trim()).toBe('Try again');
+  });
+
+  it('asks a visitor to sign in once the server asks GitHub for no more (FR-DATA-10)', async () => {
+    vi.spyOn(TestBed.inject(Router), 'url', 'get').mockReturnValue('/acme/widget');
+    http
+      .expectOne('/releases/acme/widget')
+      .flush(null, { status: 429, statusText: 'Too Many Requests' });
+    http.expectOne('/languages/acme/widget').flush(['TypeScript']);
+    await fixture.whenStable();
+    expect(message(releases())).toBe(HELD);
+    // Trying again soon would not help.
+    expect(releases().querySelector('button')).toBeNull();
+    const signIn = releases().querySelector('a')!;
+    expect(signIn.textContent?.trim()).toBe('Sign in');
+    expect(signIn.getAttribute('href')).toBe('/-/auth/sign-in?return_to=%2Facme%2Fwidget');
+  });
+
+  it('keeps focus on the widget as "Try again" goes, and says what it came to (NFR-UX-03)', async () => {
+    const status = () => releases().querySelector('[role="status"]')?.textContent?.trim();
+    await answer(new ProgressEvent('error'), ['TypeScript']);
+    // Nothing is announced of what the page shows as it loads.
+    expect(status()).toBe('');
+
+    const button = releases().querySelector('button')!;
+    button.focus();
+    button.click();
+    await fixture.whenStable();
+    expect(document.activeElement).toBe(section(releases()));
+    expect(section(releases()).getAttribute('tabindex')).toBe('-1');
+    expect(status()).toBe('');
+
+    http.expectOne('/releases/acme/widget').error(new ProgressEvent('error'));
+    await fixture.whenStable();
+    expect(status()).toBe(FAILED);
+
+    releases().querySelector('button')!.click();
+    await fixture.whenStable();
+    http.expectOne('/releases/acme/widget').flush(['v1.0.0']);
+    await fixture.whenStable();
+    expect(status()).toBe(LOADED);
+    expect(document.activeElement).toBe(section(releases()));
   });
 
   it('keeps a failure to its own widget, while the others show theirs (FR-REPO-09)', async () => {

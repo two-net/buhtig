@@ -118,11 +118,15 @@ describe('Settings', () => {
     const request = http.expectOne('/-/api/token');
     expect(request.request.method).toBe('PUT');
     expect(request.request.body).toEqual({ token: 'ghp_secret' });
-    expect(button('Save token')!.disabled).toBe(true);
+    expect(button('Save token')!.getAttribute('aria-disabled')).toBe('true');
+    // Saving once is enough.
+    await enter('ghp_secret');
     request.flush(CLASSIC);
     await fixture.whenStable();
 
     expect(status()).toBe(SAVED);
+    // Focus goes to what took the form's place (NFR-UX-03).
+    expect(document.activeElement).toBe(button('Replace token'));
     expect(details()).toEqual([
       ['Type', 'Classic'],
       ['Ends in', '…abcd'],
@@ -166,20 +170,24 @@ describe('Settings', () => {
       expect(alert(), problem).toBe(saveProblemMessage(problem));
       expect(input()!.getAttribute('aria-invalid')).toBe('true');
       expect(input()!.getAttribute('aria-describedby')).toBe('token-problem');
-      expect(button('Save token')!.disabled).toBe(false);
+      expect(button('Save token')!.getAttribute('aria-disabled')).toBeNull();
+      // Focus goes to the input to correct (NFR-UX-03).
+      expect(document.activeElement).toBe(input());
     }
     expect(TestBed.inject(Session).token()).toBeNull();
   });
 
-  it('replaces a token, or leaves it be', async () => {
+  it('replaces a token, or leaves it be, with focus on what each shows (NFR-UX-03)', async () => {
     await signedIn(CLASSIC);
     expect(input()).toBeNull();
     button('Replace token')!.click();
     await fixture.whenStable();
     expect(main().querySelector('label')!.textContent?.trim()).toBe('New token');
+    expect(document.activeElement).toBe(input());
     button('Cancel')!.click();
     await fixture.whenStable();
     expect(input()).toBeNull();
+    expect(document.activeElement).toBe(button('Replace token'));
 
     button('Replace token')!.click();
     await fixture.whenStable();
@@ -200,16 +208,26 @@ describe('Settings', () => {
     expect(status()).toBe(REMOVED);
     expect(details()).toEqual([]);
     expect(input()).not.toBeNull();
+    expect(document.activeElement).toBe(input());
     expect(TestBed.inject(Session).token()).toBeNull();
   });
 
   it('says when a token could not be removed', async () => {
     await signedIn(CLASSIC);
+    button('Remove token')!.focus();
     button('Remove token')!.click();
+    await fixture.whenStable();
+    // Waiting for the server, the button keeps focus, and does nothing more.
+    expect(button('Remove token')!.getAttribute('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(button('Remove token'));
+    button('Remove token')!.click();
+    button('Replace token')!.click();
     http.expectOne('/-/api/token').flush(null, { status: 503, statusText: 'Unavailable' });
     await fixture.whenStable();
     expect(alert()).toBe(REMOVE_FAILED);
     expect(details().length).toBe(5);
+    expect(input()).toBeNull();
+    expect(document.activeElement).toBe(button('Remove token'));
   });
 
   it('asks to replace a token that GitHub no longer accepts (FR-PAT-07)', async () => {

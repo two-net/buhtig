@@ -60,12 +60,34 @@ describe('OrganizationCreated', () => {
     expect(caption()).toBe('126 repositories created since 2019');
   });
 
-  it('says what it shows in a sentence, for assistive technology (NFR-UX-04)', async () => {
+  it("says what it shows in a sentence, and each year's repositories in a table (NFR-UX-04)", async () => {
     await answer(YEARS);
     expect(svg().getAttribute('role')).toBe('img');
-    expect(svg().getAttribute('aria-label')).toBe(
+    expect(svg().getAttribute('aria-label')).toBe('Repositories created per year');
+    expect(element().querySelector('.summary')?.textContent?.trim()).toBe(
       '126 repositories created since 2019. The busiest year was 2022, with 100 repositories.',
     );
+    expect(
+      [...element().querySelectorAll('tr')].map((row) =>
+        [...row.children].map((cell) => cell.textContent?.trim()),
+      ),
+    ).toEqual([
+      ['Year', 'Repositories'],
+      ['2019', '1'],
+      ['2020', '0'],
+      ['2021', '25'],
+      ['2022', '100'],
+    ]);
+  });
+
+  it('tells the repositories of each year by keyboard too (NFR-UX-03)', async () => {
+    await answer(YEARS);
+    svg().focus();
+    await fixture.whenStable();
+    expect(caption()).toBe('2022: 100 repositories');
+    svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    await fixture.whenStable();
+    expect(caption()).toBe('2021: 25 repositories');
   });
 
   it('tells the repositories of the year pointed at, and the total again after', async () => {

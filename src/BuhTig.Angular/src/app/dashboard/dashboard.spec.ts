@@ -14,19 +14,23 @@ import {
   AUTHORIZE_TOKEN,
   GO_HOME,
   NOT_FOUND_OR_PRIVATE,
+  NO_SUCH_NAME,
   PIN,
+  PINNED,
   PIN_FAILED,
   PIN_LIMIT,
+  REFRESHED,
   REFRESHED_RECENTLY,
   REFRESH_FAILED,
   REPLACE_TOKEN,
   SIGN_IN,
   SIGN_IN_TO_SEE,
   SSO_REQUIRED,
-  THEN_RELOAD,
   TOKEN_INVALID_TO_SEE,
   TOKEN_REFUSED,
   UNPIN,
+  UNPINNED,
+  invalidName,
   notFound,
   notFoundWithToken,
 } from './messages';
@@ -178,7 +182,7 @@ describe('Dashboard', () => {
     const sso = 'https://github.com/orgs/acme/sso?authorization_request=abc';
     expect(
       await denied('/acme/widget', '/-/api/repositories/acme/widget', { denied: 'sso', url: sso }),
-    ).toEqual([`${SSO_REQUIRED} ${AUTHORIZE_SSO}, ${THEN_RELOAD}`, sso]);
+    ).toEqual([`${SSO_REQUIRED} ${AUTHORIZE_SSO}`, sso]);
     // Under the resource's head.
     expect(page().querySelector('app-repository-header + app-denied')).not.toBeNull();
     expect(
@@ -186,10 +190,7 @@ describe('Dashboard', () => {
         denied: 'sso',
         url: 'https://evil.example/sso',
       }),
-    ).toEqual([
-      `${SSO_REQUIRED} ${AUTHORIZE_TOKEN}, ${THEN_RELOAD}`,
-      'https://github.com/settings/tokens',
-    ]);
+    ).toEqual([`${SSO_REQUIRED} ${AUTHORIZE_TOKEN}`, 'https://github.com/settings/tokens']);
     expect(
       await denied('/acme/other', '/-/api/repositories/acme/other', { denied: 'token' }),
     ).toEqual([`${TOKEN_REFUSED} Replace it in Settings`, '/-/settings']);
@@ -591,6 +592,25 @@ describe('Dashboard', () => {
       ).toEqual([NOT_FOUND_OR_PRIVATE, notFoundWithToken('owner/secret'), `${GO_HOME} /`]);
     });
 
+    it('says so of a name that cannot be one, which signing in would not help (NFR-UX-06)', async () => {
+      await harness.navigateByUrl('/foo_bar');
+      http
+        .expectOne('/-/api/organizations/foo_bar')
+        .flush(null, { status: 400, statusText: 'Bad Request' });
+      http.expectOne('/-/api/session').flush({ user: null });
+      await harness.fixture.whenStable();
+      const shownHere = page().querySelector('app-not-found-or-private')!;
+      expect(
+        page().querySelector('app-repository-header, app-organization-header, .grid'),
+      ).toBeNull();
+      expect(heading()).toBe(NO_SUCH_NAME);
+      expect([...shownHere.querySelectorAll('p')].map((paragraph) => shown(paragraph))).toEqual([
+        invalidName('foo_bar'),
+        GO_HOME,
+      ]);
+      expect(shownHere.querySelector('a')!.getAttribute('href')).toBe('/');
+    });
+
     it('shows the next dashboard as usual', async () => {
       await notFoundAt('/owner/secret', '/-/api/repositories/owner/secret', { user: null });
       await open('/owner/repo', '/-/api/repositories/owner/repo', { name: 'owner/repo' });
@@ -614,18 +634,25 @@ describe('Dashboard', () => {
       await harness.fixture.whenStable();
     }
 
-    /** Clicks Refresh, and answers the server's part with `answer`, as `status`. */
+    /**
+     * Clicks Refresh, and answers the server's part with `answer`, as `status`. Meanwhile, the
+     * button keeps focus, and clicking it again does nothing (NFR-UX-03).
+     */
     async function refresh(status: number, answer: object | null = null): Promise<void> {
+      refreshButton()!.focus();
       refreshButton()!.click();
       await harness.fixture.whenStable();
-      expect(refreshButton()!.disabled).toBe(true);
+      expect(refreshButton()!.getAttribute('aria-disabled')).toBe('true');
+      expect(document.activeElement).toBe(refreshButton());
+      refreshButton()!.click();
       const request = http.expectOne({
         method: 'POST',
         url: '/-/api/repositories/acme/widget/refresh',
       });
       request.flush(answer, { status, statusText: `${status}` });
       await harness.fixture.whenStable();
-      expect(refreshButton()!.disabled).toBe(false);
+      expect(refreshButton()!.getAttribute('aria-disabled')).toBeNull();
+      expect(document.activeElement).toBe(refreshButton());
     }
 
     it('is not offered to visitors (FR-ACC-02)', async () => {
@@ -641,7 +668,7 @@ describe('Dashboard', () => {
       expect(page().querySelector('.when .updated + app-refresh')).not.toBeNull();
 
       await refresh(204);
-      expect(note()).toBe('');
+      expect(note()).toBe(REFRESHED);
       http
         .expectOne('/-/api/repositories/acme/widget')
         .flush({ name: 'acme/widget', fetched_at: '2026-10-22T12:05:00.000Z' });
@@ -776,16 +803,23 @@ describe('Dashboard', () => {
       await harness.fixture.whenStable();
     }
 
-    /** Clicks the button, and answers the server's part, `method`, with `answer` as `status`. */
+    /**
+     * Clicks the button, and answers the server's part, `method`, with `answer` as `status`.
+     * Meanwhile, the button keeps focus, and clicking it again does nothing (NFR-UX-03).
+     */
     async function toggle(method: string, status: number, answer: object | null): Promise<void> {
+      pinButton()!.focus();
       pinButton()!.click();
       await harness.fixture.whenStable();
-      expect(pinButton()!.disabled).toBe(true);
+      expect(pinButton()!.getAttribute('aria-disabled')).toBe('true');
+      expect(document.activeElement).toBe(pinButton());
+      pinButton()!.click();
       http
         .expectOne({ method, url: '/-/api/repositories/acme/widget/pin' })
         .flush(answer, { status, statusText: `${status}` });
       await harness.fixture.whenStable();
-      expect(pinButton()!.disabled).toBe(false);
+      expect(pinButton()!.getAttribute('aria-disabled')).toBeNull();
+      expect(document.activeElement).toBe(pinButton());
     }
 
     it('is not offered to visitors (FR-ACC-02)', async () => {
@@ -804,9 +838,10 @@ describe('Dashboard', () => {
 
       await toggle('PUT', 200, { pins: [{ kind: 'organization', name: 'acme' }, WIDGET] });
       expect(label()).toBe(UNPIN);
-      expect(note()).toBe('');
+      expect(note()).toBe(PINNED);
       await toggle('DELETE', 200, { pins: [{ kind: 'organization', name: 'acme' }] });
       expect(label()).toBe(PIN);
+      expect(note()).toBe(UNPINNED);
     });
 
     it('knows a dashboard pinned already, whatever the case of its name', async () => {
