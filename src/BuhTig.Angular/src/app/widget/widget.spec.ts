@@ -346,6 +346,21 @@ describe('Widget entrance (FR-ANIM-07)', () => {
     expect(entering(widgets)).toEqual([false, false]);
   });
 
+  it('ends its entrance at once as the browser asks for reduced motion (FR-ANIM-10)', () => {
+    let changed: ((event: { matches: boolean }) => void) | undefined;
+    vi.stubGlobal('matchMedia', () => ({
+      matches: false,
+      addEventListener: (_: string, listener: typeof changed) => (changed = listener),
+    }));
+    const widgets = show();
+    scroll(true, ...widgets);
+    answer();
+    expect(entering(widgets)).toEqual([true, true]);
+    changed!({ matches: true });
+    TestBed.tick();
+    expect(entering(widgets)).toEqual([false, false]);
+  });
+
   it('tells its content of its entrance', () => {
     const fixture = TestBed.createComponent(Probed);
     TestBed.tick();

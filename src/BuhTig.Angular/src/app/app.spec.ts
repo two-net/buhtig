@@ -6,6 +6,7 @@ import { Router, provideRouter, withComponentInputBinding } from '@angular/route
 import { RouterTestingHarness } from '@angular/router/testing';
 import type { Mock } from 'vitest';
 import { routes } from './app.routes';
+import { compactNumber } from './format/format';
 
 describe('routes', () => {
   beforeEach(() => {
@@ -179,6 +180,63 @@ describe('routes', () => {
       expect(wordmark(harness).classList).not.toContain('entrance');
       await harness.navigateByUrl('/owner/repo');
       expect(harness.routeNativeElement!.classList).not.toContain('arriving');
+      expect(animate).not.toHaveBeenCalled();
+    });
+
+    it('loads a dashboard without counting up, drawing, gliding or shaking under reduced motion (AC-08)', async () => {
+      vi.stubGlobal('matchMedia', () => ({ matches: true }));
+      // Every widget is in view, as on a tall screen, where each would make its entrance.
+      vi.stubGlobal(
+        'IntersectionObserver',
+        class {
+          constructor(
+            private readonly callback: (entries: Partial<IntersectionObserverEntry>[]) => void,
+          ) {}
+          observe(target: Element): void {
+            this.callback([{ target, isIntersecting: true }]);
+          }
+          disconnect(): void {}
+        },
+      );
+      const harness = await RouterTestingHarness.create('/');
+      await harness.navigateByUrl('/owner/repo');
+      const http = TestBed.inject(HttpTestingController);
+      http.expectOne('/-/api/repositories/owner/repo').flush({ name: 'owner/repo' });
+      http.expectOne('/-/api/repositories/owner/repo/stats').flush({
+        stars: 12_345,
+        forks: 678,
+        watchers: 321,
+        open_issues: 33,
+        open_pull_requests: 12,
+        latest_release: null,
+      });
+      http
+        .expectOne('/-/api/repositories/owner/repo/commit-activity')
+        .flush({ weeks: [{ week: '2026-10-18', commits: 3 }] });
+      await harness.fixture.whenStable();
+
+      const dashboard = harness.routeNativeElement!;
+      // No shimmer, which keeps still by this.
+      expect(document.documentElement.classList).toContain('still');
+      // The figures and the chart are there, at once.
+      const stats = dashboard.querySelector('app-repository-stats')!;
+      expect(stats.textContent).toContain(compactNumber(12_345));
+      expect(stats.textContent).toContain('678');
+      expect(stats.querySelector('.count')).toBeNull();
+      expect(dashboard.querySelectorAll('app-repository-activity rect.bar')).toHaveLength(1);
+      expect(dashboard.querySelectorAll('app-widget.entering')).toHaveLength(0);
+      // No glide.
+      expect(dashboard.classList).not.toContain('arriving');
+
+      // No shake.
+      const input = dashboard.querySelector<HTMLInputElement>('header input')!;
+      input.value = 'gitlab.com/owner/repo';
+      input.dispatchEvent(new Event('input'));
+      dashboard.querySelector<HTMLFormElement>('header form')!.requestSubmit();
+      await harness.fixture.whenStable();
+      expect(dashboard.querySelector('[role="alert"]')?.textContent?.trim()).toBe(
+        'BuhTig supports github.com URLs only.',
+      );
       expect(animate).not.toHaveBeenCalled();
     });
   });

@@ -394,6 +394,20 @@ describe('Search', () => {
       expect(duration).toBeLessThanOrEqual(400);
     });
 
+    it('can be typed into and searched from while it glides or shakes (FR-ANIM-11)', async () => {
+      // Animations that never end, so that nothing waits for them.
+      animate.mockReturnValue({ finished: new Promise(() => {}) } as unknown as Animation);
+      vi.spyOn(input(), 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 50, 400, 40));
+      fixture.componentInstance.glideFrom(new DOMRect(50, 300, 600, 48));
+      search('gitlab.com/owner/repo');
+      await fixture.whenStable();
+      expect(message()).toBe('BuhTig supports github.com URLs only.');
+      expect(animate).toHaveBeenCalledTimes(2);
+
+      search('owner/repo');
+      expect(navigate).toHaveBeenCalledWith('/owner/repo');
+    });
+
     it('does not glide while it is not laid out', () => {
       fixture.componentInstance.glideFrom(new DOMRect(50, 300, 600, 48));
       expect(animate).not.toHaveBeenCalled();
