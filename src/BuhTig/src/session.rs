@@ -484,9 +484,8 @@ pub async fn current(
 /// [`delete_user`] does (FR-PERS-04). 204 once it is gone, with the session cookie removed
 /// from the browser, and 401 for a visitor.
 ///
-/// It changes state, so it is no GET (NFR-SEC-02). Other sites' requests carry no session
-/// cookie, which is `SameSite=Lax`, and a browser asks BuhTig before it sends another site's
-/// DELETE, which BuhTig never allows.
+/// It changes state, so it is no GET, and other origins' pages cannot send it
+/// ([`crate::security`], NFR-SEC-02).
 pub async fn delete(Extension(sessions): Extension<Arc<Sessions>>, headers: HeaderMap) -> Response {
     let user_id = match sessions.resolve(&headers).await {
         Ok(Some(signed_in)) => signed_in.user.id,

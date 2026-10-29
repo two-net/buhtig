@@ -282,9 +282,8 @@ pub async fn invalidate(db: &DatabaseConnection, credential_id: i64) -> Result<(
 /// has had 10 tokens checked in a minute (NFR-SEC-08), with when it may try again. 502 when
 /// GitHub cannot tell now.
 ///
-/// It changes state, so it is no GET (NFR-SEC-02). Other sites' requests carry no session
-/// cookie, which is `SameSite=Lax`, and a browser asks BuhTig before it sends another site's
-/// PUT of JSON, which BuhTig never allows.
+/// It changes state, so it is no GET, and other origins' pages cannot send it
+/// ([`crate::security`], NFR-SEC-02).
 pub async fn save(
     State(tokens): State<Arc<Tokens>>,
     Extension(sessions): Extension<Arc<Sessions>>,

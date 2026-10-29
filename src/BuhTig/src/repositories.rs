@@ -405,8 +405,8 @@ pub async fn refresh(
 /// since only signed-in users may (FR-ACC-02). 429 if it was refreshed less than a minute
 /// ago, with `Retry-After` and `{"until": …}`, when it may be again.
 ///
-/// It changes state, so it is no GET (NFR-SEC-02). Other sites' POSTs carry no session
-/// cookie, which is `SameSite=Lax`, so they are a visitor's.
+/// It changes state, so it is no GET, and other origins' pages cannot send it
+/// ([`crate::security`], NFR-SEC-02).
 pub(crate) fn refreshed(result: Result<(), Refused>) -> Response {
     match result {
         Ok(()) => status(StatusCode::NO_CONTENT),

@@ -14,6 +14,7 @@ mod navigation;
 mod organizations;
 mod preview;
 mod repositories;
+mod security;
 mod session;
 mod shortcuts;
 mod surprise;
@@ -180,6 +181,7 @@ async fn serve(config: Config) -> ExitCode {
     ));
     let app = web::router(
         config.access.mode,
+        &config.server.public_url,
         Arc::new(Health::new(db.clone())),
         cache,
         previews,

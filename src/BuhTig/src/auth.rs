@@ -13,6 +13,9 @@
 //!
 //! The user then goes back to the page they signed in from (FR-AUTH-05). That must be a
 //! path of BuhTig's own, so that sign-in sends no one elsewhere (NFR-SEC-04).
+//!
+//! Each client may have at most 10 sign-ins checked with GitHub a minute (NFR-SEC-08), so
+//! that BuhTig cannot be used to try out codes.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,6 +26,8 @@ use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::{AppendHeaders, IntoResponse, Redirect, Response};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use sea_orm::entity::prelude::ChronoUtc;
+use sea_orm::sea_query::prelude::chrono::TimeDelta;
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
 use url::{Position, Url};
@@ -32,6 +37,8 @@ use crate::config::Secret;
 use crate::crypto;
 use crate::github::{self, Credential, Reply};
 use crate::session::{Profile, Sessions};
+use crate::throttle::Throttle;
+use crate::visitors::Visitor;
 use crate::{cookies, web};
 
 /// The cookie that keeps a sign-in's state, and the page to return to.
@@ -52,6 +59,12 @@ const NOT_ALLOWED: &str = "/-/not-allowed";
 /// The page for a sign-in that did not succeed, which offers to try again.
 const SIGN_IN_FAILED: &str = "/-/sign-in-failed";
 
+/// How many sign-ins each client may have checked with GitHub in [`SIGN_IN_WINDOW`]
+/// (NFR-SEC-08).
+const SIGN_INS: usize = 10;
+
+const SIGN_IN_WINDOW: TimeDelta = TimeDelta::minutes(1);
+
 pub struct Auth {
     sessions: Arc<Sessions>,
     github: Arc<github::Client>,
@@ -60,6 +73,8 @@ pub struct Auth {
     /// `{server.public_url}/-/auth/callback`, which the OAuth app is registered with
     /// (A-04).
     callback: Url,
+    /// The sign-ins that each client has had checked with GitHub.
+    sign_ins: Throttle,
 }
 
 impl Auth {
@@ -72,11 +87,17 @@ impl Auth {
             github,
             public_url,
             callback,
+            sign_ins: Throttle::new(SIGN_INS, SIGN_IN_WINDOW),
         }
     }
 
-    /// Where the callback ends, and the session's cookie when it began one.
-    async fn complete(&self, query: &HashMap<String, String>, headers: &HeaderMap) -> Completed {
+    /// Where the callback ends for `client`, and the session's cookie when it began one.
+    async fn complete(
+        &self,
+        query: &HashMap<String, String>,
+        headers: &HeaderMap,
+        client: &Visitor,
+    ) -> Completed {
         let Some((state, return_to)) =
             cookies::get(headers, STATE_COOKIE).and_then(|started| started.split_once('.'))
         else {
@@ -114,6 +135,11 @@ impl Auth {
             warn!("sign-in failed: GitHub gave no code");
             return Completed::Failed { to: Some(to) };
         };
+        // Counted only once GitHub is to be asked about it, as tokens are.
+        if self.sign_ins.admit(client, ChronoUtc::now()).is_err() {
+            info!("turned a sign-in away: too many from one client in a minute");
+            return Completed::TooMany { to };
+        }
         let token = match self.github.exchange(code, &self.callback).await {
             Ok(token) => token,
             Err(error) => {
@@ -169,6 +195,11 @@ enum Completed {
         to: String,
     },
     NotAllowed,
+    /// The client has had too many sign-ins checked in a minute (NFR-SEC-08), and may try
+    /// again from `to` later.
+    TooMany {
+        to: String,
+    },
     /// To try again from, and back to `to`, when it is known.
     Failed {
         to: Option<String>,
@@ -200,9 +231,11 @@ pub async fn sign_in(
 /// to the page it signed in from, now signed in. A user who chose not to sign in goes back
 /// there too, still a visitor. A GitHub account that `access.allowed_users` does not list
 /// gets the "not allowed" page, and no session (FR-AUTH-08). Any other failure gets a page
-/// that offers to try again.
+/// that offers to try again, which also tells a client that has had 10 sign-ins checked in
+/// the past minute to wait (NFR-SEC-08).
 pub async fn callback(
     State(auth): State<Arc<Auth>>,
+    client: Visitor,
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
@@ -211,27 +244,38 @@ pub async fn callback(
         STATE_PATH,
         auth.sessions.secure(),
     )];
-    let location = match auth.complete(&query, &headers).await {
+    let location = match auth.complete(&query, &headers, &client).await {
         Completed::SignedIn { session, to } => {
             cookies.push(session);
             to
         }
         Completed::Cancelled { to } => to,
         Completed::NotAllowed => NOT_ALLOWED.to_owned(),
-        Completed::Failed { to: Some(to) } if to != "/" => {
-            let query = url::form_urlencoded::Serializer::new(String::new())
-                .append_pair("return_to", &to)
-                .finish();
-            format!("{SIGN_IN_FAILED}?{query}")
-        }
-        Completed::Failed { .. } => SIGN_IN_FAILED.to_owned(),
+        Completed::TooMany { to } => failed(Some("too_many"), Some(&to)),
+        Completed::Failed { to } => failed(None, to.as_deref()),
     };
     redirect(&location, cookies)
 }
 
+/// The page for a sign-in that did not succeed, which says why if `reason` does, and tries
+/// again from `to`, unless that is the home page, which it tries again from anyway.
+fn failed(reason: Option<&str>, to: Option<&str>) -> String {
+    let mut query = url::form_urlencoded::Serializer::new(String::new());
+    if let Some(reason) = reason {
+        query.append_pair("reason", reason);
+    }
+    if let Some(to) = to.filter(|to| *to != "/") {
+        query.append_pair("return_to", to);
+    }
+    match query.finish() {
+        query if query.is_empty() => SIGN_IN_FAILED.to_owned(),
+        query => format!("{SIGN_IN_FAILED}?{query}"),
+    }
+}
+
 /// `POST /-/auth/sign-out`: ends the browser's session on the server at once
-/// (FR-AUTH-07), and takes it to the home page. It changes state, so it is no GET
-/// (NFR-SEC-02), and other sites' POSTs carry no session cookie, which is `SameSite=Lax`.
+/// (FR-AUTH-07), and takes it to the home page. It changes state, so it is no GET, and
+/// other origins' pages cannot send it ([`crate::security`], NFR-SEC-02).
 pub async fn sign_out(State(auth): State<Arc<Auth>>, headers: HeaderMap) -> Response {
     match auth.sessions.sign_out(&headers).await {
         Ok(()) => redirect("/", [auth.sessions.removal()]),
@@ -442,6 +486,11 @@ mod tests {
         auth(stub, DatabaseConnection::default(), allowed_users)
     }
 
+    /// The client that most sign-ins here come from.
+    fn browser() -> Visitor {
+        Visitor::of("203.0.113.1".parse().unwrap(), &HeaderMap::new())
+    }
+
     fn query(pairs: &[(&str, &str)]) -> Query<HashMap<String, String>> {
         Query(
             pairs
@@ -534,6 +583,7 @@ mod tests {
         ] {
             let response = callback(
                 State(auth.clone()),
+                browser(),
                 query(&[("code", "good"), ("state", state)]),
                 headers,
             )
@@ -553,6 +603,7 @@ mod tests {
         let (started, state) = start(&auth, "/owner/repo").await;
         let response = callback(
             State(auth.clone()),
+            browser(),
             query(&[("error", "access_denied"), ("state", &state)]),
             carrying(&started),
         )
@@ -574,7 +625,13 @@ mod tests {
             let (started, state) = start(&auth, "/owner/repo").await;
             let mut pairs = pairs;
             pairs.push(("state", &state));
-            let response = callback(State(auth.clone()), query(&pairs), carrying(&started)).await;
+            let response = callback(
+                State(auth.clone()),
+                browser(),
+                query(&pairs),
+                carrying(&started),
+            )
+            .await;
             assert_eq!(
                 location(&response),
                 "/-/sign-in-failed?return_to=%2Fowner%2Frepo",
@@ -588,11 +645,59 @@ mod tests {
         let (started, state) = start(&auth, "/").await;
         let response = callback(
             State(auth.clone()),
+            browser(),
             query(&[("code", "used"), ("state", &state)]),
             carrying(&started),
         )
         .await;
         assert_eq!(location(&response), "/-/sign-in-failed");
+    }
+
+    #[tokio::test]
+    async fn each_client_may_have_10_sign_ins_checked_a_minute() {
+        let stub = github();
+        let auth = without_database(&stub, &[]);
+        let try_sign_in = async |from: Visitor, return_to: &str, pairs: &[(&str, &str)]| {
+            let (started, state) = start(&auth, return_to).await;
+            let mut pairs = pairs.to_vec();
+            pairs.push(("state", &state));
+            callback(State(auth.clone()), from, query(&pairs), carrying(&started)).await
+        };
+
+        // What GitHub is not asked about does not count.
+        for _ in 0..=SIGN_INS {
+            try_sign_in(browser(), "/owner/repo", &[("error", "access_denied")]).await;
+            try_sign_in(browser(), "/owner/repo", &[]).await;
+        }
+        assert!(stub.requests().is_empty());
+
+        for _ in 0..SIGN_INS {
+            let response = try_sign_in(browser(), "/owner/repo", &[("code", "used")]).await;
+            assert_eq!(
+                location(&response),
+                "/-/sign-in-failed?return_to=%2Fowner%2Frepo"
+            );
+        }
+        assert_eq!(stub.requests().len(), SIGN_INS);
+        for (return_to, expected) in [
+            (
+                "/owner/repo",
+                "/-/sign-in-failed?reason=too_many&return_to=%2Fowner%2Frepo",
+            ),
+            ("/", "/-/sign-in-failed?reason=too_many"),
+        ] {
+            let response = try_sign_in(browser(), return_to, &[("code", "good")]).await;
+            assert_eq!(location(&response), expected);
+            assert_eq!(set_cookies(&response), [STATE_REMOVED]);
+        }
+        // So GitHub was not asked again.
+        assert_eq!(stub.requests().len(), SIGN_INS);
+
+        // Another client has a limit of its own.
+        let other = Visitor::of("203.0.113.2".parse().unwrap(), &HeaderMap::new());
+        let response = try_sign_in(other, "/", &[("code", "used")]).await;
+        assert_eq!(location(&response), "/-/sign-in-failed");
+        assert_eq!(stub.requests().len(), SIGN_INS + 1);
     }
 
     #[tokio::test]
@@ -603,6 +708,7 @@ mod tests {
         let (started, state) = start(&auth, "/owner/repo").await;
         let response = callback(
             State(auth.clone()),
+            browser(),
             query(&[("code", "bobs"), ("state", &state)]),
             carrying(&started),
         )
@@ -633,6 +739,7 @@ mod tests {
         let (started, state) = start(&auth, "/owner/repo?tab=x").await;
         let response = callback(
             State(auth.clone()),
+            browser(),
             query(&[("code", "good"), ("state", &state)]),
             carrying(&started),
         )

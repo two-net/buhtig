@@ -408,6 +408,23 @@ describe('Dashboard', () => {
     ]);
   });
 
+  it("shows GitHub's text as text, whatever markup it holds (NFR-SEC-03)", async () => {
+    const markup = '<img src="x" onerror="alert(1)"><b>bold</b>';
+    await open('/Acme/Widget', '/-/api/repositories/Acme/Widget', {
+      ...WIDGET,
+      description: markup,
+      topics: [markup],
+      license: markup,
+    });
+    const header = page().querySelector('app-repository-header')!;
+    expect(header.querySelector('.description')?.textContent).toBe(markup);
+    expect(header.querySelector('.topics li')?.textContent).toBe(markup);
+    expect(header.textContent).toContain(markup);
+    // The owner's avatar is the one image.
+    expect(header.querySelectorAll('img').length).toBe(1);
+    expect(header.querySelector('b, [onerror]')).toBeNull();
+  });
+
   it('forgets what it said of one repository as it moves to another', async () => {
     await open('/Acme/Widget', '/-/api/repositories/Acme/Widget', WIDGET);
     expect(page().querySelector('.description')).not.toBeNull();

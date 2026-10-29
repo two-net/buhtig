@@ -11,10 +11,8 @@
 //! name, as on the home page. A view replaces the entries of the same dashboard spelled
 //! otherwise, and pinning one already pinned only respells it.
 //!
-//! All of it is for signed-in users alone (FR-ACC-02). What changes state is no GET
-//! (NFR-SEC-02): other sites' POSTs carry no session cookie, which is `SameSite=Lax`, and a
-//! browser asks BuhTig before it sends another site's PUT or DELETE, which BuhTig never
-//! allows.
+//! All of it is for signed-in users alone (FR-ACC-02). What changes state is no GET, and
+//! other origins' pages cannot send it ([`crate::security`], NFR-SEC-02).
 
 use std::collections::HashMap;
 use std::sync::Arc;

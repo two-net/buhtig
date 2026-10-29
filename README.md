@@ -80,7 +80,8 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   when they revoke BuhTig's access on GitHub, and everyone is signed out when
   `security.encryption_key` changes. BuhTig sets two cookies: the session's, and one that
   keeps a sign-in's state for 10 minutes. Both are `Secure`, unless `server.public_url` is
-  `http://localhost`.
+  `http://localhost`. Each client may have 10 sign-ins checked with GitHub a minute; past
+  that, BuhTig asks them to wait a minute.
 - **Personal access tokens:** a signed-in user may save one personal access token in
   Settings, so that their dashboards include the private repositories and organization
   data it can see. No one needs one. BuhTig asks GitHub about each token before it saves
@@ -133,6 +134,16 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   such as a reverse proxy on the same host or network. Behind a proxy that connects from a
   public address, such as a CDN, or that doesn't set `X-Forwarded-For`, all visitors share
   one limit.
+- **Security:** BuhTig refuses a POST, PUT or DELETE that a browser sends from another
+  origin's page with `403`. It tells them apart by the `Sec-Fetch-Site` and `Origin`
+  headers, compared with `server.public_url`, so a reverse proxy must pass both on
+  unchanged. Every response carries a Content Security Policy, under which pages load
+  scripts and styles from BuhTig alone, and images from BuhTig and GitHub's avatar host. It
+  also carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: strict-origin-when-cross-origin`, and `Strict-Transport-Security` for a
+  year when `server.public_url` is `https`. Don't add a policy of your own in the proxy:
+  each page has a nonce of its own, which BuhTig's policy names. Errors give their status
+  and nothing of how BuhTig works.
 - **URLs:** dashboards live at `/{owner}/{repo}` and `/{org}`, as on GitHub, so replacing
   `github.com` with BuhTig's host in a GitHub link opens the matching dashboard. Deeper
   paths, such as `/{owner}/{repo}/pull/42` or `/orgs/{org}/people`, redirect to it. A

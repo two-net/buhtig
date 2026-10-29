@@ -1,6 +1,6 @@
 //! BuhTig's HTTP side: its routes, the line it logs for each request (FR-OPS-04), the
 //! page it shows while its database is unreachable (FR-DB-09), and how it stops
-//! (FR-OPS-05).
+//! (FR-OPS-05). What guards every request and response is [`crate::security`]'s.
 //!
 //! Every path of BuhTig's own is under `/-/` (FR-NAV-03), and every other path is a
 //! dashboard's (SRS §4.2). What is under `/-/api/` serves BuhTig's UI alone. It is not a
@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::extract::{Request, State};
-use axum::http::{StatusCode, Uri, header};
+use axum::http::{HeaderValue, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post, put};
@@ -23,6 +23,7 @@ use axum::{Extension, Router};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tracing::{error, info, warn};
+use url::Url;
 
 use crate::access;
 use crate::accounts;
@@ -34,6 +35,7 @@ use crate::navigation;
 use crate::organizations;
 use crate::preview::Previews;
 use crate::repositories;
+use crate::security::{self, Security};
 use crate::session::{self, Sessions};
 use crate::shortcuts::{self, Shortcuts};
 use crate::surprise;
@@ -56,13 +58,16 @@ struct Pages {
 
 /// Every request may carry a session, so each has the [`Sessions`] at hand, to tell who
 /// it comes from. In private mode, a gate in front of every route lets visitors through
-/// only to what signing in needs ([`access`]).
+/// only to what signing in needs ([`access`]). In front of that, requests from other
+/// origins' pages are refused, and every response is guarded, as `public_url` calls for
+/// ([`security`]).
 #[expect(
     clippy::too_many_arguments,
     reason = "each is a part of BuhTig that its routes serve"
 )]
 pub fn router(
     mode: AccessMode,
+    public_url: &Url,
     health: Arc<Health>,
     cache: Arc<Cache>,
     previews: Option<Previews>,
@@ -206,9 +211,17 @@ pub fn router(
         AccessMode::Public => router,
         AccessMode::Private => router.layer(middleware::from_fn(access::gate::<Ui>)),
     };
+    let security = Arc::new(Security::new(public_url));
     router
         // Outside the gate, which needs them to tell who a request is from.
         .layer(Extension(sessions))
+        // Before anything reads a session, so that a forged request changes nothing.
+        .layer(middleware::from_fn_with_state(
+            security.clone(),
+            security::same_origin,
+        ))
+        // Every response, whichever part answered, a refused request's too.
+        .layer(middleware::from_fn_with_state(security, security::headers))
         // Outermost, so that every response is logged, whichever part answered.
         .layer(middleware::from_fn(log_request))
 }
@@ -260,15 +273,18 @@ fn moved(dashboard: &str) -> Response {
         .into_response()
 }
 
-/// The response to a request that needs the database while it is unreachable.
+/// The response to a request that needs the database while it is unreachable. Its style
+/// has a nonce, as the app's page does (NFR-SEC-06).
 pub(crate) fn unavailable() -> Response {
+    let (policy, page) = security::with_nonce(UNAVAILABLE.as_bytes());
     (
         StatusCode::SERVICE_UNAVAILABLE,
         [
-            (header::CACHE_CONTROL, "no-store"),
-            (header::RETRY_AFTER, "30"),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            (header::RETRY_AFTER, HeaderValue::from_static("30")),
+            (header::CONTENT_SECURITY_POLICY, policy),
         ],
-        Html(UNAVAILABLE),
+        Html(page),
     )
         .into_response()
 }
@@ -456,6 +472,23 @@ mod tests {
             head(Some(tags.into()), false),
             Some(format!("{tags}{}", ui::STILL))
         );
+    }
+
+    #[tokio::test]
+    async fn the_unavailable_page_has_a_style_of_its_own() {
+        let response = unavailable();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let nonce =
+            security::nonce(&response.headers()[header::CONTENT_SECURITY_POLICY]).to_owned();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            body.contains(&format!("<style nonce=\"{nonce}\">")),
+            "{body}"
+        );
+        assert!(!body.contains(security::NONCE), "{body}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -10,6 +10,8 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
+use crate::security;
+
 #[derive(rust_embed::Embed)]
 #[folder = "../BuhTig.Angular/dist/BuhTig/browser"]
 // The build output is not committed. Without it, BuhTig serves `NOT_BUILT` instead.
@@ -75,19 +77,25 @@ fn file_name(path: &str) -> Option<&str> {
 /// The app's page, whatever the route, with `head`, such as a link preview's tags, at the
 /// end of its `<head>`. Browsers check for a new one on every load, so that they pick up
 /// the bundles of a new release.
+///
+/// Each one has a nonce of its own, which Angular gives the styles that it adds, and its
+/// Content Security Policy lets in those alone (NFR-SEC-06).
 pub fn app<A: RustEmbed>(head: Option<&str>) -> Response {
-    let body = match A::get(INDEX) {
-        Some(file) => match head.and_then(|head| with_head(&file.data, head)) {
-            Some(page) => Body::from(page),
-            None => Body::from(file.data),
-        },
-        None => Body::from(NOT_BUILT),
+    let (policy, body) = match A::get(INDEX) {
+        Some(file) => {
+            // Before `head` is added, which can quote GitHub, so that no nonce goes there.
+            let (policy, page) = security::with_nonce(&file.data);
+            let page = head.and_then(|head| with_head(&page, head)).unwrap_or(page);
+            (policy, Body::from(page))
+        }
+        None => (security::policy(None), Body::from(NOT_BUILT)),
     };
     (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-cache"),
         ],
+        [(header::CONTENT_SECURITY_POLICY, policy)],
         body,
     )
         .into_response()
@@ -189,26 +197,48 @@ mod tests {
         }
     }
 
+    /// The nonce of a page, as its policy names it.
+    fn nonce(response: &Response) -> String {
+        security::nonce(&response.headers()[header::CONTENT_SECURITY_POLICY]).to_owned()
+    }
+
     #[tokio::test]
-    async fn every_route_gets_the_index() {
-        let (status, content_type, cache, body) = parts(app::<Built>(None)).await;
+    async fn every_route_gets_the_index_with_a_nonce_of_its_own() {
+        let response = app::<Built>(None);
+        let nonce = nonce(&response);
+        assert_eq!(
+            response.headers()[header::CONTENT_SECURITY_POLICY],
+            security::policy(Some(&nonce))
+        );
+        let (status, content_type, cache, body) = parts(response).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(content_type, "text/html; charset=utf-8");
         assert_eq!(cache, "no-cache");
         assert_eq!(
             body,
-            "<!doctype html>\n<head><title>Fixture</title></head>\n"
+            format!(
+                "<!doctype html>\n<head><title>Fixture</title></head>\n\
+                 <app-root ngCspNonce=\"{nonce}\"></app-root>\n"
+            )
         );
+        assert_ne!(self::nonce(&app::<Built>(None)), nonce);
     }
 
     #[tokio::test]
-    async fn what_is_added_to_the_head_ends_it() {
-        let (status, _, cache, body) = parts(app::<Built>(Some("<meta name=\"x\">"))).await;
+    async fn what_is_added_to_the_head_ends_it_as_it_is() {
+        // As a link preview could, quoting GitHub.
+        let head = format!("<meta name=\"x\" content=\"{}\">", security::NONCE);
+        let response = app::<Built>(Some(&head));
+        let nonce = nonce(&response);
+        let (status, _, cache, body) = parts(response).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(cache, "no-cache");
         assert_eq!(
             body,
-            "<!doctype html>\n<head><title>Fixture</title><meta name=\"x\"></head>\n"
+            format!(
+                "<!doctype html>\n<head><title>Fixture</title>{head}</head>\n\
+                 <app-root ngCspNonce=\"{nonce}\"></app-root>\n"
+            )
         );
     }
 
@@ -220,7 +250,12 @@ mod tests {
     #[tokio::test]
     async fn a_build_without_the_ui_says_how_to_build_it() {
         assert!(asset::<NotBuilt>("/main-ABCDEFGH.js").is_none());
-        let (status, content_type, _, body) = parts(app::<NotBuilt>(Some("<meta>"))).await;
+        let response = app::<NotBuilt>(Some("<meta>"));
+        assert_eq!(
+            response.headers()[header::CONTENT_SECURITY_POLICY],
+            security::policy(None)
+        );
+        let (status, content_type, _, body) = parts(response).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(content_type, "text/html; charset=utf-8");
         assert!(body.contains("npm ci &amp;&amp; npm run build"), "{body}");
