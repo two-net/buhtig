@@ -6,10 +6,12 @@ import {
   ADD_TOKEN_TO_SEE,
   GO_HOME,
   NOT_FOUND_OR_PRIVATE,
+  NO_SUCH_NAME,
   REPLACE_TOKEN,
   SIGN_IN,
   SIGN_IN_TO_SEE,
   TOKEN_INVALID_TO_SEE,
+  invalidName,
   notFound,
   notFoundWithToken,
 } from './messages';
@@ -20,13 +22,24 @@ import {
  * neither apart, and shows nothing of the resource but the name it was opened at. It says what
  * the viewer can do: a visitor can sign in, and a signed-in user can add a personal access token,
  * or replace one that no longer works. A token user's token is what GitHub answered for.
+ *
+ * When the name cannot be a resource's at all, as in a URL typed by hand, it says so, and that
+ * signing in or a token would not help (NFR-UX-06).
  */
 @Component({
   selector: 'app-not-found-or-private',
   imports: [RouterLink],
   template: `
-    <h1>{{ NOT_FOUND_OR_PRIVATE }}</h1>
-    @switch (viewer()) {
+    @if (invalid()) {
+      <h1>{{ NO_SUCH_NAME }}</h1>
+      <p>{{ invalidName(name()) }}</p>
+      <p>
+        <a routerLink="/">{{ GO_HOME }}</a>
+      </p>
+    } @else {
+      <h1>{{ NOT_FOUND_OR_PRIVATE }}</h1>
+    }
+    @switch (invalid() ? undefined : viewer()) {
       @case ('visitor') {
         <p>{{ notFound(name()) }} {{ SIGN_IN_TO_SEE }}</p>
         <p>
@@ -78,6 +91,8 @@ export class NotFoundOrPrivate {
 
   /** The resource's name, as the URL has it. */
   readonly name = input.required<string>();
+  /** Whether the name cannot be a resource's, as the server says without asking GitHub. */
+  readonly invalid = input(false);
 
   /** Who is viewing, as far as what they can do about it goes, once BuhTig knows. */
   protected readonly viewer = computed(() => {
@@ -98,6 +113,8 @@ export class NotFoundOrPrivate {
   /** Signing in returns to this page (FR-AUTH-05). */
   protected readonly signIn = signInUrl(inject(Router).url);
 
+  protected readonly invalidName = invalidName;
+  protected readonly NO_SUCH_NAME = NO_SUCH_NAME;
   protected readonly notFound = notFound;
   protected readonly notFoundWithToken = notFoundWithToken;
   protected readonly NOT_FOUND_OR_PRIVATE = NOT_FOUND_OR_PRIVATE;

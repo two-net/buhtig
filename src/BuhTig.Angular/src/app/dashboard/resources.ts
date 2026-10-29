@@ -25,6 +25,11 @@ export interface Summary {
    * credential may not see (FR-ACC-05).
    */
   notFound: boolean;
+  /**
+   * Whether the name cannot be a GitHub account's or repository's, as the server says without
+   * asking GitHub (FR-SRCH-04), as of a URL typed by hand.
+   */
+  invalid: boolean;
 }
 
 /** What came of a request to refresh a dashboard (FR-DATA-07). */
@@ -468,8 +473,8 @@ export class Resources {
 
   /**
    * What BuhTig knows of `resource`: what it is, or that GitHub says there is no such resource,
-   * or keeps it from the viewer's credential. `undefined` when BuhTig cannot tell now: the
-   * dashboard then stays as it is.
+   * or keeps it from the viewer's credential, or that its name cannot be one. `undefined` when
+   * BuhTig cannot tell now: the dashboard then stays as it is.
    */
   summary(resource: Resource): Observable<Summary | undefined> {
     const answer: Observable<Answer> =
@@ -494,14 +499,16 @@ export class Resources {
               : undefined,
           denied: undefined,
           notFound: false,
+          invalid: false,
         };
       }),
       catchError((error: unknown) => {
         const denied = deniedBy(error);
-        const notFound =
-          error instanceof HttpErrorResponse && error.status === HttpStatusCode.NotFound;
+        const status = error instanceof HttpErrorResponse ? error.status : undefined;
+        const notFound = status === HttpStatusCode.NotFound;
+        const invalid = status === HttpStatusCode.BadRequest;
         return of(
-          denied || notFound
+          denied || notFound || invalid
             ? {
                 path: undefined,
                 fetchedAt: undefined,
@@ -509,6 +516,7 @@ export class Resources {
                 organization: undefined,
                 denied,
                 notFound,
+                invalid,
               }
             : undefined,
         );

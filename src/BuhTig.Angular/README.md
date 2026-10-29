@@ -54,6 +54,19 @@ ng e2e
 
 Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
 
+## Text
+
+BuhTig's UI is in English, with its text kept apart from its logic so that it can be translated
+later (NFR-UX-07):
+
+- Text that code builds or chooses, such as a sentence with a figure in it, a label that depends
+  on a state, or a page title, goes in the `messages.ts` beside the component.
+- Fixed text, such as a heading or a button's label, stays in the template, where Angular's i18n
+  can mark it.
+- Numbers, dates and lists go through `src/app/format/format.ts`, in the browser's locale.
+
+Each message says what happened and what the user can do next (NFR-UX-06).
+
 ## Additional Resources
 
 For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
