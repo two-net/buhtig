@@ -64,13 +64,31 @@ describe('RepositoryActivity', () => {
     expect(caption()).toBe(`${exactNumber(TOTAL)} commits in the last year`);
   });
 
-  it('says what it shows in a sentence, for assistive technology (NFR-UX-04)', async () => {
+  it("says what it shows in a sentence, and each week's commits in a table (NFR-UX-04)", async () => {
     await answer(WEEKS);
     expect(svg().getAttribute('role')).toBe('img');
-    expect(svg().getAttribute('aria-label')).toBe(
+    expect(svg().getAttribute('aria-label')).toBe('Commits per week');
+    expect(element().querySelector('.summary')?.textContent?.trim()).toBe(
       `${exactNumber(TOTAL)} commits in the last year. The busiest week was that of ` +
         `${weekDate(new Date('2026-10-18'))}, with 51 commits.`,
     );
+    const rows = [...element().querySelectorAll('tr')].map((row) =>
+      [...row.children].map((cell) => cell.textContent?.trim()),
+    );
+    expect(rows).toHaveLength(53);
+    expect(rows[0]).toEqual(['Week of', 'Commits']);
+    expect(rows[1]).toEqual([weekDate(new Date('2025-10-26')), '0']);
+    expect(rows[52]).toEqual([weekDate(new Date('2026-10-18')), '51']);
+  });
+
+  it('tells the commits of each week by keyboard too (NFR-UX-03)', async () => {
+    await answer(WEEKS);
+    svg().focus();
+    await fixture.whenStable();
+    expect(caption()).toBe(`Week of ${weekDate(new Date('2026-10-18'))}: 51 commits`);
+    svg().dispatchEvent(new KeyboardEvent('keydown', { key: 'Home' }));
+    await fixture.whenStable();
+    expect(caption()).toBe(`Week of ${weekDate(new Date('2025-10-26'))}: 0 commits`);
   });
 
   it('tells the commits of the week pointed at, and the total again after', async () => {

@@ -3,7 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { Component, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { compactNumber } from '../format/format';
+import { compactNumber, exactNumber } from '../format/format';
 import { OrganizationTopRepositories } from './top-repositories';
 
 @Component({
@@ -32,6 +32,12 @@ describe('OrganizationTopRepositories', () => {
   });
 
   const element = () => fixture.nativeElement as HTMLElement;
+
+  /** The chart's table, row by row, its headers first. */
+  const table = () =>
+    [...element().querySelectorAll('tr')].map((row) =>
+      [...row.children].map((cell) => cell.textContent?.trim()),
+    );
   const links = () =>
     [...element().querySelectorAll('a.label')].map((link) => [
       link.textContent?.trim(),
@@ -63,6 +69,21 @@ describe('OrganizationTopRepositories', () => {
     expect([...element().querySelectorAll('.value')].map(shown)).toEqual([
       `${compactNumber(1_200)} stars`,
       '1 star',
+    ]);
+  });
+
+  it('says which has the most stars, and lists them all in a table (NFR-UX-04)', async () => {
+    await answer('acme', [
+      { name: 'widget', stars: 1_200 },
+      { name: 'gadget', stars: 1 },
+    ]);
+    expect(element().querySelector('.summary')?.textContent?.trim()).toBe(
+      `widget has the most stars, ${exactNumber(1_200)}.`,
+    );
+    expect(table()).toEqual([
+      ['Repository', 'Stars'],
+      ['widget', exactNumber(1_200)],
+      ['gadget', '1'],
     ]);
   });
 

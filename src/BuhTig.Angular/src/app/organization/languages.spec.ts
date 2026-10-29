@@ -2,6 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Component, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { exactNumber } from '../format/format';
 import { OrganizationLanguages } from './languages';
 
 @Component({
@@ -31,6 +32,12 @@ describe('OrganizationLanguages', () => {
 
   const element = () => fixture.nativeElement as HTMLElement;
 
+  /** The chart's table, row by row, its headers first. */
+  const table = () =>
+    [...element().querySelectorAll('tr')].map((row) =>
+      [...row.children].map((cell) => cell.textContent?.trim()),
+    );
+
   /** Each bar, as its label and its figure. */
   const bars = () =>
     [...element().querySelectorAll('li')].map((bar) => [
@@ -56,6 +63,26 @@ describe('OrganizationLanguages', () => {
       ['Rust', '12 repositories'],
       ['Go', '1 repository'],
       ['Other', '3 repositories'],
+    ]);
+  });
+
+  it('says which language is the most common, and lists them all in a table (NFR-UX-04)', async () => {
+    await answer({
+      languages: [
+        { name: 'Rust', repositories: 1_200 },
+        { name: 'Go', repositories: 1 },
+      ],
+      other: 3,
+    });
+    expect(element().querySelector('.summary')?.textContent?.trim()).toBe(
+      `Rust is the most common primary language, in ${exactNumber(1_200)} of the ` +
+        `${exactNumber(1_204)} repositories that have one.`,
+    );
+    expect(table()).toEqual([
+      ['Language', 'Repositories'],
+      ['Rust', exactNumber(1_200)],
+      ['Go', '1'],
+      ['Other', '3'],
     ]);
   });
 

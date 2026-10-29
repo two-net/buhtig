@@ -1,52 +1,21 @@
 <app-widget heading="Created per year" empty="No repositories yet.">
   <ng-template [appLoaded]="years">
     @if (chart(); as chart) {
-      <p class="caption">{{ caption() }}</p>
-      <!-- Stretched to the widget's width, so that the labels are outside it, unstretched. -->
-      <svg
-        role="img"
-        [attr.aria-label]="chart.description"
-        [attr.viewBox]="'0 0 ' + chart.width + ' ' + height"
-        preserveAspectRatio="none"
-        (pointerleave)="pointed.set(undefined)"
+      <app-column-chart
+        [columns]="chart.columns"
+        [total]="chart.total"
+        [name]="name"
+        [summary]="chart.summary"
+        [headers]="headers"
       >
-        <line
-          class="baseline"
-          x1="0"
-          [attr.x2]="chart.width"
-          [attr.y1]="height"
-          [attr.y2]="height"
-          vector-effect="non-scaling-stroke"
-        />
-        @for (bar of chart.bars; track bar.column) {
-          @if (bar.height > 0) {
-            <rect
-              class="bar"
-              [class.pointed]="pointed() === bar.year"
-              [attr.x]="bar.column + offset"
-              [attr.y]="height - bar.height"
-              [attr.width]="barWidth"
-              [attr.height]="bar.height"
-            />
+        <!-- Only the ends, so that the labels never run into each other. -->
+        <div class="years" aria-hidden="true">
+          <span>{{ chart.first }}</span>
+          @if (chart.last !== chart.first) {
+            <span>{{ chart.last }}</span>
           }
-          <!-- The whole column, so that a year without repositories can be pointed at too. -->
-          <rect
-            class="column"
-            [attr.x]="bar.column"
-            y="0"
-            [attr.width]="columnWidth"
-            [attr.height]="height"
-            (pointerenter)="pointed.set(bar.year)"
-          />
-        }
-      </svg>
-      <!-- Only the ends, so that the labels never run into each other. -->
-      <div class="years" aria-hidden="true">
-        <span>{{ chart.first }}</span>
-        @if (chart.last !== chart.first) {
-          <span>{{ chart.last }}</span>
-        }
-      </div>
+        </div>
+      </app-column-chart>
     }
   </ng-template>
 </app-widget>

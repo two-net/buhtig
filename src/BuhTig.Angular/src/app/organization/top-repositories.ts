@@ -3,7 +3,7 @@ import { Resources } from '../dashboard/resources';
 import { load } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
 import { OrganizationBars } from './bars';
-import { starsLabel } from './messages';
+import { TOP_REPOSITORIES_HEADERS, starsLabel, topRepositoriesDescription } from './messages';
 
 /**
  * The 10 of an organization's repositories with the most stars (FR-ORG-05), most first. Each
@@ -34,5 +34,11 @@ export class OrganizationTopRepositories {
       : [];
   });
 
+  protected readonly summary = computed(() => {
+    const [top] = this.bars();
+    return top === undefined ? '' : topRepositoriesDescription(top.label, top.value);
+  });
+
   protected readonly unit = starsLabel;
+  protected readonly headers = TOP_REPOSITORIES_HEADERS;
 }

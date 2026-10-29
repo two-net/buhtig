@@ -1,0 +1,45 @@
+<p class="caption" aria-hidden="true">{{ caption() }}</p>
+<!-- Stretched to the widget's width, so that the labels are outside it, unstretched. -->
+<svg
+  role="img"
+  tabindex="0"
+  [attr.aria-label]="name()"
+  [attr.viewBox]="'0 0 ' + width() + ' ' + height"
+  preserveAspectRatio="none"
+  (pointerleave)="pointed.set(undefined)"
+  (focus)="focus()"
+  (blur)="pointed.set(undefined)"
+  (keydown)="move($event)"
+>
+  <line
+    class="baseline"
+    x1="0"
+    [attr.x2]="width()"
+    [attr.y1]="height"
+    [attr.y2]="height"
+    vector-effect="non-scaling-stroke"
+  />
+  @for (bar of bars(); track $index) {
+    @if (bar.height > 0) {
+      <rect
+        class="bar"
+        [class.pointed]="pointed() === $index"
+        [attr.x]="bar.at + offset"
+        [attr.y]="height - bar.height"
+        [attr.width]="barWidth"
+        [attr.height]="bar.height"
+      />
+    }
+    <!-- The whole column, so that one without a bar can be pointed at too. -->
+    <rect
+      class="column"
+      [attr.x]="bar.at"
+      y="0"
+      [attr.width]="columnWidth"
+      [attr.height]="height"
+      (pointerenter)="pointed.set($index)"
+    />
+  }
+</svg>
+<ng-content />
+<app-chart-alternative [summary]="summary()" [headers]="headers()" [rows]="rows()" />

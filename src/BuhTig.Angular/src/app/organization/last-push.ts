@@ -3,7 +3,7 @@ import { LastPush, Resources } from '../dashboard/resources';
 import { load } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
 import { OrganizationBars } from './bars';
-import { LAST_PUSH, repositoriesLabel } from './messages';
+import { LAST_PUSH, LAST_PUSH_HEADERS, lastPushDescription, repositoriesLabel } from './messages';
 
 /** The periods of the chart, the most recent first. */
 const PERIODS: (keyof LastPush)[] = ['last7Days', 'last30Days', 'last12Months', 'older'];
@@ -37,5 +37,11 @@ export class OrganizationLastPush {
       : [];
   });
 
+  protected readonly summary = computed(() => {
+    const state = this.pushes.state();
+    return state.status === 'ready' ? lastPushDescription(state.data) : '';
+  });
+
   protected readonly unit = repositoriesLabel;
+  protected readonly headers = LAST_PUSH_HEADERS;
 }
