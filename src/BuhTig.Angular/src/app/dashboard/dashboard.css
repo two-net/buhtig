@@ -60,11 +60,14 @@ main {
 
 /*
  * Opened from the home page, it fades in while the search box glides into the header, above
- * what is there (FR-ANIM-03). Faded content can be clicked all along (FR-ANIM-11).
+ * what is there (FR-ANIM-03). Faded content can be clicked all along (FR-ANIM-11). Once faded
+ * in, nothing is held: Firefox and Safari keep an element whose opacity is held past its end a
+ * stacking context of its own, and the content, which comes later, would then cover the account
+ * menu and take its clicks.
  */
 :host(.arriving) header > :not(app-search),
 :host(.arriving) main {
-  animation: arrive 400ms ease-out both;
+  animation: arrive 400ms ease-out backwards;
 }
 
 :host(.arriving) app-search {

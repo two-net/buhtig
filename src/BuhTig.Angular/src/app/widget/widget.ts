@@ -15,6 +15,7 @@ import {
   untracked,
 } from '@angular/core';
 import { ENTRANCE_MS, Entrance, Entrances } from '../motion/entrance';
+import { Motion } from '../motion/motion';
 import { Loader } from './load';
 import { COMPUTING, FAILED, LOADING } from './messages';
 
@@ -42,7 +43,7 @@ let count = 0;
  *
  * The placeholder shimmers (FR-ANIM-04). The content makes its entrance as it is first shown in
  * view on the page, while the widget has the class `entering`, for what it shows to enter by
- * (FR-ANIM-07).
+ * (FR-ANIM-07). The entrance ends at once if motion turns off on its way (FR-ANIM-10).
  */
 @Component({
   selector: 'app-widget',
@@ -65,6 +66,7 @@ export class Widget {
   readonly hideHeading = input(false);
 
   private readonly entrances = inject(Entrances);
+  private readonly motion = inject(Motion);
   protected readonly entrance = inject(Entrance);
   /** Whether the widget is in view, as far as the browser tells. */
   private readonly inView = signal(false);
@@ -115,6 +117,14 @@ export class Widget {
       });
     });
     destroyRef.onDestroy(() => clearTimeout(ending));
+
+    // The browser may ask for reduced motion while the page is open, even as the content enters.
+    // Then what it shows is there at once, with its figures at their values (FR-ANIM-10).
+    effect(() => {
+      if (!this.motion.full()) {
+        this.entrance.playing.set(false);
+      }
+    });
   }
 
   protected retry(): void {
