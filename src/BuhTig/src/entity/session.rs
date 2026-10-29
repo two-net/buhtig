@@ -9,6 +9,8 @@ pub struct Model {
     /// A hash of the session ID; the ID itself is never stored (DR-02).
     #[sea_orm(primary_key, auto_increment = false)]
     pub id_hash: Vec<u8>,
+    /// Indexed for ending a user's sessions, and for their cascade when the user is deleted.
+    #[sea_orm(indexed)]
     pub user_id: i64,
     #[sea_orm(belongs_to, from = "user_id", to = "id", on_delete = "Cascade")]
     pub user: BelongsTo<super::user::Entity>,

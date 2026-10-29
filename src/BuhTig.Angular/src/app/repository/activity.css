@@ -1,6 +1,14 @@
 /* The widget within is the grid's item (UI-05). */
 :host {
   display: contents;
+  /* As tall as what it shows once loaded, so that nothing moves then (NFR-PERF-05). */
+  --widget-skeleton: 17.5rem;
+}
+
+@media (min-width: 600px) {
+  :host {
+    --widget-skeleton: 16.75rem;
+  }
 }
 
 /* Each month's label starts where its first week does. */

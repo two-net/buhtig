@@ -148,6 +148,9 @@ mod tests {
         for path in [
             "/",
             "/index.html",
+            // Compressed copies are served only in place of their files.
+            "/main-ABCDEFGH.js.br",
+            "/index.html.gz",
             "/owner/repo",
             "/org",
             "/-/settings",

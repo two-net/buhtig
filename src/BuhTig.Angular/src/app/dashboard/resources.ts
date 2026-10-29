@@ -3,6 +3,7 @@ import { Injectable, inject, signal } from '@angular/core';
 import { Observable, catchError, map, of, tap } from 'rxjs';
 import { Resource, dashboardPath, parse } from '../search/parse';
 import { Computing } from '../widget/load';
+import { organizationUrl, repositoryUrl, resourceUrl } from './urls';
 
 /** What a dashboard learns of its repository or organization before its widgets load. */
 export interface Summary {
@@ -808,21 +809,6 @@ function deniedBy(error: unknown): Denied | undefined {
     default:
       return undefined;
   }
-}
-
-/** Where the server answers about `resource`, and under which it refreshes, records and pins it. */
-export function resourceUrl(resource: Resource): string {
-  return resource.kind === 'repository'
-    ? repositoryUrl(resource.owner, resource.repo)
-    : organizationUrl(resource.org);
-}
-
-function repositoryUrl(owner: string, repo: string): string {
-  return `/-/api/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-}
-
-function organizationUrl(org: string): string {
-  return `/-/api/organizations/${encodeURIComponent(org)}`;
 }
 
 /**

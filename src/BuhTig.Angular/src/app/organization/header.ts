@@ -16,6 +16,7 @@ import { RelativeTime } from '../format/relative-time';
   templateUrl: './header.html',
   // The repository's head's look, and what only an organization's has.
   styleUrls: ['../repository/header.css', './header.css'],
+  host: { '[class.pending]': 'organization() === undefined' },
 })
 export class OrganizationHeader {
   /** The organization's login, as the URL has it. */

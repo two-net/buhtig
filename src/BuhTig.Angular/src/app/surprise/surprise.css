@@ -4,7 +4,8 @@
 }
 
 /* Shaped as "Show dashboard", but plain beside it, which stays the primary action (UI-01). */
-button {
+button,
+.slot {
   padding: calc(0.5rem - 1px) calc(1.25rem - 1px);
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -13,4 +14,9 @@ button {
   font: inherit;
   font-weight: 600;
   cursor: pointer;
+}
+
+/* As large as the button that takes its place, and unseen (NFR-PERF-05). */
+.slot {
+  visibility: hidden;
 }

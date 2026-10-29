@@ -1,6 +1,26 @@
 :host {
   display: block;
   margin-bottom: 1.5rem;
+  /* How tall the heads of popular repositories are, at each width (see `.pending`). */
+  --pending-header: 20rem;
+}
+
+@media (min-width: 600px) {
+  :host {
+    --pending-header: 14rem;
+  }
+}
+
+@media (min-width: 768px) {
+  :host {
+    --pending-header: 12rem;
+  }
+}
+
+@media (min-width: 1000px) {
+  :host {
+    --pending-header: 10rem;
+  }
 }
 
 /* The avatar, the name and the badges in a row, with "Open on GitHub" at its end. */
@@ -13,6 +33,21 @@
 
 .avatar {
   border-radius: 0.5rem;
+}
+
+/*
+ * Until the server has said what there is to show, the head takes about the room it will take, so
+ * that the widgets below do not move once it has (NFR-PERF-05): the avatar's, and a line each of
+ * description and of facts. It shows nothing in it, since the server may never say.
+ */
+:host(.pending) {
+  min-height: var(--pending-header);
+}
+
+.slot {
+  display: block;
+  width: 40px;
+  height: 40px;
 }
 
 h1 {

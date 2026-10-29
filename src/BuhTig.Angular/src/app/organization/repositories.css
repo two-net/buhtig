@@ -1,6 +1,14 @@
 /* The widget within is the grid's item, so that it spans the grid (UI-05). */
 :host {
   display: contents;
+  /* As tall as what it shows once loaded, so that nothing moves then (NFR-PERF-05). */
+  --widget-skeleton: 148rem;
+}
+
+@media (min-width: 1000px) {
+  :host {
+    --widget-skeleton: 107rem;
+  }
 }
 
 /* The search box first, as wide as there is room for, then the type and the language. */

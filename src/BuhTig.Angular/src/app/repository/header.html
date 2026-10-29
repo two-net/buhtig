@@ -2,6 +2,8 @@
 <div class="title">
   @if (details?.ownerAvatarUrl; as avatar) {
     <img class="avatar" [src]="avatar" alt="" width="40" height="40" />
+  } @else if (!details) {
+    <span class="avatar slot"></span>
   }
   <h1>{{ name() }}</h1>
   @if (details) {

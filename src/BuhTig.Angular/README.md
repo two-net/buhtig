@@ -36,6 +36,15 @@ ng build
 
 This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
 
+`npm run build` runs `scripts/compress.mjs` after it. It writes a brotli and a gzip copy beside
+each file that they make smaller, which BuhTig serves in its place, and fails if the home page
+would transfer more than its 300 KB budget (NFR-PERF-02), counting the dashboard's code, which
+the home page loads ahead of need. Its tests run with `npm run test:scripts`.
+
+Pages other than the home page and the sign-in pages load as they are opened, so that the home
+page comes quickly (NFR-PERF-01). Lazy chunks are named after what they hold, such as
+`dashboard-mEQccZib.js`: BuhTig preloads that one on a dashboard's page.
+
 ## Running unit tests
 
 To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:

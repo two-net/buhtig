@@ -1,7 +1,7 @@
 import { HttpClient, HttpErrorResponse, HttpStatusCode } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, map, of, throwError } from 'rxjs';
-import { resourceUrl } from '../dashboard/resources';
+import { resourceUrl } from '../dashboard/urls';
 import { Shortcut, resourceOf } from './pick';
 
 /** A signed-in user's pins, in their order, and what they viewed recently, newest first. */

@@ -5,10 +5,16 @@ import {
   provideBrowserGlobalErrorListeners,
 } from '@angular/core';
 import { provideHttpClient, withFetch, withInterceptors } from '@angular/common/http';
-import { provideRouter, withComponentInputBinding } from '@angular/router';
+import {
+  provideRouter,
+  withComponentInputBinding,
+  withNavigationErrorHandler,
+  withPreloading,
+} from '@angular/router';
 import { routes } from './app.routes';
 import { focusPageOnNavigation } from './focus/page-focus';
 import { Motion } from './motion/motion';
+import { PreloadWhenIdle, reloadForNewRelease } from './preload/preload';
 import { dropPreviewOnNavigation } from './preview/preview';
 import { noticeSignOut } from './session/session';
 
@@ -16,7 +22,12 @@ export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
     provideHttpClient(withFetch(), withInterceptors([noticeSignOut])),
-    provideRouter(routes, withComponentInputBinding()),
+    provideRouter(
+      routes,
+      withComponentInputBinding(),
+      withPreloading(PreloadWhenIdle),
+      withNavigationErrorHandler(reloadForNewRelease),
+    ),
     provideAppInitializer(dropPreviewOnNavigation),
     provideAppInitializer(focusPageOnNavigation),
     // So that the page keeps still from the start, if it is to (FR-ANIM-10).

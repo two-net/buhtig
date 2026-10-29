@@ -22,8 +22,13 @@ h2 {
   font-weight: 600;
 }
 
+/*
+ * About as tall as the content that takes its place, which each widget says in
+ * `--widget-skeleton` at each of its widths, so that nothing below moves once it is there
+ * (NFR-PERF-05).
+ */
 .skeleton {
-  min-height: 8rem;
+  min-height: var(--widget-skeleton, 8rem);
 }
 
 .skeleton span {
@@ -74,7 +79,9 @@ h2 {
   color: var(--muted);
 }
 
+/* Below what it says while GitHub computes, the two as tall as the skeleton alone. */
 .message + .skeleton {
+  min-height: max(0px, var(--widget-skeleton, 8rem) - 2.25rem);
   margin-top: 0.75rem;
 }
 

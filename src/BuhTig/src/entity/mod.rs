@@ -16,6 +16,10 @@
 //!   `DROP CONSTRAINT`. That fails for the unique indexes that `unique_key` creates, so
 //!   BuhTig would no longer start. The same happens to a unique index that someone adds
 //!   to these tables by hand.
+//! - Plain indexes (`indexed`) may be added: sync creates one wherever no index has its
+//!   columns, on tables that hold data too. It never drops one, so a removed `indexed`
+//!   stays in the database. Index a foreign key that rows are deleted by, or that cascades,
+//!   so that the delete need not scan the table.
 //! - Enums are stored as text rather than PostgreSQL enum types, which sync cannot
 //!   extend with new variants.
 //!

@@ -28,6 +28,17 @@ describe('format', () => {
     ]);
   });
 
+  it('makes each format once for each locale, as a figure counting up uses it on every frame', () => {
+    const made = vi.spyOn(Intl, 'NumberFormat');
+    for (const n of [1_000, 2_000, 3_000]) {
+      compactNumber(n, 'fr-CA');
+    }
+    expect(made).toHaveBeenCalledTimes(1);
+    compactNumber(4_000, 'en-GB');
+    expect(made).toHaveBeenCalledTimes(2);
+    made.mockRestore();
+  });
+
   it('shows numbers in full, for the locale (UI-06)', () => {
     expect(exactNumber(1_234_567, 'en-US')).toBe('1,234,567');
     expect(plain(exactNumber(1_234_567, 'de-DE'))).toBe('1.234.567');

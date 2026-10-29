@@ -15,13 +15,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::extract::{Request, State};
-use axum::http::{HeaderValue, StatusCode, Uri, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Extension, Router};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
+use tower_http::compression::predicate::{And, NotForContentType, Predicate, SizeAbove};
+use tower_http::compression::{CompressionLayer, CompressionLevel};
 use tracing::{error, info, warn};
 use url::Url;
 
@@ -58,9 +60,8 @@ struct Pages {
 
 /// Every request may carry a session, so each has the [`Sessions`] at hand, to tell who
 /// it comes from. In private mode, a gate in front of every route lets visitors through
-/// only to what signing in needs ([`access`]). In front of that, requests from other
-/// origins' pages are refused, and every response is guarded, as `public_url` calls for
-/// ([`security`]).
+/// only to what signing in needs ([`access`]). In front of that is what [`guard`] puts
+/// around every route.
 #[expect(
     clippy::too_many_arguments,
     reason = "each is a part of BuhTig that its routes serve"
@@ -211,10 +212,16 @@ pub fn router(
         AccessMode::Public => router,
         AccessMode::Private => router.layer(middleware::from_fn(access::gate::<Ui>)),
     };
+    // Outside the gate, which needs them to tell who a request is from.
+    guard(router.layer(Extension(sessions)), public_url)
+}
+
+/// `router`, with what every request and response of BuhTig's goes through: requests from
+/// other origins' pages are refused, every response is guarded, as `public_url` calls for
+/// ([`security`]), larger ones are compressed, and each is logged.
+fn guard(router: Router, public_url: &Url) -> Router {
     let security = Arc::new(Security::new(public_url));
     router
-        // Outside the gate, which needs them to tell who a request is from.
-        .layer(Extension(sessions))
         // Before anything reads a session, so that a forged request changes nothing.
         .layer(middleware::from_fn_with_state(
             security.clone(),
@@ -222,16 +229,34 @@ pub fn router(
         ))
         // Every response, whichever part answered, a refused request's too.
         .layer(middleware::from_fn_with_state(security, security::headers))
+        // Outside the guard, which may take an error's body, so that what it sends is what
+        // was compressed.
+        .layer(compression())
         // Outermost, so that every response is logged, whichever part answered.
         .layer(middleware::from_fn(log_request))
+}
+
+/// Gzips each response of 1 KB or more but an image's, for a browser that accepts it, as
+/// fast as gzip goes, which costs little CPU (NFR-CAP-01) for much less to send: an
+/// organization's repository table shrinks to about a tenth (NFR-PERF-03). The files of
+/// the UI come compressed already, at their best ([`ui::asset`]), and a response that is
+/// compressed already is sent as it is. Smaller responses would gain too little.
+///
+/// No response carries a secret beside what an attacker could choose, which is what would
+/// let them read it from how well it compresses (BREACH): there are no CSRF tokens, and a
+/// page's nonce is new in each response.
+fn compression() -> CompressionLayer<And<SizeAbove, NotForContentType>> {
+    CompressionLayer::new()
+        .quality(CompressionLevel::Fastest)
+        .compress_when(SizeAbove::new(1024).and(NotForContentType::IMAGES))
 }
 
 /// Every other path: a file of the UI, a redirect from a page beneath a dashboard to the
 /// dashboard, or else the app, which takes the path as its route (`/owner/repo`,
 /// `/-/about`, …). A dashboard's page carries its link preview, if it has one, and every
 /// page says when the UI is to keep still.
-async fn page(State(pages): State<Pages>, uri: Uri) -> Response {
-    if let Some(asset) = ui::asset::<Ui>(uri.path()) {
+async fn page(State(pages): State<Pages>, uri: Uri, headers: HeaderMap) -> Response {
+    if let Some(asset) = ui::asset::<Ui>(uri.path(), &headers) {
         return asset;
     }
     // A GitHub link with BuhTig's host opens the dashboard (FR-NAV-02). That needs no
@@ -247,13 +272,20 @@ async fn page(State(pages): State<Pages>, uri: Uri) -> Response {
         Some(previews) => previews.of(uri.path()).await,
         None => None,
     };
-    ui::app::<Ui>(head(preview.map(|preview| preview.tags()), pages.animations).as_deref())
+    let preload = navigation::dashboard_at(uri.path())
+        .is_some()
+        .then(ui::dashboard_preload::<Ui>)
+        .flatten();
+    let tags = preview.map(|preview| preview.tags());
+    ui::app::<Ui>(head(preload, tags, pages.animations).as_deref())
 }
 
-/// What the app's page adds to its `<head>`: a dashboard's link preview `tags`, and
-/// [`ui::STILL`] unless `animations` are on. `None` if that is nothing.
-fn head(tags: Option<String>, animations: bool) -> Option<String> {
-    let mut head = tags.unwrap_or_default();
+/// What the app's page adds to its `<head>`: a dashboard's `preload` of its code and its
+/// link preview `tags`, and [`ui::STILL`] unless `animations` are on. `None` if that is
+/// nothing.
+fn head(preload: Option<String>, tags: Option<String>, animations: bool) -> Option<String> {
+    let mut head = preload.unwrap_or_default();
+    head.push_str(&tags.unwrap_or_default());
     if !animations {
         head.push_str(ui::STILL);
     }
@@ -463,14 +495,24 @@ mod tests {
 
     #[test]
     fn pages_say_to_keep_still_only_when_animations_are_off() {
-        assert_eq!(head(None, true), None);
-        assert_eq!(head(None, false).as_deref(), Some(ui::STILL));
+        assert_eq!(head(None, None, true), None);
+        assert_eq!(head(None, None, false).as_deref(), Some(ui::STILL));
 
         let tags = "<meta name=\"description\" content=\"x\">\n";
-        assert_eq!(head(Some(tags.into()), true).as_deref(), Some(tags));
+        assert_eq!(head(None, Some(tags.into()), true).as_deref(), Some(tags));
         assert_eq!(
-            head(Some(tags.into()), false),
+            head(None, Some(tags.into()), false),
             Some(format!("{tags}{}", ui::STILL))
+        );
+    }
+
+    #[test]
+    fn dashboards_preload_their_code_before_all_else() {
+        let preload = "<link rel=\"modulepreload\" href=\"/dashboard-ABCDEFGH.js\">\n";
+        let tags = "<meta name=\"description\" content=\"x\">\n";
+        assert_eq!(
+            head(Some(preload.into()), Some(tags.into()), false),
+            Some(format!("{preload}{tags}{}", ui::STILL))
         );
     }
 
@@ -489,6 +531,178 @@ mod tests {
             "{body}"
         );
         assert!(!body.contains(security::NONCE), "{body}");
+    }
+
+    /// A JSON body of about `size` bytes.
+    fn json_of(size: usize) -> String {
+        format!("{{\"padding\": \"{}\"}}", "widget ".repeat(size / 7))
+    }
+
+    /// Routes that answer as BuhTig's do, behind what guards BuhTig's, each with a response
+    /// that compression must tell apart from the others.
+    fn guarded() -> Router {
+        let json = |size| {
+            (
+                [
+                    (header::CACHE_CONTROL, "no-cache"),
+                    (header::CONTENT_TYPE, "application/json"),
+                ],
+                json_of(size),
+            )
+        };
+        let routes = Router::new()
+            .route("/large", get(move || async move { json(4096) }))
+            .route("/small", get(move || async move { json(100) }))
+            .route(
+                "/image",
+                get(|| async {
+                    (
+                        [
+                            (header::CACHE_CONTROL, "no-cache"),
+                            (header::CONTENT_TYPE, "image/png"),
+                        ],
+                        vec![7u8; 4096],
+                    )
+                }),
+            )
+            // As a file of the UI comes, compressed already.
+            .route(
+                "/encoded",
+                get(|| async {
+                    (
+                        [
+                            (header::CACHE_CONTROL, "no-cache"),
+                            (header::CONTENT_TYPE, "text/javascript"),
+                            (header::CONTENT_ENCODING, "br"),
+                        ],
+                        vec![7u8; 4096],
+                    )
+                }),
+            )
+            // An error that BuhTig did not write, whose body the guard takes.
+            .route(
+                "/failed",
+                get(|| async { (StatusCode::BAD_REQUEST, json_of(4096)) }),
+            );
+        guard(routes, &Url::parse("https://buhtig.example.com").unwrap())
+    }
+
+    /// Sends `GET path` with `headers` to `app`, served as BuhTig is. The status line, the
+    /// headers by their lowercase names, and the body as it came, but for its chunks.
+    async fn get_from(
+        app: Router,
+        path: &str,
+        headers: &str,
+    ) -> (String, Vec<(String, String)>, Vec<u8>) {
+        let (address, stop, server) = spawn(app, Duration::from_secs(5)).await;
+        let raw =
+            format!("GET {path} HTTP/1.1\r\nHost: test\r\nConnection: close\r\n{headers}\r\n");
+        let response = tokio::task::spawn_blocking(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            stream.write_all(raw.as_bytes()).unwrap();
+            let mut response = Vec::new();
+            stream.read_to_end(&mut response).unwrap();
+            response
+        })
+        .await
+        .unwrap();
+        stop.send(()).unwrap();
+        server.await.unwrap().unwrap();
+
+        let end = response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .unwrap();
+        let head = String::from_utf8(response[..end].to_vec()).unwrap();
+        let mut lines = head.lines();
+        let status = lines.next().unwrap().to_owned();
+        let headers: Vec<(String, String)> = lines
+            .filter_map(|line| line.split_once(": "))
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect();
+        let mut body = &response[end + 4..];
+        if !headers
+            .iter()
+            .any(|(name, value)| name == "transfer-encoding" && value == "chunked")
+        {
+            return (status, headers, body.to_vec());
+        }
+        let mut chunks = Vec::new();
+        loop {
+            let line = body
+                .windows(2)
+                .position(|window| window == b"\r\n")
+                .unwrap();
+            let size =
+                usize::from_str_radix(std::str::from_utf8(&body[..line]).unwrap(), 16).unwrap();
+            if size == 0 {
+                return (status, headers, chunks);
+            }
+            chunks.extend_from_slice(&body[line + 2..line + 2 + size]);
+            body = &body[line + 2 + size + 2..];
+        }
+    }
+
+    fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn large_responses_are_gzipped_for_browsers_that_accept_it() {
+        let accepts = "Accept-Encoding: gzip, deflate, br, zstd\r\n";
+        let (status, headers, body) = get_from(guarded(), "/large", accepts).await;
+        assert!(status.starts_with("HTTP/1.1 200 "), "{status}");
+        assert_eq!(header(&headers, "content-encoding"), Some("gzip"));
+        assert_eq!(header(&headers, "vary"), Some("accept-encoding"));
+        let mut plain = String::new();
+        flate2::read::GzDecoder::new(&body[..])
+            .read_to_string(&mut plain)
+            .unwrap();
+        assert_eq!(plain, json_of(4096));
+        assert!(body.len() < plain.len() / 10, "{} bytes", body.len());
+        // Still guarded.
+        assert_eq!(header(&headers, "x-content-type-options"), Some("nosniff"));
+
+        for refuses in [
+            "",
+            "Accept-Encoding: gzip;q=0\r\n",
+            "Accept-Encoding: identity\r\n",
+        ] {
+            let (_, headers, body) = get_from(guarded(), "/large", refuses).await;
+            assert_eq!(header(&headers, "content-encoding"), None, "{refuses}");
+            assert_eq!(body, json_of(4096).as_bytes(), "{refuses}");
+            let length = json_of(4096).len().to_string();
+            assert_eq!(header(&headers, "content-length"), Some(length.as_str()));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn small_images_and_encoded_responses_are_sent_as_they_are() {
+        let accepts = "Accept-Encoding: gzip\r\n";
+        let (_, headers, body) = get_from(guarded(), "/small", accepts).await;
+        assert_eq!(header(&headers, "content-encoding"), None);
+        assert_eq!(body, json_of(100).as_bytes());
+
+        let (_, headers, body) = get_from(guarded(), "/image", accepts).await;
+        assert_eq!(header(&headers, "content-encoding"), None);
+        assert_eq!(body, vec![7u8; 4096]);
+
+        let (_, headers, body) = get_from(guarded(), "/encoded", accepts).await;
+        assert_eq!(header(&headers, "content-encoding"), Some("br"));
+        assert_eq!(body, vec![7u8; 4096]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn errors_stripped_of_their_body_stay_uncompressed() {
+        let (status, headers, body) =
+            get_from(guarded(), "/failed", "Accept-Encoding: gzip\r\n").await;
+        assert!(status.starts_with("HTTP/1.1 400 "), "{status}");
+        assert_eq!(header(&headers, "content-encoding"), None);
+        assert_eq!(header(&headers, "cache-control"), Some("no-store"));
+        assert!(body.is_empty(), "{body:?}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

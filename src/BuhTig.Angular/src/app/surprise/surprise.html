@@ -1,3 +1,7 @@
-@if (name(); as name) {
-  <button type="button" (click)="open(name)">Surprise me</button>
+@let picked = name();
+@if (picked) {
+  <button type="button" (click)="open(picked)">Surprise me</button>
+} @else if (picked === undefined) {
+  <!-- Its place, while the server picks, so that "Show dashboard" stays put once it comes. -->
+  <span class="slot" aria-hidden="true">Surprise me</span>
 }

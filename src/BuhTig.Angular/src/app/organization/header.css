@@ -1,3 +1,26 @@
+/* How tall an organization's head is, at each width, as a repository's says. */
+:host {
+  --pending-header: 12rem;
+}
+
+@media (min-width: 600px) {
+  :host {
+    --pending-header: 8.25rem;
+  }
+}
+
+@media (min-width: 768px) {
+  :host {
+    --pending-header: 6.5rem;
+  }
+}
+
+@media (min-width: 1000px) {
+  :host {
+    --pending-header: 4.75rem;
+  }
+}
+
 /* The login beside the name the organization goes by. */
 .login {
   color: var(--muted);

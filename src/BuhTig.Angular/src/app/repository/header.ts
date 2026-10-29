@@ -16,6 +16,7 @@ import { RelativeTime } from '../format/relative-time';
   imports: [RelativeTime, RouterLink],
   templateUrl: './header.html',
   styleUrl: './header.css',
+  host: { '[class.pending]': 'repository() === undefined' },
 })
 export class RepositoryHeader {
   /** `owner/repo`, as the URL has it. */

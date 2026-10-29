@@ -6,8 +6,10 @@ import { Router, provideRouter, withComponentInputBinding } from '@angular/route
 import { RouterTestingHarness } from '@angular/router/testing';
 import type { Mock } from 'vitest';
 import { routes } from './app.routes';
+import { Dashboard } from './dashboard/dashboard';
 import { focusPageOnNavigation } from './focus/page-focus';
 import { compactNumber } from './format/format';
+import { Home } from './home/home';
 
 describe('routes', () => {
   beforeEach(() => {
@@ -178,6 +180,35 @@ describe('routes', () => {
       expect((keyframes as Keyframe[])[0]['transform']).toBe(
         'translate(-50px, 288px) scale(1, 1.2)',
       );
+    });
+
+    it("glides the search box all the same while the dashboard's code is still on its way (NFR-PERF-04)", async () => {
+      // Routes of their own, whose dashboard takes a moment to load, as on a page that has not
+      // loaded it ahead of need.
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        providers: [
+          provideRouter(
+            [
+              { path: '', component: Home },
+              {
+                path: ':owner/:repo',
+                loadComponent: () =>
+                  new Promise<typeof Dashboard>((resolve) =>
+                    setTimeout(() => resolve(Dashboard), 20),
+                  ),
+              },
+            ],
+            withComponentInputBinding(),
+          ),
+          provideHttpClient(),
+          provideHttpClientTesting(),
+        ],
+      });
+      const harness = await RouterTestingHarness.create('/');
+      await harness.navigateByUrl('/owner/repo');
+      expect(harness.routeNativeElement!.classList).toContain('arriving');
+      expect(animate).toHaveBeenCalledOnce();
     });
 
     it('opens a dashboard at once unless it is opened from home', async () => {

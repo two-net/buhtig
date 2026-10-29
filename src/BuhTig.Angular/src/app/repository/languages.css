@@ -4,6 +4,8 @@
  */
 :host {
   display: contents;
+  /* As tall as what it shows once loaded, so that nothing moves then (NFR-PERF-05). */
+  --widget-skeleton: 14rem;
   --language-1: #5b3fc4;
   --language-2: #0369a1;
   --language-3: #c2410c;
@@ -13,6 +15,24 @@
   --language-7: #0e7490;
   --language-8: #86198f;
   --language-other: var(--line);
+}
+
+@media (min-width: 600px) {
+  :host {
+    --widget-skeleton: 10rem;
+  }
+}
+
+@media (min-width: 768px) {
+  :host {
+    --widget-skeleton: 14rem;
+  }
+}
+
+@media (min-width: 1000px) {
+  :host {
+    --widget-skeleton: 10.5rem;
+  }
 }
 
 @media (prefers-color-scheme: dark) {

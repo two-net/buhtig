@@ -287,9 +287,12 @@ impl Sessions {
             _ => None,
         };
         if session.last_used_at + TOUCH_INTERVAL <= now {
+            // A dashboard's widgets ask at once, and may all have read the session before
+            // any touched it: only the first writes.
             session::Entity::update_many()
                 .col_expr(session::Column::LastUsedAt, Expr::value(now))
                 .filter(session::Column::IdHash.eq(id_hash))
+                .filter(session::Column::LastUsedAt.lte(now - TOUCH_INTERVAL))
                 .exec(&self.db)
                 .await?;
         }

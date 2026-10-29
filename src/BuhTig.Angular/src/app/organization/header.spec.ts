@@ -91,6 +91,16 @@ describe('OrganizationHeader', () => {
     ).not.toBeNull();
   });
 
+  it('keeps the room it will take until the server has said what is in it (NFR-PERF-05)', async () => {
+    expect(header().classList).toContain('pending');
+    expect(header().querySelector('.slot')).not.toBeNull();
+    await show(ACME);
+    expect(header().classList).not.toContain('pending');
+    expect(header().querySelector('.slot')).toBeNull();
+    await show(BARE);
+    expect(header().querySelector('.slot')).toBeNull();
+  });
+
   it('shows what GitHub says of the organization (FR-ORG-01)', async () => {
     const fetchedAt = new Date('2026-10-22T11:56:00Z');
     await show(ACME, fetchedAt);

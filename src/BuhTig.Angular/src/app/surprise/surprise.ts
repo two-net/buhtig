@@ -17,15 +17,16 @@ export class Surprise {
   private readonly router = inject(Router);
 
   /**
-   * The repository to open, `owner/repo`, picked as the page loads. None while the cache holds
-   * no repository, or when the server cannot say, which hides the button.
+   * The repository to open, `owner/repo`, picked as the page loads: `undefined` until the server
+   * has picked one, and `null` while the cache holds none, or when the server cannot say, which
+   * hides the button.
    */
   protected readonly name = toSignal(
     inject(HttpClient)
       .get<{ name: string }>('/-/api/surprise')
       .pipe(
         map((surprise) => surprise.name),
-        catchError(() => of(undefined)),
+        catchError(() => of(null)),
       ),
   );
 

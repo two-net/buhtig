@@ -1,6 +1,26 @@
 /* The widget within is the grid's item (UI-05). */
 :host {
   display: contents;
+  /* As tall as what it shows once loaded, so that nothing moves then (NFR-PERF-05). */
+  --widget-skeleton: 58rem;
+}
+
+@media (min-width: 600px) {
+  :host {
+    --widget-skeleton: 42.75rem;
+  }
+}
+
+@media (min-width: 768px) {
+  :host {
+    --widget-skeleton: 55rem;
+  }
+}
+
+@media (min-width: 1000px) {
+  :host {
+    --widget-skeleton: 45rem;
+  }
 }
 
 /* Each kind on a row of its own: its name, then its figures. */

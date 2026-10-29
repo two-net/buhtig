@@ -15,13 +15,16 @@ pub struct Model {
     pub scope: String,
     #[sea_orm(unique_key = "scope")]
     pub resource_key: String,
-    /// The user whose PAT fetched the data, or none for the shared cache.
+    /// The user whose PAT fetched the data, or none for the shared cache. Indexed, as is
+    /// `credential_id`, for the cascades that delete a user's data with them (FR-PAT-05).
+    #[sea_orm(indexed)]
     pub user_id: Option<i64>,
     #[sea_orm(belongs_to, from = "user_id", to = "id", on_delete = "Cascade")]
     pub user: BelongsTo<Option<super::user::Entity>>,
     /// The PAT that fetched the data, or none for the shared cache. Removing or replacing
     /// the PAT deletes its row, and so its data with it (FR-PAT-05). Data that a fetch with
     /// it brings back afterwards cannot be stored.
+    #[sea_orm(indexed)]
     pub credential_id: Option<i64>,
     #[sea_orm(belongs_to, from = "credential_id", to = "id", on_delete = "Cascade")]
     pub credential: BelongsTo<Option<super::credential::Entity>>,

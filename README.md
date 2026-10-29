@@ -16,7 +16,9 @@ cd ../BuhTig && cargo build --release
 ```
 
 Build the UI first: a release build embeds it, so `src/BuhTig/target/release/BuhTig` is
-the only file to deploy. Cargo warns if the UI has not been built.
+the only file to deploy. Cargo warns if the UI has not been built. `npm run build` also
+compresses the UI's files, which BuhTig serves compressed, and fails if the home page would
+transfer more than its 300 KB budget.
 
 ## Run locally
 
@@ -46,7 +48,13 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
 
 - `cargo test` in `src/BuhTig`. The tests start their own PostgreSQL cluster from the
   PostgreSQL 15+ binaries on `PATH` (or `pg_config --bindir`).
-- `npm test` in `src/BuhTig.Angular`.
+- `npm test` and `npm run test:scripts` in `src/BuhTig.Angular`.
+- **Load test:** `cargo test --release load_test -- --ignored --nocapture` in
+  `src/BuhTig`, after building the UI. 100 users at once, half of them signed in, open the
+  home page and dashboards served from the cache, with 10,000 users registered. BuhTig
+  runs on one worker thread, as on one vCPU. It fails if any answer takes longer than
+  300 ms at the 95th percentile, or the process uses more than 1 GB. It takes a few
+  minutes, and only a release build says anything about speed.
 
 ## Operate
 
@@ -55,6 +63,12 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   its default.
 - **TLS:** terminate HTTPS in front of BuhTig, for example in a reverse proxy. BuhTig
   itself listens on plain HTTP at `server.listen`.
+- **Compression:** BuhTig compresses what it sends. It serves the UI's files compressed
+  with brotli or gzip, as the browser accepts, and gzips other responses of 1 KB or more,
+  so the proxy needn't compress anything. The proxy should pass `Accept-Encoding` on, send
+  compressed responses as they are, and keep `Vary` if it caches. BuhTig speaks HTTP/1.1,
+  over which browsers open at most 6 connections to a host, and a dashboard asks for about
+  10 things at once, so have the proxy speak HTTP/2 to browsers.
 - **GitHub:** BuhTig only reads from GitHub, through `api.github.com` over HTTPS, and
   signs users in through `github.com`. It checks GitHub's certificate against the root
   certificates built into it, not the host's.

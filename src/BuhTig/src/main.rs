@@ -30,6 +30,9 @@ mod web;
 mod test_cluster;
 #[cfg(test)]
 mod test_log;
+// NFR-PERF-03 and NFR-CAP-01, run on demand: see README.md.
+#[cfg(test)]
+mod load_test;
 
 use std::env;
 use std::ffi::OsString;
@@ -39,6 +42,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Router;
+use sea_orm::DatabaseConnection;
 use tracing::{debug, error, info, warn};
 
 use crate::auth::Auth;
@@ -151,46 +156,7 @@ async fn serve(config: Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let cache = Arc::new(Cache::new(
-        db.clone(),
-        github.clone(),
-        &config.cache,
-        &config.limits,
-    ));
-    // FR-NAV-06. In private mode, visitors see no dashboard (FR-ACC-03), nor a preview.
-    let previews = (config.access.mode == AccessMode::Public)
-        .then(|| Previews::new(cache.clone(), config.server.public_url.clone()));
-    // One for sign-in credentials and PATs alike (DR-03).
-    let sealer = Arc::new(Sealer::new(config.security.encryption_key.expose()));
-    let sessions = Arc::new(Sessions::new(
-        db.clone(),
-        sealer.clone(),
-        session::Settings {
-            idle_timeout: config.auth.session_idle_timeout,
-            max_age: config.auth.session_max_age,
-            allowed_users: config.access.allowed_users.clone(),
-            secure: config.server.public_url.scheme() == "https",
-        },
-    ));
-    let tokens = Arc::new(Tokens::new(db.clone(), sealer, github.clone()));
-    let shortcuts = Arc::new(Shortcuts::new(db.clone()));
-    let auth = Arc::new(Auth::new(
-        sessions.clone(),
-        github,
-        config.server.public_url.clone(),
-    ));
-    let app = web::router(
-        config.access.mode,
-        &config.server.public_url,
-        Arc::new(Health::new(db.clone())),
-        cache,
-        previews,
-        sessions,
-        auth,
-        tokens,
-        shortcuts,
-        config.ui.animations,
-    );
+    let app = app(&config, &db, github);
 
     let listen = config.server.listen;
     let listener = match tokio::net::TcpListener::bind(listen).await {
@@ -236,6 +202,51 @@ async fn serve(config: Config) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// BuhTig's routes, and all that they serve, as `config` sets them up, over `db` and
+/// `github`. The load test serves the same, over a stand-in for GitHub.
+fn app(config: &Config, db: &DatabaseConnection, github: Arc<github::Client>) -> Router {
+    let cache = Arc::new(Cache::new(
+        db.clone(),
+        github.clone(),
+        &config.cache,
+        &config.limits,
+    ));
+    // FR-NAV-06. In private mode, visitors see no dashboard (FR-ACC-03), nor a preview.
+    let previews = (config.access.mode == AccessMode::Public)
+        .then(|| Previews::new(cache.clone(), config.server.public_url.clone()));
+    // One for sign-in credentials and PATs alike (DR-03).
+    let sealer = Arc::new(Sealer::new(config.security.encryption_key.expose()));
+    let sessions = Arc::new(Sessions::new(
+        db.clone(),
+        sealer.clone(),
+        session::Settings {
+            idle_timeout: config.auth.session_idle_timeout,
+            max_age: config.auth.session_max_age,
+            allowed_users: config.access.allowed_users.clone(),
+            secure: config.server.public_url.scheme() == "https",
+        },
+    ));
+    let tokens = Arc::new(Tokens::new(db.clone(), sealer, github.clone()));
+    let shortcuts = Arc::new(Shortcuts::new(db.clone()));
+    let auth = Arc::new(Auth::new(
+        sessions.clone(),
+        github,
+        config.server.public_url.clone(),
+    ));
+    web::router(
+        config.access.mode,
+        &config.server.public_url,
+        Arc::new(Health::new(db.clone())),
+        cache,
+        previews,
+        sessions,
+        auth,
+        tokens,
+        shortcuts,
+        config.ui.animations,
+    )
 }
 
 /// Removes every environment variable and returns their names (FR-CFG-02, AC-07).

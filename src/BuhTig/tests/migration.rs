@@ -131,6 +131,7 @@ fn upgrade_keeps_data_and_adds_what_is_missing() {
         DROP TABLE cache_entries;
         ALTER TABLE users DROP COLUMN name;
         DROP INDEX "idx-pins-resource";
+        DROP INDEX "idx-sessions-user_id";
         "#,
     );
 

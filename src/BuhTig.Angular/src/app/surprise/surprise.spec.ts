@@ -26,11 +26,22 @@ describe('Surprise', () => {
   });
 
   const button = () => (fixture.nativeElement as HTMLElement).querySelector('button');
+  const slot = () => (fixture.nativeElement as HTMLElement).querySelector('.slot');
+
+  it('keeps its place while the server picks, so that nothing moves once it is there', async () => {
+    expect(button()).toBeNull();
+    expect(slot()?.getAttribute('aria-hidden')).toBe('true');
+    http.expectOne('/-/api/surprise').flush({ name: 'owner/repo' });
+    await fixture.whenStable();
+    expect(slot()).toBeNull();
+    expect(button()).not.toBeNull();
+  });
 
   it('is hidden while the shared cache holds no repository (FR-SRCH-10)', async () => {
     http.expectOne('/-/api/surprise').flush(null, { status: 404, statusText: 'Not Found' });
     await fixture.whenStable();
     expect(button()).toBeNull();
+    expect(slot()).toBeNull();
   });
 
   it('is hidden when the server cannot say', async () => {

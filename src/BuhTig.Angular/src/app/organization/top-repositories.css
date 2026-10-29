@@ -1,4 +1,6 @@
 /* The widget within is the grid's item (UI-05). */
 :host {
   display: contents;
+  /* As tall as what it shows once loaded, so that nothing moves then (NFR-PERF-05). */
+  --widget-skeleton: 32rem;
 }

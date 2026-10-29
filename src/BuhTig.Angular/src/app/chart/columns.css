@@ -23,9 +23,12 @@ svg {
   fill: var(--accent);
 }
 
-/* The bars grow from the baseline as the widget around makes its entrance (FR-ANIM-06). */
-:host-context(.entering) .bar {
-  transform-box: fill-box;
+/*
+ * The bars grow from the baseline as the widget around makes its entrance (FR-ANIM-06). They all
+ * stand on it, so the chart grows as one, which the browser can do apart from the page, where
+ * each bar growing alone would be redrawn on every frame (NFR-PERF-05).
+ */
+:host-context(.entering) svg {
   transform-origin: bottom;
   animation: grow 600ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
