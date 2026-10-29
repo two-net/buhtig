@@ -11,6 +11,9 @@
 //! no one is served data that another user's PAT fetched (FR-ACC-06). Each private entry
 //! names the PAT that fetched it, and goes when the PAT does (FR-PAT-05).
 //!
+//! Whatever the scope, the email addresses that GitHub gives in its data, such as commit
+//! authors', are neither stored nor served (DR-01).
+//!
 //! Once GitHub rejects a token user's PAT, it is marked invalid, and their requests go with
 //! their sign-in credential instead, starting with the one that met the rejection
 //! (FR-PAT-07).
@@ -874,6 +877,7 @@ impl Cache {
             }
             Ok(Reply::Fresh { mut data, etag, .. }) => {
                 fetch.trim(&mut data);
+                strip_emails(&mut data);
                 if scope == Scope::Shared {
                     strip_permissions(&mut data);
                 }
@@ -1133,6 +1137,22 @@ fn strip_permissions(data: &mut Value) {
         Value::Object(object) => {
             object.remove("permissions");
             object.values_mut().for_each(strip_permissions);
+        }
+        _ => {}
+    }
+}
+
+/// Removes every `email` member, such as a commit's author's or an account's public
+/// address, and every `verification` member, a commit's signature, whose `payload` is the
+/// commit as Git stores it, addresses and all. No dashboard shows either, and BuhTig keeps
+/// no email address (DR-01).
+fn strip_emails(data: &mut Value) {
+    match data {
+        Value::Array(items) => items.iter_mut().for_each(strip_emails),
+        Value::Object(object) => {
+            object.remove("email");
+            object.remove("verification");
+            object.values_mut().for_each(strip_emails);
         }
         _ => {}
     }
@@ -1715,6 +1735,56 @@ mod tests {
             [APP, "Bearer pat-alice", "Bearer sign-in-bob"]
         );
         assert_eq!(setup.rows().await[2].scope, "shared");
+    }
+
+    #[tokio::test]
+    async fn no_email_address_is_cached_or_served() {
+        let setup = setup().await;
+        setup.answer(|request| match request.uri().path() {
+            "/repos/owner/repo/commits" => answer(
+                200,
+                &[],
+                r#"[{"sha":"abc","author":{"login":"mona"},
+                     "commit":{"message":"Fix",
+                               "author":{"name":"Mona","email":"mona@example.com","date":"2026-10-26T12:00:00Z"},
+                               "committer":{"name":"GitHub","email":"noreply@github.com","date":"2026-10-26T12:00:00Z"},
+                               "verification":{"verified":true,"signature":"sig","payload":"tree 1\nauthor Mona <mona@example.com> 1\n"}}}]"#,
+            ),
+            _ => answer(
+                200,
+                &[],
+                r#"{"login":"mona","type":"User","email":"mona@example.com"}"#,
+            ),
+        });
+        let commits = path(&["repos", "owner", "repo", "commits"]);
+        let user = path(&["users", "mona"]);
+        let stripped = json!({
+            "sha": "abc",
+            "author": {"login": "mona"},
+            "commit": {
+                "message": "Fix",
+                "author": {"name": "Mona", "date": "2026-10-26T12:00:00Z"},
+                "committer": {"name": "GitHub", "date": "2026-10-26T12:00:00Z"},
+            },
+        });
+
+        // Neither in the shared cache nor in a token user's own.
+        for viewer in [visitor(), setup.alice()] {
+            let list = data(
+                setup
+                    .cache
+                    .get_list_at(&viewer, DASHBOARD, &commits, 10, at(0))
+                    .await,
+            );
+            assert_eq!(list.data.items, std::slice::from_ref(&stripped));
+            let account = data(setup.cache.get_at(&viewer, "/mona", &user, at(0)).await);
+            assert_eq!(account.data, json!({"login": "mona", "type": "User"}));
+        }
+        let rows = setup.rows().await;
+        assert_eq!(rows.len(), 4);
+        for row in rows {
+            assert!(!row.data.to_string().contains('@'), "{}", row.data);
+        }
     }
 
     #[tokio::test]

@@ -2,9 +2,29 @@
 <main class="prose">
   <h1>Privacy</h1>
   <p>
-    BuhTig sets no cookies, and it uses no analytics, trackers, ads or scripts from other sites.
+    BuhTig keeps only what it needs to show you dashboards, and to remember you once you sign in. It
+    uses no analytics, trackers, ads or scripts from other sites.
   </p>
-  <h2>What BuhTig keeps</h2>
+
+  <h2>Cookies</h2>
+  <p>BuhTig sets two cookies, and only when you sign in. Signing in can't work without them.</p>
+  <ul>
+    <li>
+      <strong>buhtig_session</strong> keeps you signed in. It lasts until you sign out or your
+      session ends.
+    </li>
+    <li>
+      <strong>buhtig_sign_in</strong> lets BuhTig check that it's you who comes back from GitHub
+      when you sign in. It lasts 10 minutes at most, and goes as soon as you're back.
+    </li>
+  </ul>
+  <p>
+    BuhTig also notes in your browser's session storage that it has played its wordmark's animation,
+    so that it plays once per visit. The note never leaves your browser, which forgets it when you
+    close the tab.
+  </p>
+
+  <h2>If you don't sign in</h2>
   <ul>
     <li>
       <strong>Request logs.</strong> For each request, the method, the path, the status and how long
@@ -12,18 +32,79 @@
       decides how long its logs are kept.
     </li>
     <li>
-      <strong>Fetch counts.</strong> GitHub limits how much BuhTig may ask of it, so BuhTig counts
-      how many dashboards each visitor loads from GitHub in an hour. It keeps the counts in memory
-      only, under a hash of your IP address rather than the address itself, and forgets them after
-      an hour or when it restarts.
-    </li>
-    <li>
-      <strong>GitHub data.</strong> BuhTig keeps the public GitHub data that its dashboards show, so
-      that it need not ask GitHub every time. This data is about repositories and organizations, not
-      about you. BuhTig deletes it after a period that whoever runs it sets, 30 days unless they
-      change it.
+      <strong>Counts.</strong> GitHub limits how much BuhTig may ask of it, so BuhTig counts how
+      many dashboards each visitor loads from GitHub in an hour. So that no one can guess at
+      sign-ins or tokens, it also counts how often each visitor tries them in a minute. It keeps the
+      counts in memory only, under a hash of your IP address rather than the address itself, and
+      forgets them once the hour or minute is over, or when it restarts.
     </li>
   </ul>
+  <p>That is all BuhTig keeps when you don't sign in.</p>
+
+  <h2>If you sign in</h2>
+  <ul>
+    <li>
+      <strong>Your account.</strong> Your GitHub user ID, login, display name and avatar's address,
+      and when you first and last signed in, so that BuhTig knows who you are. Not your email
+      address. BuhTig keeps it until you delete your data.
+    </li>
+    <li>
+      <strong>Your sessions.</strong> For each browser you're signed in on, when you signed in and
+      last used BuhTig, and a hash of the session's ID rather than the ID itself. A session ends
+      when you sign out, after 7 days without use, or 30 days after you signed in.
+    </li>
+    <li>
+      <strong>Your GitHub access.</strong> The access GitHub gave BuhTig when you signed in, which
+      lets BuhTig read only what is public on GitHub. BuhTig keeps it encrypted until you delete
+      your data.
+    </li>
+    <li>
+      <strong>Your token.</strong> If you save a personal access token, BuhTig keeps it encrypted,
+      to read what it lets you see on GitHub. It also keeps what Settings shows of it: its type,
+      last four characters, scopes or permissions, expiry date, whether GitHub still accepts it, and
+      when BuhTig last checked. It keeps them until you remove or replace the token.
+    </li>
+    <li>
+      <strong>What your token read.</strong> The GitHub data that BuhTig read with your token, so
+      that it need not ask GitHub every time. Only you are shown it. BuhTig deletes it when you
+      remove or replace the token, and otherwise 30 days after it last read it from GitHub.
+    </li>
+    <li>
+      <strong>Your history.</strong> The 20 dashboards you viewed last, and when, so that you can go
+      back to them from the home page. You can clear it in Settings.
+    </li>
+    <li>
+      <strong>Your pins.</strong> Up to 12 dashboards you pinned, in your order. They stay until you
+      unpin them.
+    </li>
+  </ul>
+  <p>Whoever runs this BuhTig may set other periods for sessions and for GitHub data.</p>
+
+  <h2>GitHub data</h2>
+  <p>
+    BuhTig keeps the public GitHub data that its dashboards show, so that it need not ask GitHub
+    every time. This data is about repositories and organizations, not about you, and BuhTig drops
+    the email addresses that GitHub gives with it, such as commit authors', before keeping it.
+    BuhTig deletes it 30 days after it last read it from GitHub, unless whoever runs it sets another
+    period.
+  </p>
+  <p>
+    Avatars load straight from GitHub, so GitHub sees your browser ask for them. When you sign in,
+    you do so on GitHub, where GitHub's own privacy statement applies.
+  </p>
+
   <h2>Deleting your data</h2>
-  <p>None of this identifies you, so there is nothing of yours to delete.</p>
+  <p>
+    If you've signed in, you can delete everything BuhTig keeps about you at once: go to
+    <a routerLink="/-/settings">Settings</a> and choose “Delete all my data”. You can also clear
+    your history, unpin dashboards and remove your token there.
+  </p>
+  <p>
+    Deleting your data doesn't remove BuhTig from the apps you've authorized on GitHub. You can
+    revoke its access in your GitHub settings.
+    <a href="https://github.com/settings/applications">Review your authorized apps on GitHub</a>
+  </p>
+  <p>
+    If you haven't signed in, nothing BuhTig keeps identifies you, so there is nothing to delete.
+  </p>
 </main>

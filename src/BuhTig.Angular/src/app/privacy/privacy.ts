@@ -1,7 +1,7 @@
 import { Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
-/** What BuhTig keeps, why, and for how long (NFR-PRIV-03). */
+/** What BuhTig keeps, why, for how long, and how to delete it (NFR-PRIV-03). */
 @Component({
   selector: 'app-privacy',
   imports: [RouterLink],
