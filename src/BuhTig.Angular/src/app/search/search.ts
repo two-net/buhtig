@@ -13,11 +13,13 @@ import { Motion } from '../motion/motion';
 import { Accounts } from './accounts';
 import { problemMessage, resourceMessage, userMessage } from './messages';
 import { dashboardPath, isUnfinished, parse } from './parse';
+import { Shortcut } from './shortcut';
 
 /**
  * The search box: one input that takes a GitHub repository or organization URL, says what it
  * recognizes as the user types (FR-SRCH-09), and opens its dashboard on Enter or "Show
- * dashboard" (SRS §4.1). `/` focuses it and Esc clears it (FR-SRCH-07). Its content goes
+ * dashboard" (SRS §4.1). `/` focuses it, unless the user has turned that off (WCAG 2.1.4), and
+ * Esc clears it (FR-SRCH-07). Its content goes
  * beside "Show dashboard", as the home page's "Surprise me" does (FR-SRCH-10).
  *
  * It lifts as it is hovered or focused (FR-ANIM-02), and shakes as it says why it opens no
@@ -35,6 +37,7 @@ export class Search {
   private readonly router = inject(Router);
   private readonly accounts = inject(Accounts);
   private readonly motion = inject(Motion);
+  private readonly shortcut = inject(Shortcut);
   private readonly box = viewChild.required<ElementRef<HTMLInputElement>>('box');
 
   /** Whether to focus the input once it is shown, on desktop only (FR-SRCH-07). */
@@ -83,10 +86,14 @@ export class Search {
     });
   }
 
-  /** `/` pressed anywhere but in a text field focuses the input, and is not typed into it. */
+  /**
+   * `/` pressed anywhere but in a text field focuses the input, and is not typed into it, while
+   * the shortcut is on.
+   */
   protected focusOnSlash(event: KeyboardEvent): void {
     if (
       event.key === '/' &&
+      this.shortcut.enabled() &&
       !(event.ctrlKey || event.metaKey || event.altKey) &&
       !event.defaultPrevented &&
       !isField(event.target)

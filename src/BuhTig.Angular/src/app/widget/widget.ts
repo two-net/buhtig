@@ -13,11 +13,14 @@ import {
   input,
   signal,
   untracked,
+  viewChild,
 } from '@angular/core';
+import { Router } from '@angular/router';
 import { ENTRANCE_MS, Entrance, Entrances } from '../motion/entrance';
 import { Motion } from '../motion/motion';
-import { Loader } from './load';
-import { COMPUTING, FAILED, LOADING } from './messages';
+import { signInUrl } from '../session/session';
+import { Failure, Loader } from './load';
+import { COMPUTING, FAILED, HELD, LOADED, LOADING, UNAVAILABLE } from './messages';
 
 /**
  * A widget's content, as `<ng-template [appLoaded]="loader" let-data>`, given the data once it
@@ -40,6 +43,10 @@ let count = 0;
  * placeholder while it loads, a message when there is nothing to show, or a message and "Try
  * again" when loading failed (FR-REPO-09). While GitHub is still computing its data, it says so
  * over the placeholder (FR-REPO-10).
+ *
+ * The message of a failure says why, and what the user can do (NFR-UX-06): try again, or sign in
+ * once the server asks GitHub for no more for visitors (FR-DATA-10). "Try again" goes as it is
+ * pressed, so focus goes to the widget, which then announces what it came to (NFR-UX-03).
  *
  * The placeholder shimmers (FR-ANIM-04). The content makes its entrance as it is first shown in
  * view on the page, while the widget has the class `entering`, for what it shows to enter by
@@ -84,7 +91,35 @@ export class Widget {
   protected readonly id = `widget-${count++}`;
   protected readonly loading = LOADING;
   protected readonly computing = COMPUTING;
-  protected readonly failed = FAILED;
+
+  private readonly failure = computed(() => {
+    const state = this.state();
+    return state.status === 'error' ? state.failure : undefined;
+  });
+  protected readonly failed = computed(() => FAILURES[this.failure() ?? 'github']);
+  protected readonly held = computed(() => this.failure() === 'held');
+  private readonly router = inject(Router);
+
+  private readonly section = viewChild.required<ElementRef<HTMLElement>>('section');
+  /** Whether "Try again" has been pressed, after which the widget says what it came to. */
+  private readonly retried = signal(false);
+  protected readonly outcome = computed(() => {
+    if (!this.retried()) {
+      return '';
+    }
+    switch (this.state().status) {
+      case 'loading':
+        return '';
+      case 'computing':
+        return COMPUTING;
+      case 'empty':
+        return this.empty();
+      case 'error':
+        return this.failed();
+      case 'ready':
+        return LOADED;
+    }
+  });
 
   constructor() {
     const host = inject<ElementRef<HTMLElement>>(ElementRef).nativeElement;
@@ -127,7 +162,21 @@ export class Widget {
     });
   }
 
+  /** Where signing in starts, to come back to the dashboard (FR-AUTH-05). */
+  protected signIn(): string {
+    return signInUrl(this.router.url);
+  }
+
   protected retry(): void {
+    this.retried.set(true);
     this.content().loader().retry();
+    this.section().nativeElement.focus();
   }
 }
+
+/** What a widget says of each failure (NFR-UX-06). */
+const FAILURES: Record<Failure, string> = {
+  held: HELD,
+  unavailable: UNAVAILABLE,
+  github: FAILED,
+};

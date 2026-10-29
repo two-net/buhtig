@@ -65,6 +65,9 @@ export const GO_HOME = 'Go to the home page';
 /** FR-DATA-07: the button that fetches a dashboard's data from GitHub anew. */
 export const REFRESH = 'Refresh';
 
+/** FR-DATA-07: a dashboard fetched from GitHub anew. */
+export const REFRESHED = 'Refreshed from GitHub.';
+
 /** FR-DATA-07: a dashboard may be refreshed once a minute. */
 export const REFRESHED_RECENTLY =
   'This dashboard was refreshed less than a minute ago. Try again in a moment.';
@@ -76,6 +79,10 @@ export const PIN = 'Pin';
 
 /** FR-PERS-02: the button that unpins a pinned dashboard. */
 export const UNPIN = 'Unpin';
+
+/** FR-PERS-02: a dashboard just pinned, or unpinned. */
+export const PINNED = 'Pinned. It comes first on the home page.';
+export const UNPINNED = 'Unpinned.';
 
 /** FR-PERS-02: a user may pin up to 12 dashboards. */
 export const PIN_LIMIT =

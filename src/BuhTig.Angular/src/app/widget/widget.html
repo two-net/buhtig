@@ -1,4 +1,4 @@
-<section [attr.aria-labelledby]="id" [attr.aria-busy]="busy()">
+<section #section tabindex="-1" [attr.aria-labelledby]="id" [attr.aria-busy]="busy()">
   <h2 [id]="id" [class.visually-hidden]="hideHeading()">{{ heading() }}</h2>
   @switch (state().status) {
     @case ('loading') {
@@ -14,11 +14,17 @@
       <p class="message">{{ empty() }}</p>
     }
     @case ('error') {
-      <p class="message">{{ failed }}</p>
-      <button type="button" (click)="retry()">Try again</button>
+      <p class="message">{{ failed() }}</p>
+      @if (held()) {
+        <a class="action" [href]="signIn()">Sign in</a>
+      } @else {
+        <button type="button" class="action" (click)="retry()">Try again</button>
+      }
     }
     @case ('ready') {
       <ng-container *ngTemplateOutlet="content().template; context: { $implicit: data() }" />
     }
   }
+  <!-- Always there, so that assistive technology announces what "Try again" came to. -->
+  <p class="visually-hidden" role="status">{{ outcome() }}</p>
 </section>

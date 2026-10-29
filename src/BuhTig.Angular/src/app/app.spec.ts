@@ -6,6 +6,7 @@ import { Router, provideRouter, withComponentInputBinding } from '@angular/route
 import { RouterTestingHarness } from '@angular/router/testing';
 import type { Mock } from 'vitest';
 import { routes } from './app.routes';
+import { focusPageOnNavigation } from './focus/page-focus';
 import { compactNumber } from './format/format';
 
 describe('routes', () => {
@@ -52,6 +53,22 @@ describe('routes', () => {
     await vi.waitFor(() => expect(TestBed.inject(Router).url).toBe('/owner/repo'));
     await harness.fixture.whenStable();
     expect(harness.routeNativeElement?.querySelector('h1')?.textContent?.trim()).toBe('owner/repo');
+  });
+
+  it("focuses the dashboard's heading after a search from home (WCAG 2.4.3)", async () => {
+    TestBed.runInInjectionContext(focusPageOnNavigation);
+    const harness = await RouterTestingHarness.create('/');
+    const page = harness.routeNativeElement!;
+    const input = page.querySelector('input')!;
+    input.focus();
+    input.value = 'owner/repo';
+    input.dispatchEvent(new Event('input'));
+    input.form!.requestSubmit();
+    await vi.waitFor(() => expect(TestBed.inject(Router).url).toBe('/owner/repo'));
+    await harness.fixture.whenStable();
+    const heading = harness.routeNativeElement!.querySelector('h1')!;
+    expect(heading.textContent?.trim()).toBe('owner/repo');
+    expect(document.activeElement).toBe(heading);
   });
 
   it('offers a surprise beside "Show dashboard" on the home page (UI-02, FR-SRCH-10)', async () => {

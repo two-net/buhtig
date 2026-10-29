@@ -15,8 +15,10 @@ import {
   GO_HOME,
   NOT_FOUND_OR_PRIVATE,
   PIN,
+  PINNED,
   PIN_FAILED,
   PIN_LIMIT,
+  REFRESHED,
   REFRESHED_RECENTLY,
   REFRESH_FAILED,
   REPLACE_TOKEN,
@@ -27,6 +29,7 @@ import {
   TOKEN_INVALID_TO_SEE,
   TOKEN_REFUSED,
   UNPIN,
+  UNPINNED,
   notFound,
   notFoundWithToken,
 } from './messages';
@@ -614,18 +617,25 @@ describe('Dashboard', () => {
       await harness.fixture.whenStable();
     }
 
-    /** Clicks Refresh, and answers the server's part with `answer`, as `status`. */
+    /**
+     * Clicks Refresh, and answers the server's part with `answer`, as `status`. Meanwhile, the
+     * button keeps focus, and clicking it again does nothing (NFR-UX-03).
+     */
     async function refresh(status: number, answer: object | null = null): Promise<void> {
+      refreshButton()!.focus();
       refreshButton()!.click();
       await harness.fixture.whenStable();
-      expect(refreshButton()!.disabled).toBe(true);
+      expect(refreshButton()!.getAttribute('aria-disabled')).toBe('true');
+      expect(document.activeElement).toBe(refreshButton());
+      refreshButton()!.click();
       const request = http.expectOne({
         method: 'POST',
         url: '/-/api/repositories/acme/widget/refresh',
       });
       request.flush(answer, { status, statusText: `${status}` });
       await harness.fixture.whenStable();
-      expect(refreshButton()!.disabled).toBe(false);
+      expect(refreshButton()!.getAttribute('aria-disabled')).toBeNull();
+      expect(document.activeElement).toBe(refreshButton());
     }
 
     it('is not offered to visitors (FR-ACC-02)', async () => {
@@ -641,7 +651,7 @@ describe('Dashboard', () => {
       expect(page().querySelector('.when .updated + app-refresh')).not.toBeNull();
 
       await refresh(204);
-      expect(note()).toBe('');
+      expect(note()).toBe(REFRESHED);
       http
         .expectOne('/-/api/repositories/acme/widget')
         .flush({ name: 'acme/widget', fetched_at: '2026-10-22T12:05:00.000Z' });
@@ -776,16 +786,23 @@ describe('Dashboard', () => {
       await harness.fixture.whenStable();
     }
 
-    /** Clicks the button, and answers the server's part, `method`, with `answer` as `status`. */
+    /**
+     * Clicks the button, and answers the server's part, `method`, with `answer` as `status`.
+     * Meanwhile, the button keeps focus, and clicking it again does nothing (NFR-UX-03).
+     */
     async function toggle(method: string, status: number, answer: object | null): Promise<void> {
+      pinButton()!.focus();
       pinButton()!.click();
       await harness.fixture.whenStable();
-      expect(pinButton()!.disabled).toBe(true);
+      expect(pinButton()!.getAttribute('aria-disabled')).toBe('true');
+      expect(document.activeElement).toBe(pinButton());
+      pinButton()!.click();
       http
         .expectOne({ method, url: '/-/api/repositories/acme/widget/pin' })
         .flush(answer, { status, statusText: `${status}` });
       await harness.fixture.whenStable();
-      expect(pinButton()!.disabled).toBe(false);
+      expect(pinButton()!.getAttribute('aria-disabled')).toBeNull();
+      expect(document.activeElement).toBe(pinButton());
     }
 
     it('is not offered to visitors (FR-ACC-02)', async () => {
@@ -804,9 +821,10 @@ describe('Dashboard', () => {
 
       await toggle('PUT', 200, { pins: [{ kind: 'organization', name: 'acme' }, WIDGET] });
       expect(label()).toBe(UNPIN);
-      expect(note()).toBe('');
+      expect(note()).toBe(PINNED);
       await toggle('DELETE', 200, { pins: [{ kind: 'organization', name: 'acme' }] });
       expect(label()).toBe(PIN);
+      expect(note()).toBe(UNPINNED);
     });
 
     it('knows a dashboard pinned already, whatever the case of its name', async () => {

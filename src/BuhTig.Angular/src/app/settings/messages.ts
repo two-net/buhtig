@@ -39,6 +39,10 @@ export const TYPE_LABELS = { classic: 'Classic', fine_grained: 'Fine-grained' } 
 export const PERMISSIONS_UNKNOWN =
   "GitHub doesn't report a fine-grained token's permissions. You can see them on GitHub.";
 
+/** FR-PAT-01: the label of the input that takes a token, or one to replace the token saved. */
+export const TOKEN = 'Token';
+export const NEW_TOKEN = 'New token';
+
 /** FR-PAT-04: a classic token without scopes. */
 export const NO_SCOPES = 'None: public data only';
 

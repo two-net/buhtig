@@ -1,6 +1,6 @@
 import { Component, inject, input, signal } from '@angular/core';
 import { Session } from '../session/session';
-import { REFRESH, REFRESHED_RECENTLY, REFRESH_FAILED } from './messages';
+import { REFRESH, REFRESHED, REFRESHED_RECENTLY, REFRESH_FAILED } from './messages';
 import { Resources } from './resources';
 import { Resource } from '../search/parse';
 
@@ -8,12 +8,17 @@ import { Resource } from '../search/parse';
  * The button that fetches a dashboard's data from GitHub anew, rather than from BuhTig's cache,
  * for signed-in users alone (FR-DATA-07, FR-ACC-02). The server lets each dashboard be refreshed
  * once a minute, and the button says so when it is too soon.
+ *
+ * While the server is asked, the button does nothing, but keeps focus (NFR-UX-03). It then says
+ * what came of it.
  */
 @Component({
   selector: 'app-refresh',
   template: `
     @if (user()) {
-      <button type="button" [disabled]="busy()" (click)="refresh()">{{ REFRESH }}</button>
+      <button type="button" [attr.aria-disabled]="busy() ? 'true' : null" (click)="refresh()">
+        {{ REFRESH }}
+      </button>
       <!-- Present before it says anything, so that what it says is announced. -->
       <span role="status">{{ note() }}</span>
     }
@@ -36,11 +41,13 @@ import { Resource } from '../search/parse';
       cursor: pointer;
     }
 
-    button:hover:not(:disabled) {
+    button:hover:not([aria-disabled='true']) {
       background: var(--raised);
     }
 
-    button:disabled {
+    /* Dimmed, not only recolored, while the server is asked (NFR-UX-05). */
+    button[aria-disabled='true'] {
+      opacity: 0.6;
       cursor: progress;
     }
   `,
@@ -56,10 +63,13 @@ export class Refresh {
   /** Whether the server is being asked. */
   protected readonly busy = signal(false);
 
-  /** What came of the last refresh, if it did not refresh the dashboard. */
+  /** What came of the last refresh. */
   protected readonly note = signal('');
 
   protected refresh(): void {
+    if (this.busy()) {
+      return;
+    }
     this.busy.set(true);
     this.note.set('');
     this.resources.refresh(this.resource()).subscribe((refreshed) => {
@@ -69,7 +79,7 @@ export class Refresh {
           ? REFRESHED_RECENTLY
           : refreshed.status === 'failed'
             ? REFRESH_FAILED
-            : '',
+            : REFRESHED,
       );
     });
   }

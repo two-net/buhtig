@@ -38,7 +38,7 @@
           </dd>
           @if (token.type === 'classic') {
             <dt>Scopes</dt>
-            <dd>{{ token.scopes?.length ? token.scopes!.join(', ') : NO_SCOPES }}</dd>
+            <dd>{{ token.scopes?.length ? list(token.scopes!) : NO_SCOPES }}</dd>
           } @else {
             <dt>Permissions</dt>
             <dd>{{ PERMISSIONS_UNKNOWN }}</dd>
@@ -52,17 +52,29 @@
         </dl>
         @if (!replacing()) {
           <div class="actions">
-            <button type="button" [disabled]="busy()" (click)="replacing.set(true)">
+            <button
+              #replaceButton
+              type="button"
+              [attr.aria-disabled]="busy() ? 'true' : null"
+              (click)="replace()"
+            >
               Replace token
             </button>
-            <button type="button" [disabled]="busy()" (click)="remove()">Remove token</button>
+            <button
+              #removeButton
+              type="button"
+              [attr.aria-disabled]="busy() ? 'true' : null"
+              (click)="remove()"
+            >
+              Remove token
+            </button>
           </div>
         }
       }
 
       @if (entering()) {
         <form novalidate (submit)="save($event)">
-          <label for="token-input">{{ token() ? 'New token' : 'Token' }}</label>
+          <label for="token-input">{{ token() ? NEW_TOKEN : TOKEN }}</label>
           <input
             #input
             id="token-input"
@@ -77,7 +89,9 @@
             (input)="draft.set(input.value)"
           />
           <div class="actions">
-            <button type="submit" class="primary" [disabled]="busy()">Save token</button>
+            <button type="submit" class="primary" [attr.aria-disabled]="busy() ? 'true' : null">
+              Save token
+            </button>
             @if (replacing()) {
               <button type="button" (click)="cancel()">Cancel</button>
             }

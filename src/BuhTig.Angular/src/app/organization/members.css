@@ -25,7 +25,45 @@ ul {
 
 a {
   display: block;
+  position: relative;
   border-radius: 50%;
+}
+
+/*
+ * Above the avatar, in the page's colors swapped, as an exact number's tooltip is. Its bottom
+ * border is the gap to the avatar, and part of it, so that the pointer can cross to it.
+ */
+.login {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  z-index: 2;
+  translate: -50% 0;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 0.375rem solid transparent;
+  border-radius: 0.25rem;
+  background: var(--text) padding-box;
+  color: var(--background);
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+/* It fades in, briefly enough to do so without motion too (FR-ANIM-06, FR-ANIM-10). */
+a:hover .login,
+a:focus-visible .login {
+  display: block;
+  animation: login-in 150ms ease-out;
+}
+
+a.dismissed .login {
+  display: none;
+}
+
+@keyframes login-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .avatar {

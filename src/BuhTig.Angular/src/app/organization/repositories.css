@@ -192,8 +192,10 @@ tbody tr:hover {
   background: var(--raised);
 }
 
+/* Dimmed, not only recolored, at either end (NFR-UX-05). */
 .pages button[aria-disabled='true'] {
   background: transparent;
   color: var(--muted);
+  opacity: 0.6;
   cursor: default;
 }

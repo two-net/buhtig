@@ -98,3 +98,12 @@ a {
   margin: 2rem auto;
   padding: 0 1rem;
 }
+
+/* A key to press, such as `/`, outlined as a key is. */
+kbd {
+  padding: 0 0.3em;
+  border: 1px solid var(--line);
+  border-radius: 0.25rem;
+  font-family: inherit;
+  font-size: 0.875em;
+}

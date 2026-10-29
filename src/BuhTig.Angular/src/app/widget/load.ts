@@ -1,3 +1,4 @@
+import { HttpErrorResponse, HttpStatusCode } from '@angular/common/http';
 import { Signal, computed, signal } from '@angular/core';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { Observable, catchError, concat, map, of, startWith, switchMap, timer } from 'rxjs';
@@ -10,8 +11,19 @@ export type Load<T> =
   | { status: 'loading' }
   | { status: 'computing' }
   | { status: 'empty' }
-  | { status: 'error' }
+  | { status: 'error'; failure: Failure }
   | { status: 'ready'; data: T };
+
+/**
+ * Why a widget's data failed to load, for the widget to say what the user can do (NFR-UX-06):
+ * - `held`: the server asks GitHub for no more for visitors for now, since the visitor has
+ *   loaded as many dashboards as they may, or visitors together nearly have (FR-DATA-10,
+ *   FR-DATA-11).
+ * - `unavailable`: the server cannot reach its database.
+ * - `github`: GitHub failed, or took too long to compute the data (FR-REPO-10), or anything
+ *   else did.
+ */
+export type Failure = 'held' | 'unavailable' | 'github';
 
 /** A widget's data as it loads, and a way to load it again after a failure. */
 export interface Loader<T> {
@@ -76,7 +88,22 @@ function answer<T>(
             of<Load<T>>({ status: 'computing' }),
             timer(RECHECK_MS[rechecks]).pipe(switchMap(() => answer(data, isEmpty, rechecks + 1))),
           )
-        : of<Load<T>>({ status: 'error' }),
+        : of<Load<T>>({ status: 'error', failure: failure(error) }),
     ),
   );
+}
+
+/** Why a request failed with `error`, as the server's status says. */
+function failure(error: unknown): Failure {
+  if (!(error instanceof HttpErrorResponse)) {
+    return 'github';
+  }
+  switch (error.status) {
+    case HttpStatusCode.TooManyRequests:
+      return 'held';
+    case HttpStatusCode.ServiceUnavailable:
+      return 'unavailable';
+    default:
+      return 'github';
+  }
 }

@@ -1,6 +1,8 @@
 import {
   Component,
   ElementRef,
+  Injector,
+  afterNextRender,
   afterRenderEffect,
   computed,
   inject,
@@ -9,7 +11,7 @@ import {
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Account } from '../account/account';
-import { exactTime } from '../format/format';
+import { exactTime, list } from '../format/format';
 import { RelativeTime } from '../format/relative-time';
 import { Session, Token, signInUrl } from '../session/session';
 import { DataDeletion } from './deletion';
@@ -19,6 +21,7 @@ import {
   GITHUB_ACCESS,
   MANAGE_TOKENS,
   NEVER_EXPIRES,
+  NEW_TOKEN,
   NO_SCOPES,
   PERMISSIONS_UNKNOWN,
   REMOVED,
@@ -26,6 +29,7 @@ import {
   REVIEW_GITHUB_ACCESS,
   SAVED,
   SIGN_IN_FIRST,
+  TOKEN,
   TOKEN_ADVICE,
   TOKEN_HANDLING,
   TOKEN_INVALID,
@@ -43,6 +47,9 @@ import { SaveProblem, Tokens } from './tokens';
  * it, never the token itself (FR-PAT-04). Below it, their pins and history (§4.8), which they
  * may reorder, unpin and clear, and last, a way to delete all their data (FR-PERS-04), which
  * signs them out. Visitors are asked to sign in (FR-ACC-02).
+ *
+ * Buttons that go as they are pressed hand focus on to what takes their place, and those that
+ * wait for the server keep it (NFR-UX-03).
  */
 @Component({
   selector: 'app-settings',
@@ -53,6 +60,7 @@ import { SaveProblem, Tokens } from './tokens';
 export class Settings {
   private readonly session = inject(Session);
   private readonly tokens = inject(Tokens);
+  private readonly injector = inject(Injector);
 
   protected readonly user = this.session.user;
   protected readonly token = this.session.token;
@@ -61,6 +69,10 @@ export class Settings {
 
   /** The note that the user's data is deleted, once it shows. */
   private readonly deletedNote = viewChild<ElementRef<HTMLElement>>('deletedNote');
+  /** The token input, and the buttons that replace and remove the token, while they show. */
+  private readonly input = viewChild<ElementRef<HTMLElement>>('input');
+  private readonly replaceButton = viewChild<ElementRef<HTMLElement>>('replaceButton');
+  private readonly removeButton = viewChild<ElementRef<HTMLElement>>('removeButton');
 
   /** What the token input holds. */
   protected readonly draft = signal('');
@@ -87,6 +99,9 @@ export class Settings {
   protected readonly NO_SCOPES = NO_SCOPES;
   protected readonly NEVER_EXPIRES = NEVER_EXPIRES;
   protected readonly TYPE_LABELS = TYPE_LABELS;
+  protected readonly TOKEN = TOKEN;
+  protected readonly NEW_TOKEN = NEW_TOKEN;
+  protected readonly list = list;
   protected readonly DATA_DELETED = DATA_DELETED;
   protected readonly GITHUB_ACCESS = GITHUB_ACCESS;
   protected readonly REVIEW_GITHUB_ACCESS = REVIEW_GITHUB_ACCESS;
@@ -102,6 +117,14 @@ export class Settings {
     return token.expiresAt ? exactTime(token.expiresAt) : NEVER_EXPIRES;
   }
 
+  protected replace(): void {
+    if (this.busy()) {
+      return;
+    }
+    this.replacing.set(true);
+    this.focusOnceShown(this.input);
+  }
+
   protected save(event: SubmitEvent): void {
     event.preventDefault();
     if (this.busy()) {
@@ -114,10 +137,12 @@ export class Settings {
         this.draft.set('');
         this.replacing.set(false);
         this.finish(SAVED);
+        this.focusOnceShown(this.replaceButton);
       },
       error: (problem: SaveProblem) => {
         this.busy.set(false);
         this.problem.set(saveProblemMessage(problem));
+        this.focusOnceShown(this.input);
       },
     });
   }
@@ -132,10 +157,12 @@ export class Settings {
         this.session.setToken(null);
         this.replacing.set(false);
         this.finish(REMOVED);
+        this.focusOnceShown(this.input);
       },
       error: () => {
         this.busy.set(false);
         this.problem.set(REMOVE_FAILED);
+        this.focusOnceShown(this.removeButton);
       },
     });
   }
@@ -144,6 +171,12 @@ export class Settings {
     this.replacing.set(false);
     this.draft.set('');
     this.problem.set('');
+    this.focusOnceShown(this.replaceButton);
+  }
+
+  /** Focuses what `element` finds once Settings has shown what has just changed. */
+  private focusOnceShown(element: () => ElementRef<HTMLElement> | undefined): void {
+    afterNextRender(() => element()?.nativeElement.focus(), { injector: this.injector });
   }
 
   private start(): void {

@@ -81,7 +81,7 @@ describe('load', () => {
       vi.advanceTimersByTime(wait);
       computing();
     }
-    expect(loader.state()).toEqual({ status: 'error' });
+    expect(loader.state()).toEqual({ status: 'error', failure: 'github' });
     vi.advanceTimersByTime(60_000);
     http.expectNone('/activity/acme/widget');
 
@@ -109,8 +109,22 @@ describe('load', () => {
   it('asks only once when loading fails otherwise (FR-REPO-09)', () => {
     const loader = activity();
     http.expectOne('/activity/acme/widget').flush(null, { status: 502, statusText: 'Bad Gateway' });
-    expect(loader.state()).toEqual({ status: 'error' });
+    expect(loader.state()).toEqual({ status: 'error', failure: 'github' });
     vi.advanceTimersByTime(60_000);
     http.expectNone('/activity/acme/widget');
+  });
+
+  it('tells why loading failed, as the server says (NFR-UX-06)', () => {
+    for (const [status, failure] of [
+      [429, 'held'],
+      [503, 'unavailable'],
+      [502, 'github'],
+      [500, 'github'],
+      [0, 'github'],
+    ] as const) {
+      const loader = activity();
+      http.expectOne('/activity/acme/widget').flush(null, { status, statusText: 'Failed' });
+      expect(loader.state(), String(status)).toEqual({ status: 'error', failure });
+    }
   });
 });

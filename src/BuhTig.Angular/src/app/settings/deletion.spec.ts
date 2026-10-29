@@ -85,6 +85,8 @@ describe('DataDeletion', () => {
     expect(alert()).toBe(DELETE_FAILED);
     expect(session().user()).toEqual(MONA);
     expect(button('Delete all my data')!.disabled).toBe(false);
+    // Focus is back on the button, disabled meanwhile, to try again (NFR-UX-03).
+    expect(document.activeElement).toBe(button('Delete all my data'));
 
     await click('Delete all my data');
     expect(alert()).toBeUndefined();

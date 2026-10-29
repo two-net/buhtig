@@ -11,7 +11,13 @@
         <strong>{{ CONFIRM_DELETION }}</strong>
       </p>
       <div class="actions">
-        <button type="button" class="primary" [disabled]="busy()" (click)="delete()">
+        <button
+          id="confirm-deletion"
+          type="button"
+          class="primary"
+          [disabled]="busy()"
+          (click)="delete()"
+        >
           Delete all my data
         </button>
         <button type="button" [disabled]="busy()" (click)="cancel()">Cancel</button>
