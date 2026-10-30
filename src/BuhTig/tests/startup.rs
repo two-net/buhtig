@@ -2,7 +2,14 @@
 
 mod support;
 
-use support::{buhtig, buhtig_with, cluster, run_to_exit, start, stderr, stdout, write_config};
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
+
+use support::{
+    ENVIRONMENT, buhtig, buhtig_with, cluster, run_to_exit, start, start_command, stderr, stdout,
+    write_config,
+};
 
 const CONFIG: &str = r#"
 [server]
@@ -55,16 +62,17 @@ fn starts_from_the_config_file_with_the_environment_removed() {
         .iter()
         .find(|line| line.contains("removed environment variables"))
         .unwrap_or_else(|| panic!("no removal line in {log:#?}"));
+    let mut names: Vec<&str> = ENVIRONMENT.iter().map(|(name, _)| *name).collect();
     // On macOS, CoreFoundation (linked through chrono) sets one more in every process
     // before `main` runs.
-    let names = if cfg!(target_os = "macos") {
-        r#"names=["DATABASE_URL", "HTTPS_PROXY", "PGPASSWORD", "PGSSLMODE", "TOKIO_WORKER_THREADS", "__CF_USER_TEXT_ENCODING"]"#
-    } else {
-        r#"names=["DATABASE_URL", "HTTPS_PROXY", "PGPASSWORD", "PGSSLMODE", "TOKIO_WORKER_THREADS"]"#
-    };
-    assert!(removed.ends_with(names), "{removed}");
+    if cfg!(target_os = "macos") {
+        names.push("__CF_USER_TEXT_ENCODING");
+    }
+    names.sort_unstable();
+    assert!(removed.ends_with(&format!("names={names:?}")), "{removed}");
     // Only the file's settings were used: with `PGSSLMODE=require` from the environment,
-    // sqlx could not have connected to the test cluster (AC-07).
+    // sqlx could not have connected to the test cluster, nor migrated with `PGOPTIONS`
+    // (AC-07).
     assert!(
         log.iter()
             .any(|line| line.contains("connected to PostgreSQL")),
@@ -72,6 +80,8 @@ fn starts_from_the_config_file_with_the_environment_removed() {
     );
     for line in &log {
         assert!(!line.contains("env-"), "{line}");
+        // `log.level` is `debug`, whatever `RUST_LOG` says.
+        assert!(!line.contains("TRACE"), "{line}");
         assert!(!line.contains("file-password"), "{line}");
         assert!(!line.contains("github-client-secret"), "{line}");
         assert!(!line.contains("can be read by other accounts"), "{line}");
@@ -80,6 +90,112 @@ fn starts_from_the_config_file_with_the_environment_removed() {
         log.iter().any(|line| line.contains("access_mode=public")),
         "{log:#?}"
     );
+}
+
+/// FR-CFG-02: a `.env` file is no source of settings either.
+#[test]
+fn a_dotenv_file_does_not_fill_in_a_missing_key() {
+    let cluster = cluster();
+    let url = cluster.url(&cluster.create_database());
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".env"),
+        format!("DATABASE_URL={url}\nBUHTIG_DATABASE_URL={url}\nPGSSLMODE=require\n"),
+    )
+    .unwrap();
+    let config = CONFIG.replace(r#"url = "{database_url}""#, "");
+    let output = buhtig_with(&write_config(&dir, &config, 0o600))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("database.url: required key is missing"),
+        "{stderr}"
+    );
+}
+
+/// FR-CFG-03: a key BuhTig does not know stops it, and is named. One that looks like a
+/// sensitive key has its value left out, as any value is.
+#[test]
+fn an_unknown_key_stops_startup_and_is_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config().replace(
+        r#"client_secret = "github-client-secret""#,
+        "client_secret = \"github-client-secret\"\nclient_secrets = \"hunter2\"",
+    );
+    let output = buhtig_with(&write_config(&dir, &config, 0o600))
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("github.client_secrets: unknown key"),
+        "{stderr}"
+    );
+    assert!(!format!("{stderr}{}", stdout(&output)).contains("hunter2"));
+}
+
+/// A proxy that forwards nothing: it keeps the request line and headers of each request
+/// made through it, and answers 502.
+fn record_connections(listener: TcpListener) -> Arc<Mutex<Vec<String>>> {
+    let heads = Arc::new(Mutex::new(Vec::new()));
+    let recorded = heads.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut head = String::new();
+            // Up to the blank line that ends the headers, or the end of the connection.
+            while reader.read_line(&mut head).unwrap_or(0) > 0 && !head.ends_with("\r\n\r\n") {}
+            recorded.lock().unwrap().push(head);
+            let _ = stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+        }
+    });
+    heads
+}
+
+/// FR-CFG-02: requests to GitHub go through `github.proxy_url` alone, whatever proxy the
+/// environment names. Neither proxy forwards anything, so no request reaches GitHub.
+#[test]
+fn github_is_reached_through_the_configured_proxy_only() {
+    let configured = TcpListener::bind("127.0.0.1:0").unwrap();
+    let configured_url = format!("http://{}", configured.local_addr().unwrap());
+    let from_environment = TcpListener::bind("127.0.0.1:0").unwrap();
+    let environment_url = format!("http://{}", from_environment.local_addr().unwrap());
+    let through_configured = record_connections(configured);
+    let through_environment = record_connections(from_environment);
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = config().replace(
+        r#"client_secret = "github-client-secret""#,
+        &format!("client_secret = \"github-client-secret\"\nproxy_url = \"{configured_url}\""),
+    );
+    let mut command = buhtig_with(&write_config(&dir, &config, 0o600));
+    for name in [
+        "ALL_PROXY",
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "all_proxy",
+        "http_proxy",
+        "https_proxy",
+    ] {
+        command.env(name, &environment_url);
+    }
+    let (running, _) = start_command(command);
+    running.get("/-/api/repositories/octo/public");
+
+    let through_configured = through_configured.lock().unwrap();
+    assert!(
+        through_configured
+            .first()
+            .is_some_and(|head| head.starts_with("CONNECT api.github.com:443 HTTP/1.1\r\n")),
+        "{through_configured:?}"
+    );
+    assert_eq!(*through_environment.lock().unwrap(), Vec::<String>::new());
 }
 
 #[cfg(unix)]

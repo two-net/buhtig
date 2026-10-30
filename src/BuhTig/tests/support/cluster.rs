@@ -195,7 +195,30 @@ impl Cluster {
             .unwrap()
     }
 
+    /// Runs the SQL in the file at `path`, such as a dump, and panics at its first error.
+    pub fn load(&self, database: &str, path: &Path) {
+        let output = self
+            .psql_connection(database)
+            .args(["--quiet", "--single-transaction", "--file"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} failed: {}",
+            path.display(),
+            stderr(&output)
+        );
+    }
+
     fn psql_command(&self, database: &str, sql: &str) -> Command {
+        let mut command = self.psql_connection(database);
+        command.args(["--command", sql]);
+        command
+    }
+
+    /// `psql`, connected to `database` as the superuser, with nothing from the environment.
+    fn psql_connection(&self, database: &str) -> Command {
         let mut command = Command::new(self.bin.join("psql"));
         command
             .args(["--no-psqlrc", "--no-align", "--tuples-only"])
@@ -203,7 +226,7 @@ impl Cluster {
             .arg("--host")
             .arg(&self.dir)
             .args(["--port", &PORT.to_string(), "--username", "postgres"])
-            .args(["--dbname", database, "--command", sql])
+            .args(["--dbname", database])
             .env_clear()
             .env("PGPASSWORD", PASSWORD);
         command

@@ -163,7 +163,8 @@ fn startup_and_each_request_are_logged_without_secrets() {
          Connection: close\r\n\r\n",
         running.address
     ));
-    assert_status(&callback, 200);
+    // The state matches no sign-in this browser started (FR-AUTH-03).
+    assert_status(&callback, 303);
     let post = running.request(&format!(
         "POST /-/health HTTP/1.1\r\nHost: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         running.address
@@ -178,7 +179,7 @@ fn startup_and_each_request_are_logged_without_secrets() {
     assert_eq!(requests.len(), 2, "{log:#?}");
     assert!(
         requests[0].contains(" INFO ")
-            && requests[0].contains("method=GET path=/-/auth/callback status=200 duration="),
+            && requests[0].contains("method=GET path=/-/auth/callback status=303 duration="),
         "{}",
         requests[0]
     );
