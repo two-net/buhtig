@@ -1,0 +1,4 @@
+# Only the binary that the Dockerfile copies, which keeps out everything else, config.toml
+# with its secrets among it.
+*
+!src/BuhTig/target/release/BuhTig
