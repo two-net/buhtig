@@ -6,10 +6,10 @@ created, with a row in every table. `every_earlier_release_upgrades_and_keeps_it
 the schema becomes exactly what an empty database gets and that no user data is lost
 (NFR-MNT-02, FR-DB-02 to FR-DB-04, FR-OPS-03).
 
-There has been no release yet. `0.1.0-a7c0548.sql` stands in for one: it comes from commit
-a7c0548, the last before #23 and #33 changed the schema. That build records itself as
-0.1.0, since the version was never bumped during development, so the dump records the
-pre-release `0.1.0-a7c0548` instead, which semver ranks below 0.1.0.
+`0.1.0.sql` is release 0.1.0's, tagged v0.1.0. `0.1.0-a7c0548.sql` comes from commit
+a7c0548, before the release, the last before #23 and #33 changed the schema. That build
+records itself as 0.1.0, since the version was never bumped during development, so the dump
+records the pre-release `0.1.0-a7c0548` instead, which semver ranks below 0.1.0.
 
 ## Adding a release's dump
 
