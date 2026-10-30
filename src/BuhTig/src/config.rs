@@ -1090,20 +1090,35 @@ mod tests {
         }
     }
 
+    /// FR-CFG-02, for every key. Where a string is expected, the message says why; where
+    /// a number, a boolean or a list of logins is, `${...}` is simply not one.
     #[test]
     fn substitution_is_not_supported() {
-        for key in [
-            "database.url",
-            "github.client_id",
-            "github.client_secret",
-            "cache.ttl",
-        ] {
-            assert_eq!(
-                issues(set(minimal(), key, "${BUHTIG_VALUE}")),
-                [format!(
-                    "{key}: `${{...}}` substitution is not supported; write the value itself"
-                )],
-            );
+        const NOT_STRINGS: [&str; 5] = [
+            "database.max_connections",
+            "access.allowed_users",
+            "limits.org_repositories",
+            "limits.visitor_fetches_per_hour",
+            "ui.animations",
+        ];
+        for key in KEYS {
+            let value = if key == "access.allowed_users" {
+                Value::from(vec!["${BUHTIG_VALUE}"])
+            } else {
+                Value::from("${BUHTIG_VALUE}")
+            };
+            let issues = issues(set(minimal(), key, value));
+            if NOT_STRINGS.contains(&key) {
+                assert_eq!(issues.len(), 1, "{issues:?}");
+                assert!(issues[0].starts_with(&format!("{key}: ")), "{issues:?}");
+            } else {
+                assert_eq!(
+                    issues,
+                    [format!(
+                        "{key}: `${{...}}` substitution is not supported; write the value itself"
+                    )],
+                );
+            }
         }
     }
 

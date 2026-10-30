@@ -65,6 +65,20 @@ describe('parse', () => {
         organization('org'),
       );
     });
+
+    it('…/orgs/org after each beginning that a GitHub URL may have', () => {
+      expectEach(
+        [
+          'http://www.github.com/orgs/org/',
+          'github.com/orgs/org',
+          'www.github.com/orgs/org',
+          'ssh://git@github.com/orgs/org',
+          'git@github.com:orgs/org',
+          'orgs/org',
+        ],
+        organization('org'),
+      );
+    });
   });
 
   // FR-SRCH-02.
@@ -83,6 +97,7 @@ describe('parse', () => {
           'HTTPS://GitHub.COM/Owner/Repo',
           'https://WWW.GITHUB.COM/Owner/Repo',
           'GitHub.com/Owner/Repo',
+          'git@GitHub.com:Owner/Repo.git',
         ],
         repository('Owner', 'Repo'),
       );
@@ -97,6 +112,7 @@ describe('parse', () => {
         ],
         repository('owner', 'repo'),
       );
+      expectEach(['http://www.github.com/org', 'www.github.com/org'], organization('org'));
     });
 
     it('trailing and doubled slashes', () => {
@@ -124,7 +140,10 @@ describe('parse', () => {
         ],
         repository('owner', 'repo'),
       );
-      expectEach(['https://github.com/org?tab=repositories'], organization('org'));
+      expectEach(
+        ['https://github.com/org?tab=repositories', 'https://github.com/orgs/org#people'],
+        organization('org'),
+      );
     });
 
     it('the user and port of an SSH URL', () => {

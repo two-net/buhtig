@@ -30,6 +30,9 @@ mod web;
 mod test_cluster;
 #[cfg(test)]
 mod test_log;
+// §4.7 and FR-DATA-04, across the whole app in front of a stand-in for GitHub.
+#[cfg(test)]
+mod app_test;
 // NFR-PERF-03 and NFR-CAP-01, run on demand: see README.md.
 #[cfg(test)]
 mod load_test;

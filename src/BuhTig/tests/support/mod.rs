@@ -20,18 +20,48 @@ use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
-/// Values a library would pick up from the environment if BuhTig let it (AC-07).
-/// BuhTig starts only if it removed them: tokio panics on `TOKIO_WORKER_THREADS=0`, and
-/// sqlx would insist on TLS for `PGSSLMODE=require`, which the test cluster lacks.
-pub const ENVIRONMENT: [(&str, &str); 5] = [
+/// Values a library would pick up from the environment if BuhTig let it (FR-CFG-02,
+/// AC-07): those PostgreSQL clients such as sqlx read, the proxies and CA files HTTP
+/// clients read, tokio's and tracing's.
+///
+/// BuhTig starts only if it removed them: tokio panics on `TOKIO_WORKER_THREADS=0`, sqlx
+/// would insist on TLS for `PGSSLMODE=require`, which the test cluster lacks, and
+/// `PGOPTIONS` would make every transaction read-only, so migration would fail. The others
+/// name hosts and files that are not there, with `env-` in them so that tests can check
+/// none reaches the log. `RUST_LOG` would log at TRACE, and `NO_PROXY` would take GitHub
+/// past `github.proxy_url`.
+pub const ENVIRONMENT: &[(&str, &str)] = &[
+    ("ALL_PROXY", "http://env-proxy:3128"),
     (
         "DATABASE_URL",
         "postgres://env-user:env-password@env-host/env-db",
     ),
     ("HTTPS_PROXY", "http://env-proxy:3128"),
+    ("HTTP_PROXY", "http://env-proxy:3128"),
+    ("NO_PROXY", "api.github.com"),
+    ("PGAPPNAME", "env-application"),
+    ("PGDATABASE", "env-db"),
+    ("PGHOST", "env-host"),
+    ("PGHOSTADDR", "192.0.2.1"),
+    ("PGOPTIONS", "-c default_transaction_read_only=on"),
+    ("PGPASSFILE", "/env-pgpass"),
     ("PGPASSWORD", "env-password"),
+    ("PGPORT", "1"),
+    ("PGSERVICE", "env-service"),
+    ("PGSERVICEFILE", "/env-pg_service.conf"),
+    ("PGSSLCERT", "/env-client.crt"),
+    ("PGSSLKEY", "/env-client.key"),
     ("PGSSLMODE", "require"),
+    ("PGSSLROOTCERT", "/env-root.crt"),
+    ("PGUSER", "env-user"),
+    ("RUST_LOG", "trace"),
+    ("SSL_CERT_DIR", "/env-certs"),
+    ("SSL_CERT_FILE", "/env-cert.pem"),
     ("TOKIO_WORKER_THREADS", "0"),
+    ("all_proxy", "http://env-proxy:3128"),
+    ("http_proxy", "http://env-proxy:3128"),
+    ("https_proxy", "http://env-proxy:3128"),
+    ("no_proxy", "api.github.com"),
 ];
 
 /// The BuhTig version under test, as it is recorded in `schema_versions`.
@@ -74,7 +104,10 @@ pub fn write_config(dir: &TempDir, contents: &str, mode: u32) -> PathBuf {
 
 pub fn buhtig(args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_BuhTig"));
-    command.args(args).env_clear().envs(ENVIRONMENT);
+    command
+        .args(args)
+        .env_clear()
+        .envs(ENVIRONMENT.iter().copied());
     command
 }
 
@@ -169,9 +202,14 @@ impl Drop for Running {
 
 /// Starts BuhTig and returns its log lines up to and including the "listening" line.
 pub fn start(config: &Path) -> (Running, Vec<String>) {
+    start_command(buhtig_with(config))
+}
+
+/// Like [`start`], for a command that [`buhtig_with`] made and a test changed.
+pub fn start_command(mut command: Command) -> (Running, Vec<String>) {
     const LISTENING: &str = "listening on http://";
 
-    let mut child = buhtig_with(config)
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

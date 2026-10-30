@@ -3,7 +3,7 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use support::{
     Cluster, VERSION, cluster, minimal_config, run_to_exit, start, stdout, write_config,
@@ -107,8 +107,103 @@ fn timestamps_carry_their_time_zone() {
     assert_eq!(types, "timestamp with time zone");
 }
 
-/// NFR-MNT-02, FR-DB-04. The previous release had no schema yet, so the older schema
-/// is simulated: the current one, with data, missing a table, a column and an index.
+/// The tables that hold users' data, whose rows migration must keep (FR-DB-04).
+const USER_DATA: [&str; 5] = [
+    "users",
+    "sessions",
+    "credentials",
+    "history_entries",
+    "pins",
+];
+
+/// The databases that earlier releases of BuhTig left, each with a row in every table: one
+/// dump per release, named after its version (`tests/fixtures/schemas/README.md`).
+fn earlier_releases() -> Vec<PathBuf> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/schemas");
+    let mut dumps: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "sql"))
+        .collect();
+    dumps.sort();
+    assert!(!dumps.is_empty(), "no dumps in {}", dir.display());
+    dumps
+}
+
+impl Setup {
+    /// The columns that `table` has, as a list to select.
+    fn columns(&self, table: &str) -> String {
+        self.psql(&format!(
+            "SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position) \
+             FROM information_schema.columns \
+             WHERE table_schema = 'public' AND table_name = '{table}'"
+        ))
+    }
+
+    /// Every row of `table`, in `columns`.
+    fn rows(&self, table: &str, columns: &str) -> String {
+        self.psql(&format!("SELECT {columns} FROM {table} ORDER BY 1"))
+    }
+}
+
+/// NFR-MNT-02, FR-DB-02 to FR-DB-04, FR-OPS-03: the database of each earlier release, with
+/// its data, takes on this version's schema when this version starts. Every row of users'
+/// data stays as it was, and a restart then changes nothing (FR-DB-03).
+#[test]
+fn every_earlier_release_upgrades_and_keeps_its_data() {
+    let expected = fresh_fingerprint();
+    for dump in earlier_releases() {
+        let release = dump.file_stem().unwrap().to_str().unwrap();
+        let db = setup();
+        db.cluster.load(&db.database, &dump);
+        assert_eq!(db.psql("SELECT version FROM schema_versions"), release);
+        // In the columns that the release had, so that those it lacked do not count.
+        let columns: Vec<String> = USER_DATA.iter().map(|table| db.columns(table)).collect();
+        let rows = || -> Vec<String> {
+            USER_DATA
+                .iter()
+                .zip(&columns)
+                .map(|(table, columns)| db.rows(table, columns))
+                .collect()
+        };
+        let before = rows();
+        for (table, rows) in USER_DATA.iter().zip(&before) {
+            assert!(!rows.is_empty(), "{release} has no {table}");
+        }
+        let cached = db.psql("SELECT count(*) FROM cache_entries");
+        assert_ne!(cached, "0", "{release} has no cache entries");
+
+        let (running, log) = start(&db.config);
+        assert_logged(
+            &log,
+            &format!("upgraded the database schema from BuhTig {release} to {VERSION}"),
+        );
+        drop(running);
+        assert_eq!(db.fingerprint(), expected, "{release}");
+        assert_eq!(rows(), before, "{release}");
+        // The cache may be emptied and rebuilt, but not cut down (FR-DB-04).
+        let kept = db.psql("SELECT count(*) FROM cache_entries");
+        assert!(
+            kept == cached || kept == "0",
+            "{release}: {kept} of {cached}"
+        );
+        assert_eq!(
+            db.psql("SELECT string_agg(version, ' ' ORDER BY applied_at) FROM schema_versions"),
+            format!("{release} {VERSION}")
+        );
+
+        let (_running, log) = start(&db.config);
+        assert_logged(
+            &log,
+            &format!("the database schema is up to date for BuhTig {VERSION}"),
+        );
+        assert_eq!(db.fingerprint(), expected, "{release}");
+    }
+}
+
+/// FR-DB-04: what migration adds to an older schema, beyond what any earlier release's
+/// lacks (see [`every_earlier_release_upgrades_and_keeps_its_data`]): the current schema,
+/// with data, missing a whole table, a column and indexes.
 #[test]
 fn upgrade_keeps_data_and_adds_what_is_missing() {
     let expected = fresh_fingerprint();

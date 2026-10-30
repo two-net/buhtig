@@ -47,8 +47,13 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
 ## Test
 
 - `cargo test` in `src/BuhTig`. The tests start their own PostgreSQL cluster from the
-  PostgreSQL 15+ binaries on `PATH` (or `pg_config --bindir`).
+  PostgreSQL 15+ binaries on `PATH` (or `pg_config --bindir`). They never call GitHub:
+  tests that need it get a stand-in, `github::stub` (NFR-MNT-03). The only test that calls
+  the real GitHub is `#[ignore]`d:
+  `cargo test reads_a_public_repository_from_github -- --ignored` runs it.
 - `npm test` and `npm run test:scripts` in `src/BuhTig.Angular`.
+- **On each release,** add its database to `src/BuhTig/tests/fixtures/schemas`, as the
+  README there says, so that the next release is tested upgrading from it.
 - **Load test:** `cargo test --release load_test -- --ignored --nocapture` in
   `src/BuhTig`, after building the UI. 100 users at once, half of them signed in, open the
   home page and dashboards served from the cache, with 10,000 users registered. BuhTig
