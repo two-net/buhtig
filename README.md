@@ -9,6 +9,28 @@ in [SRS.md](SRS.md).
   its own. It looks like GitHub, after its open-source Primer design system, and sets its
   wordmark in Bricolage Grotesque, under the SIL Open Font License (`public/fonts/OFL.txt`).
 
+## Screenshots
+
+On real GitHub data. Like BuhTig, the dashboards follow your light or dark theme.
+
+A repository's dashboard, of [tokio-rs/axum](https://github.com/tokio-rs/axum):
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/repository-dark.png">
+  <img src="docs/screenshots/repository.png" alt="BuhTig's dashboard of tokio-rs/axum: stars, forks, issues and pull requests, a year of commit activity, and the repository's description, license, releases and contributors beside them">
+</picture>
+
+An organization's dashboard, of [tokio-rs](https://github.com/tokio-rs):
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/organization-dark.png">
+  <img src="docs/screenshots/organization.png" alt="BuhTig's dashboard of the tokio-rs organization: its repositories, total stars and forks, top language and members, its most popular repositories, and its people, languages and topics beside them">
+</picture>
+
+The home page, as a visitor sees it:
+
+<img src="docs/screenshots/home.png" alt="BuhTig's home page: the wordmark, the line &quot;Every GitHub repository, at a glance&quot;, a box for a repository or organization URL and a Show dashboard button">
+
 ## Build
 
 ```sh
