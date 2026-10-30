@@ -27,10 +27,10 @@ public_url = "https://buhtig.example.com"
 # indexes or constraints of your own to its tables: BuhTig removes them, or
 # fails to start.
 #
-# A database on another host is reached over TLS, and its certificate is
-# checked (sslmode=verify-full). For a private certificate authority, add
-# sslrootcert=/path/to/ca.pem to the URL's query string; to encrypt without
-# checking the certificate, add sslmode=require instead.
+# BuhTig uses TLS if the server offers it and plain text otherwise
+# (sslmode=prefer). To insist on TLS and check the certificate, add
+# sslmode=verify-full to the URL's query string, with
+# sslrootcert=/path/to/ca.pem for a private certificate authority.
 url = "postgres://buhtig:CHANGE-ME@localhost:5432/buhtig"
 # Maximum number of open database connections.
 # max_connections = 10
