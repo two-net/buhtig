@@ -1,5 +1,6 @@
 import { DOCUMENT, Injector, afterNextRender, inject } from '@angular/core';
 import { NavigationEnd, NavigationStart, Router } from '@angular/router';
+import { dashboardOf } from '../dashboard/tabs';
 
 /**
  * Moves focus to the heading of each page the app navigates to, as a browser that loads a new
@@ -9,7 +10,8 @@ import { NavigationEnd, NavigationStart, Router } from '@angular/router';
  *
  * Focus stays where the new page puts it, as the home page does in the search box (FR-SRCH-07).
  * It moves when what had it is gone, or still has it from the page before, as the search box in a
- * dashboard's header does after a search.
+ * dashboard's header does after a search. Moving to another tab of the same dashboard is no new
+ * page: focus stays on the tab.
  */
 export function focusPageOnNavigation(): void {
   const document = inject(DOCUMENT);
@@ -17,13 +19,16 @@ export function focusPageOnNavigation(): void {
   const router = inject(Router);
   /** What had focus as the navigation started. */
   let before: Element | null = null;
-  /** Whether the navigation changes the URL in place. */
+  /** Whether the navigation changes the URL in place, or stays on the same dashboard. */
   let inPlace = false;
   let first = true;
   router.events.subscribe((event) => {
     if (event instanceof NavigationStart) {
       before = document.activeElement;
-      inPlace = router.currentNavigation()?.extras.replaceUrl === true;
+      const from = dashboardOf(router.url);
+      inPlace =
+        router.currentNavigation()?.extras.replaceUrl === true ||
+        (from !== undefined && from === dashboardOf(event.url));
       return;
     }
     if (!(event instanceof NavigationEnd)) {

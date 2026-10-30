@@ -1,15 +1,12 @@
-<header class="page-header">
-  <a class="wordmark" routerLink="/"><app-wordmark /></a>
-</header>
-<main class="prose">
-  <h1>Sign in to BuhTig</h1>
-  <p>
-    Sign in with your GitHub account to continue. BuhTig asks GitHub only who you are: it gets no
-    access to your private repositories, and it can't change anything on GitHub.
-  </p>
-  <p><a class="sign-in" [href]="signIn()">Sign in with GitHub</a></p>
-  <nav aria-label="About BuhTig">
-    <a routerLink="/-/about">About</a>
-    <a routerLink="/-/privacy">Privacy</a>
-  </nav>
+<app-header />
+<main id="main" class="page" tabindex="-1">
+  <app-center icon="lock" [heading]="heading" [text]="text">
+    <div class="row">
+      <a class="btn primary" [href]="signIn()">Sign in with GitHub</a>
+    </div>
+    <div class="row">
+      <a routerLink="/-/about">About BuhTig</a>
+      <a routerLink="/-/privacy">Privacy</a>
+    </div>
+  </app-center>
 </main>

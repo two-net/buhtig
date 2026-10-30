@@ -1,101 +1,149 @@
-import { Component, computed, input, signal } from '@angular/core';
-import { ChartAlternative, Row } from './alternative';
+import { Component, ElementRef, computed, inject, input, signal } from '@angular/core';
+import { compactNumber, exactNumber } from '../format/format';
+import { Tip } from '../tip/tip';
+import { READ_WITH_KEYS } from './messages';
 
-/** How wide each column is in the chart, of which its bar takes `BAR`. */
-const COLUMN = 10;
-const BAR = 7;
-
-/** How high the tallest bar is. */
-const HEIGHT = 100;
-
-/** How high a bar is at least, if its figure is not 0, so that it shows beside a tall one. */
-const LEAST = 2;
-
-/** One of a chart's columns, such as a week: its figure, and what is said of it. */
+/** One of a chart's columns, such as a week: its figure, and what it is of. */
 export interface Column {
   value: number;
-  /** What the caption says while it is pointed at, such as "Week of Oct 26, 2025: 12 commits". */
-  readout: string;
-  /** What it is of, and its figure in full, as its row of the table says them. */
+  /** What it is of, as its tooltip says, such as "Week of Oct 26, 2025". */
   label: string;
-  cell: string;
+}
+
+/** A label of a chart's axis, under the column at `at`, such as a month. */
+export interface Tick {
+  at: number;
+  label: string;
+  /** Whether it is left out on narrow screens, as all months but each quarter's first are. */
+  minor: boolean;
 }
 
 /**
  * A chart of columns side by side, such as the weeks of a year, each bar as high against the
- * others as its figure is. The labels of its axis go within it, under the bars.
+ * gridlines as its figure is. Pointing at a column tells its figure, and so do ← and →, Home and
+ * End once the chart has focus, and Esc stops (NFR-UX-03). Its bars grow as the widget around it
+ * makes its entrance (FR-ANIM-06).
  *
- * Its caption says what it shows in all, or what the column pointed at shows. The pointer points
- * at a column, and so do ← and →, Home and End once the chart has focus (NFR-UX-03).
- *
- * Its text alternative is a sentence that says what it shows, and its data as a table on request
- * (NFR-UX-04). The caption says nothing that those do not, so assistive technology skips it.
+ * Assistive technology reads its summary, and the widget around it shows its data as a table on
+ * request (NFR-UX-04).
  */
 @Component({
   selector: 'app-column-chart',
-  imports: [ChartAlternative],
-  templateUrl: './columns.html',
-  styleUrl: './columns.css',
+  template: `
+    <div class="colchart" [style.--plot-h.px]="height()">
+      <div
+        class="plot"
+        [class.capped]="caps()"
+        [class.kbd]="keyboard() && active() !== undefined"
+        tabindex="0"
+        role="img"
+        [attr.aria-label]="label()"
+        (keydown)="move($event)"
+        (blur)="leave()"
+      >
+        <div aria-hidden="true">
+          @for (line of grid(); track line.value) {
+            <div class="gl" [class.base]="line.value === 0" [style.bottom.%]="line.at">
+              <span>{{ line.label }}</span>
+            </div>
+          }
+        </div>
+        <div class="bars" aria-hidden="true" (pointerleave)="leave()">
+          @for (bar of bars(); track $index) {
+            <div
+              class="col"
+              [class.active]="active() === $index"
+              [style.--h]="bar.height + '%'"
+              [style.--i]="$index"
+              (pointermove)="point($index, $event)"
+            >
+              @if (caps() && bar.value > 0) {
+                <b>{{ bar.cap }}</b>
+              }
+              <i></i>
+            </div>
+          }
+        </div>
+      </div>
+      <div class="xaxis" aria-hidden="true">
+        @for (tick of ticks(); track tick.at) {
+          <span
+            [class.minor]="tick.minor"
+            [style.left.%]="((tick.at + 0.5) / bars().length) * 100"
+            >{{ tick.label }}</span
+          >
+        }
+      </div>
+    </div>
+  `,
+  styles: ':host { display: block; }',
 })
 export class ColumnChart {
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly tip = inject(Tip);
+
   readonly columns = input.required<Column[]>();
-  /** What the caption says while no column is pointed at, such as "312 commits in the last year". */
-  readonly total = input.required<string>();
-  /** What the chart is, as assistive technology names it, such as "Commits per week". */
-  readonly name = input.required<string>();
+  readonly ticks = input<Tick[]>([]);
+  /** What the figures count, such as "commits", as the tooltip says them. */
+  readonly unit = input('');
+  /** What the chart shows, in a sentence, as assistive technology reads it. */
   readonly summary = input.required<string>();
-  /** The headers of the table's columns: what a row is of, and what its figure is. */
-  readonly headers = input.required<readonly [string, string]>();
+  readonly height = input(180);
+  /** Whether each column's figure shows above its bar. */
+  readonly caps = input(false);
 
-  /** The column pointed at, by its index, if any. */
-  protected readonly pointed = signal<number | undefined>(undefined);
+  /** The column pointed at, by its index, if any, and whether the keyboard points at it. */
+  protected readonly active = signal<number | undefined>(undefined);
+  protected readonly keyboard = signal(false);
 
-  protected readonly caption = computed(() => {
-    const pointed = this.pointed();
-    const column = pointed === undefined ? undefined : this.columns()[pointed];
-    return column?.readout ?? this.total();
+  protected readonly label = computed(() => `${this.summary()} ${READ_WITH_KEYS}`);
+
+  /** The top of the chart: a round figure at least as high as the tallest column. */
+  private readonly top = computed(() =>
+    niceMax(Math.max(0, ...this.columns().map((c) => c.value))),
+  );
+
+  protected readonly grid = computed(() => {
+    const top = this.top();
+    return [0, top / 2, top]
+      .filter((value) => Number.isInteger(value))
+      .map((value) => ({ value, at: (value / top) * 100, label: compactNumber(value) }));
   });
 
-  /** How each column's bar is drawn: the tallest as high as the chart. */
   protected readonly bars = computed(() => {
-    const columns = this.columns();
-    const tallest = Math.max(...columns.map((column) => column.value));
-    return columns.map((column, index) => ({
-      at: index * COLUMN,
-      height: column.value === 0 ? 0 : Math.max(LEAST, (column.value / tallest) * HEIGHT),
+    const top = this.top();
+    return this.columns().map(({ value }) => ({
+      value,
+      height: ((value / top) * 100).toFixed(2),
+      cap: compactNumber(value),
     }));
   });
 
-  /** The width of all the columns together. */
-  protected readonly width = computed(() => this.columns().length * COLUMN);
-
-  protected readonly rows = computed<Row[]>(() =>
-    this.columns().map(({ label, cell }) => ({ label, value: cell })),
-  );
-
-  protected readonly offset = (COLUMN - BAR) / 2;
-  protected readonly barWidth = BAR;
-  protected readonly columnWidth = COLUMN;
-  protected readonly height = HEIGHT;
-
-  /** Focus points at the last column, the latest, unless the pointer is on one already. */
-  protected focus(): void {
-    if (this.pointed() === undefined) {
-      this.pointed.set(this.columns().length - 1);
-    }
+  protected point(index: number, event: PointerEvent): void {
+    this.keyboard.set(false);
+    this.show(index, event);
   }
 
-  /** ← and → point at the column before and after, and Home and End at the first and last. */
+  protected leave(): void {
+    this.active.set(undefined);
+    this.keyboard.set(false);
+    this.tip.hide();
+  }
+
+  /** ← and → point at the column before and after, Home and End at the first and last. */
   protected move(event: KeyboardEvent): void {
     const last = this.columns().length - 1;
-    const pointed = this.pointed() ?? last;
+    if (last < 0) {
+      return;
+    }
+    const active = this.active();
     let next: number;
     switch (event.key) {
-      case 'ArrowLeft':
-        next = Math.max(0, pointed - 1);
-        break;
       case 'ArrowRight':
-        next = Math.min(last, pointed + 1);
+        next = active === undefined ? 0 : Math.min(last, active + 1);
+        break;
+      case 'ArrowLeft':
+        next = active === undefined ? last : Math.max(0, active - 1);
         break;
       case 'Home':
         next = 0;
@@ -103,10 +151,43 @@ export class ColumnChart {
       case 'End':
         next = last;
         break;
+      case 'Escape':
+        this.leave();
+        return;
       default:
         return;
     }
     event.preventDefault();
-    this.pointed.set(next);
+    this.keyboard.set(true);
+    this.show(next);
   }
+
+  private show(index: number, event?: PointerEvent): void {
+    this.active.set(index);
+    const bar = this.host.nativeElement.querySelectorAll('.col i')[index];
+    const column = this.columns()[index];
+    if (bar === undefined || column === undefined) {
+      return;
+    }
+    const unit = this.unit();
+    this.tip.show(
+      bar,
+      {
+        value: unit ? `${exactNumber(column.value)} ${unit}` : exactNumber(column.value),
+        label: column.label,
+        color: 'var(--s1)',
+      },
+      event,
+    );
+  }
+}
+
+/** A round figure at least `max`, such as 50 for 42, for the top gridline. */
+export function niceMax(max: number): number {
+  if (max <= 0) {
+    return 1;
+  }
+  const power = 10 ** Math.floor(Math.log10(max));
+  const step = max / power;
+  return (step <= 1 ? 1 : step <= 2 ? 2 : step <= 2.5 ? 2.5 : step <= 5 ? 5 : 10) * power;
 }

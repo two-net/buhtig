@@ -1,115 +1,155 @@
-<header class="page-header">
-  <a class="wordmark" routerLink="/"><app-wordmark /></a>
-  <app-account />
-</header>
-<main class="prose">
-  <h1>Settings</h1>
+<app-page-styles />
+<app-header />
+<main id="main" class="page" tabindex="-1">
   @if (user() === null) {
-    @if (deleted()) {
-      <p #deletedNote id="data-deleted" tabindex="-1">{{ DATA_DELETED }}</p>
-      <p>
-        {{ GITHUB_ACCESS }}
-        <a href="https://github.com/settings/applications">{{ REVIEW_GITHUB_ACCESS }}</a>
-      </p>
-    } @else {
-      <p>{{ SIGN_IN_FIRST }}</p>
-      <p><a class="button primary" [href]="signIn">Sign in</a></p>
-    }
-  } @else if (user()) {
-    <section aria-labelledby="token-heading">
-      <h2 id="token-heading">Personal access token</h2>
-      <p>{{ TOKEN_PURPOSE }}</p>
-      <p>{{ TOKEN_HANDLING }}</p>
-      <p>
-        {{ TOKEN_ADVICE }}
-        <a href="https://github.com/settings/personal-access-tokens/new">{{ CREATE_TOKEN }}</a>
-      </p>
-
-      @if (token(); as token) {
-        @if (token.status === 'invalid') {
-          <p class="problem">{{ TOKEN_INVALID }}</p>
-        }
-        <dl class="token">
-          <dt>Type</dt>
-          <dd>{{ TYPE_LABELS[token.type] }}</dd>
-          <dt>Ends in</dt>
-          <dd>
-            <code>…{{ token.lastFour }}</code>
-          </dd>
-          @if (token.type === 'classic') {
-            <dt>Scopes</dt>
-            <dd>{{ token.scopes?.length ? list(token.scopes!) : NO_SCOPES }}</dd>
-          } @else {
-            <dt>Permissions</dt>
-            <dd>{{ PERMISSIONS_UNKNOWN }}</dd>
-          }
-          <dt>Expires</dt>
-          <dd>{{ expiry(token) }}</dd>
-          @if (token.lastValidatedAt; as validated) {
-            <dt>Last checked with GitHub</dt>
-            <dd><app-relative-time [value]="validated" /></dd>
-          }
-        </dl>
-        @if (!replacing()) {
-          <div class="actions">
-            <button
-              #replaceButton
-              type="button"
-              [attr.aria-disabled]="busy() ? 'true' : null"
-              (click)="replace()"
-            >
-              Replace token
-            </button>
-            <button
-              #removeButton
-              type="button"
-              [attr.aria-disabled]="busy() ? 'true' : null"
-              (click)="remove()"
-            >
-              Remove token
-            </button>
+    <app-center icon="sliders" [heading]="SIGN_IN_TO_MANAGE" [text]="SIGN_IN_FIRST">
+      <div class="row">
+        <a class="btn primary" [href]="signIn">Sign in with GitHub</a>
+      </div>
+    </app-center>
+  } @else if (user(); as user) {
+    <div class="container">
+      <div class="settings">
+        <div class="settings-who">
+          <app-avatar [name]="user.login" [src]="user.avatar_url" [size]="48" [round]="true" />
+          <div class="grow">
+            <h1>{{ user.name || user.login }}</h1>
+            <small
+              >{{ signedIn(user.login) }}
+              @if (signedInAt(); as signedInAt) {
+                <app-relative-time [value]="signedInAt" />
+              }
+            </small>
           </div>
-        }
-      }
+          <form method="post" action="/-/auth/sign-out">
+            <button class="btn sm" type="submit"><app-icon name="logout" />Sign out</button>
+          </form>
+        </div>
 
-      @if (entering()) {
-        <form novalidate (submit)="save($event)">
-          <label for="token-input">{{ token() ? NEW_TOKEN : TOKEN }}</label>
-          <input
-            #input
-            id="token-input"
-            type="password"
-            name="token"
-            autocomplete="off"
-            autocapitalize="off"
-            spellcheck="false"
-            [value]="draft()"
-            [attr.aria-invalid]="problem() ? 'true' : null"
-            [attr.aria-describedby]="problem() ? 'token-problem' : null"
-            (input)="draft.set(input.value)"
-          />
-          <div class="actions">
-            <button type="submit" class="primary" [attr.aria-disabled]="busy() ? 'true' : null">
-              Save token
-            </button>
-            @if (replacing()) {
-              <button type="button" (click)="cancel()">Cancel</button>
+        <nav aria-label="Settings">
+          <ul class="side-nav">
+            @for (section of SECTIONS; track section.id) {
+              <li>
+                <a
+                  [href]="'/-/settings#' + section.id"
+                  [attr.aria-current]="current() === section.id ? 'true' : null"
+                  (click)="goTo($event, section.id)"
+                  ><app-icon [name]="section.icon" />{{ section.label }}</a
+                >
+              </li>
             }
-          </div>
-        </form>
-      }
+          </ul>
+        </nav>
 
-      <!-- Always there, so that assistive technology announces what changes. -->
-      <p class="done" role="status">{{ done() }}</p>
-      @if (problem(); as problem) {
-        <p id="token-problem" class="problem" role="alert">{{ problem }}</p>
-      }
+        <div>
+          <section id="token" class="section" aria-labelledby="token-heading">
+            <h2 id="token-heading" tabindex="-1">Personal access token</h2>
+            <p class="help">{{ TOKEN_PURPOSE }} {{ TOKEN_HANDLING }}</p>
+            <p class="help">
+              {{ TOKEN_ADVICE }}
+              <a href="https://github.com/settings/personal-access-tokens/new">{{
+                CREATE_TOKEN
+              }}</a>
+            </p>
 
-      <p>
-        <a href="https://github.com/settings/tokens">{{ MANAGE_TOKENS }}</a>
-      </p>
-    </section>
-    <app-shortcut-settings />
-    <app-data-deletion />
+            @if (token(); as token) {
+              @if (token.status === 'valid') {
+                <p class="status ok"><app-icon name="check" />{{ TOKEN_ACTIVE }}</p>
+              } @else {
+                <p class="status bad"><app-icon name="alert" />{{ TOKEN_INVALID }}</p>
+              }
+              @if (expiring(); as expiring) {
+                <div class="notice" role="status">
+                  <app-icon name="clock" />
+                  <div class="grow">{{ expiring }}</div>
+                </div>
+              }
+              <dl class="kv">
+                <dt>Type</dt>
+                <dd>{{ TYPE_LABELS[token.type] }}</dd>
+                <dt>Token</dt>
+                <dd>
+                  <code>••••••••{{ token.lastFour }}</code>
+                </dd>
+                <dt>Access</dt>
+                <dd>{{ access() }}</dd>
+                <dt>Expires</dt>
+                <dd>{{ expiry(token) }}</dd>
+                @if (token.lastValidatedAt; as validated) {
+                  <dt>Last checked</dt>
+                  <dd><app-relative-time [value]="validated" /></dd>
+                }
+              </dl>
+              @if (!replacing()) {
+                <div class="field">
+                  <button
+                    #replaceButton
+                    type="button"
+                    class="btn"
+                    [attr.aria-disabled]="busy() ? 'true' : null"
+                    (click)="replace()"
+                  >
+                    Replace token
+                  </button>
+                  <button
+                    #removeButton
+                    type="button"
+                    class="btn ghost"
+                    [attr.aria-disabled]="busy() ? 'true' : null"
+                    (click)="remove()"
+                  >
+                    <app-icon name="trash" />Remove token
+                  </button>
+                </div>
+              }
+            }
+
+            @if (entering()) {
+              <form class="field" novalidate (submit)="save($event)">
+                <input
+                  #input
+                  id="token-input"
+                  class="input"
+                  type="password"
+                  name="token"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  placeholder="github_pat_…"
+                  [attr.aria-label]="
+                    token() ? 'New personal access token' : 'Personal access token'
+                  "
+                  [value]="draft()"
+                  [attr.aria-invalid]="problem() ? 'true' : null"
+                  [attr.aria-describedby]="problem() ? 'token-problem' : null"
+                  (input)="draft.set(input.value)"
+                />
+                <button
+                  type="submit"
+                  class="btn primary"
+                  [attr.aria-disabled]="busy() ? 'true' : null"
+                >
+                  Save token
+                </button>
+                @if (replacing()) {
+                  <button type="button" class="btn" (click)="cancel()">Cancel</button>
+                }
+              </form>
+            }
+            @if (problem(); as problem) {
+              <p id="token-problem" class="field-msg err" role="alert">
+                <app-icon name="alert" />{{ problem }}
+              </p>
+            }
+            <p class="help manage">
+              <a href="https://github.com/settings/tokens">{{ MANAGE_TOKENS }}</a>
+            </p>
+          </section>
+
+          <app-shortcut-settings />
+          <app-data-deletion />
+        </div>
+      </div>
+    </div>
   }
 </main>

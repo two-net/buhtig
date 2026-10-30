@@ -1,7 +1,8 @@
 import { Component, computed, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { Center } from '../center/center';
+import { Header } from '../header/header';
 import { signInUrl } from '../session/session';
-import { Wordmark } from '../wordmark/wordmark';
 
 /**
  * Where a visitor is sent to sign in, from the page they opened, when this instance of BuhTig is
@@ -10,32 +11,17 @@ import { Wordmark } from '../wordmark/wordmark';
  */
 @Component({
   selector: 'app-sign-in',
-  imports: [RouterLink, Wordmark],
+  imports: [Center, Header, RouterLink],
   templateUrl: './sign-in.html',
-  styles: `
-    .sign-in {
-      display: inline-block;
-      padding: 0.5rem 1.25rem;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      color: var(--text);
-      text-decoration: none;
-    }
-
-    .sign-in:hover {
-      background: var(--raised);
-    }
-
-    nav {
-      display: flex;
-      gap: 1.5rem;
-      margin-top: 2rem;
-    }
-  `,
 })
 export class SignIn {
   /** The page the visitor opened, to return to once they have signed in. */
   readonly returnTo = input<string | undefined>(undefined, { alias: 'return_to' });
 
   protected readonly signIn = computed(() => signInUrl(this.returnTo() ?? '/'));
+
+  protected readonly heading = 'This BuhTig instance is private';
+  protected readonly text =
+    'Sign in with your GitHub account to continue. BuhTig asks GitHub only who you are: it gets ' +
+    "no access to your private repositories, and it can't change anything on GitHub.";
 }

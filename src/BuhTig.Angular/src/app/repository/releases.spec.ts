@@ -1,132 +1,159 @@
-import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { Component, signal } from '@angular/core';
+import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Clock } from '../format/clock';
-import { relativeTime } from '../format/format';
-import { FAILED } from '../widget/messages';
-import { PRERELEASE } from './messages';
-import { RepositoryReleases } from './releases';
+import { provideRouter } from '@angular/router';
+import { RepositoryData } from '../dashboard/data';
+import { Releases, Stats } from '../dashboard/resources';
+import { exactDay, exactTime } from '../format/format';
+import { Load } from '../widget/load';
+import { FAILED, UNAVAILABLE } from '../widget/messages';
+import { LATEST, NO_RELEASES, PRERELEASE } from './messages';
+import { RepositoryReleasesTab } from './releases';
 
-@Component({
-  imports: [RepositoryReleases],
-  template: `<app-repository-releases [owner]="owner()" [repo]="repo()" />`,
-})
-class Host {
-  readonly owner = signal('acme');
-  readonly repo = signal('widget');
-}
-
-/** The latest releases of `acme/widget`, as the server gives them. */
-const WIDGET = {
+/** The latest releases of `acme/widget`, the latest first. */
+const RELEASES: Releases = {
   releases: [
     {
       tag: 'v3.0.0-rc.1',
-      name: null,
-      published_at: '2026-10-11T12:00:00Z',
+      name: undefined,
+      publishedAt: new Date('2026-10-11T12:00:00Z'),
       prerelease: true,
       url: 'https://github.com/acme/widget/releases/tag/v3.0.0-rc.1',
+      target: 'main',
     },
     {
       tag: 'v2.1.0',
       name: 'Widget 2.1',
-      published_at: '2026-10-01T12:00:00Z',
+      publishedAt: new Date('2026-10-01T12:00:00Z'),
       prerelease: false,
       url: 'https://github.com/acme/widget/releases/tag/v2.1.0',
+      target: undefined,
+    },
+    {
+      tag: 'v1',
+      name: 'One',
+      publishedAt: undefined,
+      prerelease: false,
+      url: undefined,
+      target: 'release/1.x',
     },
   ],
+  count: 42,
 };
 
-describe('RepositoryReleases', () => {
-  const now = new Date('2026-10-22T12:00:00Z').getTime();
-  let fixture: ComponentFixture<Host>;
-  let http: HttpTestingController;
+/** The stat cards of `acme/widget`, of which GitHub marks `latest` as the latest release. */
+const stats = (latest: string | undefined): Stats => ({
+  stars: 0,
+  forks: 0,
+  watchers: 0,
+  openIssues: 0,
+  openPullRequests: 0,
+  latestRelease:
+    latest === undefined ? undefined : { tag: latest, publishedAt: undefined, url: undefined },
+});
+
+describe('RepositoryReleasesTab', () => {
+  const releases = signal<Load<Releases>>({ status: 'loading' });
+  const statsState = signal<Load<Stats>>({ status: 'loading' });
+  const retry = vi.fn();
+  let fixture: ComponentFixture<RepositoryReleasesTab>;
 
   beforeEach(async () => {
+    releases.set({ status: 'loading' });
+    statsState.set({ status: 'loading' });
+    retry.mockClear();
     TestBed.configureTestingModule({
       providers: [
-        provideHttpClient(),
-        provideHttpClientTesting(),
-        { provide: Clock, useValue: { now: signal(now) } },
+        provideRouter([]),
+        {
+          provide: RepositoryData,
+          useValue: {
+            releases: () => ({ state: releases, retry }),
+            stats: () => ({ state: statsState, retry: () => {} }),
+          },
+        },
       ],
     });
-    http = TestBed.inject(HttpTestingController);
-    fixture = TestBed.createComponent(Host);
+    fixture = TestBed.createComponent(RepositoryReleasesTab);
     await fixture.whenStable();
-  });
-
-  afterEach(() => {
-    http.verify();
   });
 
   const element = () => fixture.nativeElement as HTMLElement;
-  const rows = () => [...element().querySelectorAll('ol > li')];
-  const message = () => element().querySelector('.message')?.textContent?.trim();
-  const ago = (time: string) => relativeTime(new Date(time), now);
+  const rows = () => [...element().querySelectorAll('li.release')];
+  const labels = () =>
+    rows().map((row) => [...row.querySelectorAll('h3 .label')].map((label) => label.textContent));
+  const message = () => element().querySelector('.w-state span')?.textContent;
+  /** The tag that `row` heads with, without its labels. */
+  const tag = (row: Element) => {
+    const heading = row.querySelector('h3')!.cloneNode(true) as Element;
+    heading.querySelectorAll('.label').forEach((label) => label.remove());
+    return heading.textContent?.trim();
+  };
 
-  /** The text that `element` shows, without the tooltips that hover and focus show. */
-  function shown(element: Element): string | undefined {
-    const copy = element.cloneNode(true) as Element;
-    copy.querySelectorAll('[role="tooltip"]').forEach((tooltip) => tooltip.remove());
-    return copy.textContent?.replace(/\s+/g, ' ').trim();
-  }
-
-  async function answer(body: object): Promise<void> {
-    http.expectOne('/-/api/repositories/acme/widget/releases').flush(body);
+  async function answer(data: Releases): Promise<void> {
+    releases.set({ status: 'ready', data });
     await fixture.whenStable();
   }
 
-  it('lists the latest releases with their tag, name and date (FR-REPO-08)', async () => {
-    await answer(WIDGET);
+  it('lists the latest releases with their tag, name, date and what each was made from (FR-REPO-08)', async () => {
     expect(element().querySelector('h2')?.textContent?.trim()).toBe('Releases');
+    await answer(RELEASES);
     expect(
-      rows().map((row) =>
-        ['.tag', '.name', '.badge', '.date'].map((part) => {
-          const found = row.querySelector(part);
-          return found ? shown(found) : undefined;
-        }),
-      ),
+      rows().map((row) => [
+        tag(row),
+        row.querySelector('.rel-name')?.textContent,
+        [...row.querySelectorAll('.m > span')].map((part) => part.textContent?.trim()),
+      ]),
     ).toEqual([
-      // Its name only repeated its tag, and it is marked as GitHub marks it.
-      ['v3.0.0-rc.1', undefined, PRERELEASE, ago('2026-10-11T12:00:00Z')],
-      ['v2.1.0', 'Widget 2.1', undefined, ago('2026-10-01T12:00:00Z')],
-    ]);
-  });
-
-  it("links each tag to the release's page on GitHub (FR-REPO-12)", async () => {
-    await answer(WIDGET);
-    expect(rows().map((row) => row.querySelector('a.tag')?.getAttribute('href'))).toEqual([
-      'https://github.com/acme/widget/releases/tag/v3.0.0-rc.1',
-      'https://github.com/acme/widget/releases/tag/v2.1.0',
-    ]);
-  });
-
-  it('links only to web pages, and leaves out a date it does not know', async () => {
-    await answer({
-      releases: [
-        { tag: 'v1', name: 'One', published_at: null, prerelease: false, url: 'javascript:x' },
+      // Its name only repeated its tag.
+      [
+        'v3.0.0-rc.1',
+        undefined,
+        [exactDay(RELEASES.releases[0].publishedAt!), 'v3.0.0-rc.1', 'main'],
       ],
-    });
-    expect(rows()).toHaveLength(1);
-    expect(rows()[0].querySelector('a, .date')).toBeNull();
-    expect(rows()[0].querySelector('.tag')?.textContent).toBe('v1');
+      ['v2.1.0', 'Widget 2.1', [exactDay(RELEASES.releases[1].publishedAt!), 'v2.1.0']],
+      ['v1', 'One', ['v1', 'release/1.x']],
+    ]);
+    const time = rows()[0].querySelector('time')!;
+    expect([time.getAttribute('datetime'), time.getAttribute('title')]).toEqual([
+      '2026-10-11T12:00:00.000Z',
+      exactTime(RELEASES.releases[0].publishedAt!),
+    ]);
   });
 
-  it('says when there are no releases', async () => {
-    await answer({ releases: [] });
-    expect(message()).toBe('No releases yet.');
-    expect(element().querySelector('ol, button')).toBeNull();
+  it('links each tag to its page on GitHub, when GitHub says where (FR-REPO-12)', async () => {
+    await answer(RELEASES);
+    expect(rows().map((row) => row.querySelector('h3 a')?.getAttribute('href'))).toEqual([
+      RELEASES.releases[0].url,
+      RELEASES.releases[1].url,
+      undefined,
+    ]);
+  });
+
+  it('marks pre-releases, and the release GitHub marks as the latest once known', async () => {
+    await answer(RELEASES);
+    expect(labels()).toEqual([[PRERELEASE], [], []]);
+    statsState.set({ status: 'ready', data: stats('v2.1.0') });
+    await fixture.whenStable();
+    expect(labels()).toEqual([[PRERELEASE], [LATEST], []]);
+    statsState.set({ status: 'ready', data: stats(undefined) });
+    await fixture.whenStable();
+    expect(labels()).toEqual([[PRERELEASE], [], []]);
+  });
+
+  it('says when there are no releases (FR-REPO-11)', async () => {
+    await answer({ releases: [], count: 0 });
+    expect(message()).toBe(NO_RELEASES);
+    expect(element().querySelector('ul, button')).toBeNull();
   });
 
   it('says when they failed to load, and tries again (FR-REPO-09)', async () => {
-    http
-      .expectOne('/-/api/repositories/acme/widget/releases')
-      .flush(null, { status: 502, statusText: 'Bad Gateway' });
+    releases.set({ status: 'error', failure: 'unavailable' });
+    await fixture.whenStable();
+    expect(message()).toBe(UNAVAILABLE);
+    element().querySelector('button')!.click();
+    expect(retry).toHaveBeenCalledOnce();
+    releases.set({ status: 'error', failure: 'github' });
     await fixture.whenStable();
     expect(message()).toBe(FAILED);
-    element().querySelector('button')!.click();
-    await fixture.whenStable();
-    await answer(WIDGET);
-    expect(rows()).toHaveLength(2);
   });
 });

@@ -1,80 +1,96 @@
 import { Component, computed, inject, input } from '@angular/core';
-import { Column, ColumnChart } from '../chart/columns';
-import { CommitActivity, Resources } from '../dashboard/resources';
+import { Column, ColumnChart, Tick } from '../chart/columns';
+import { ChartTable } from '../chart/table';
+import { RepositoryData } from '../dashboard/data';
+import { CommitActivity } from '../dashboard/resources';
 import { exactNumber, monthLabel, weekDate } from '../format/format';
-import { load } from '../widget/load';
+import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
 import {
-  ACTIVITY_CHART,
   ACTIVITY_HEADERS,
+  NO_RECENT_COMMITS,
+  NO_RECENT_COMMITS_ARCHIVED,
   activityDescription,
-  activityTotal,
-  weekSummary,
+  weekOf,
 } from './messages';
-
-/** How many weeks a month's label needs, so that the last one stays within the chart. */
-const LABEL_WEEKS = 3;
-
-/** The chart of a repository's commit activity, as it is drawn. */
-interface Chart {
-  columns: Column[];
-  /** The months that start within the chart, labelled where they start, of 100. */
-  months: { label: string; at: number }[];
-  total: string;
-  summary: string;
-}
 
 /**
  * A repository's commits per week to its default branch over the last 52 weeks, as a chart of
- * columns (FR-REPO-03). Pointing at a week tells its commits. Its text alternative says what it
- * shows in all, and lists every week's commits on request (NFR-UX-04).
+ * columns, with its months below (FR-REPO-03). Pointing at a week tells its commits. Its summary
+ * says what it shows in all, and its table lists every week's commits, newest first (NFR-UX-04).
  */
 @Component({
   selector: 'app-repository-activity',
   imports: [ColumnChart, Loaded, Widget],
-  templateUrl: './activity.html',
-  styleUrl: './activity.css',
+  template: `
+    <app-widget
+      heading="Commit activity"
+      [empty]="empty()"
+      emptyIcon="clock"
+      [summary]="summary()"
+      [table]="table()"
+    >
+      <ng-template [appLoaded]="activity" let-activity>
+        <app-column-chart
+          [columns]="columns()"
+          [ticks]="ticks()"
+          unit="commits"
+          [summary]="summary()"
+          [height]="height()"
+        />
+      </ng-template>
+    </app-widget>
+  `,
 })
 export class RepositoryActivity {
-  private readonly resources = inject(Resources);
+  private readonly data = inject(RepositoryData);
 
-  /** The repository's names, as the URL has them. */
-  readonly owner = input.required<string>();
-  readonly repo = input.required<string>();
+  /** How high the chart is, in pixels. */
+  readonly height = input(180);
 
-  protected readonly activity = load(
-    () => this.resources.commitActivity(this.owner(), this.repo()),
-    (activity) => activity.total === 0,
+  protected readonly activity = emptyWhen(this.data.activity(), (activity) => activity.total === 0);
+
+  private readonly ready = computed(() => {
+    const state = this.activity.state();
+    return state.status === 'ready' ? state.data : undefined;
+  });
+
+  protected readonly empty = computed(() =>
+    this.data.repository()?.archived ? NO_RECENT_COMMITS_ARCHIVED : NO_RECENT_COMMITS,
   );
 
-  protected readonly chart = computed(() => {
-    const state = this.activity.state();
-    return state.status === 'ready' ? chart(state.data) : undefined;
+  protected readonly columns = computed((): Column[] =>
+    (this.ready()?.weeks ?? []).map((week) => ({ value: week.commits, label: weekOf(week.start) })),
+  );
+
+  protected readonly ticks = computed(() => ticks(this.ready()));
+
+  protected readonly summary = computed(() => {
+    const activity = this.ready();
+    return activity ? activityDescription(activity, this.data.repository()?.defaultBranch) : '';
   });
 
-  protected readonly name = ACTIVITY_CHART;
-  protected readonly headers = ACTIVITY_HEADERS;
+  protected readonly table = computed((): ChartTable | undefined => {
+    const activity = this.ready();
+    return activity
+      ? {
+          headers: ACTIVITY_HEADERS,
+          rows: [...activity.weeks]
+            .reverse()
+            .map((week) => ({ label: weekDate(week.start), value: exactNumber(week.commits) })),
+        }
+      : undefined;
+  });
 }
 
-/** How `activity` is drawn, a column for each week, with the months labelled under them. */
-function chart(activity: CommitActivity): Chart {
-  const weeks = activity.weeks;
-  const months = weeks.flatMap((week, index) => {
+/** The months under the chart, where each starts, all but each quarter's first minor. */
+function ticks(activity: CommitActivity | undefined): Tick[] {
+  const weeks = activity?.weeks ?? [];
+  return weeks.flatMap((week, index) => {
     const before = weeks[index - 1];
-    const starts = before !== undefined && before.start.getUTCMonth() !== week.start.getUTCMonth();
-    return starts && index <= weeks.length - LABEL_WEEKS
-      ? [{ label: monthLabel(week.start), at: (index / weeks.length) * 100 }]
+    const month = week.start.getUTCMonth();
+    return before !== undefined && before.start.getUTCMonth() !== month
+      ? [{ at: index, label: monthLabel(week.start), minor: month % 3 !== 0 }]
       : [];
   });
-  return {
-    columns: weeks.map((week) => ({
-      value: week.commits,
-      readout: weekSummary(week),
-      label: weekDate(week.start),
-      cell: exactNumber(week.commits),
-    })),
-    months,
-    total: activityTotal(activity),
-    summary: activityDescription(activity),
-  };
 }

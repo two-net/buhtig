@@ -2,6 +2,9 @@
 <span [class.final]="counted() !== undefined">
   @if (compact() === exact()) {
     {{ exact() }}
+  } @else if (plain()) {
+    <span [title]="exact()" aria-hidden="true">{{ compact() }}</span
+    ><span class="sr">{{ exact() }}</span>
   } @else {
     <app-exact [value]="exact()">{{ compact() }}</app-exact>
   }

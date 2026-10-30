@@ -1,7 +1,8 @@
 //! Whether a GitHub account is an organization or a user, and how GitHub spells its name.
 //! The search box asks before it opens an organization's dashboard, since BuhTig has none
 //! for users (FR-SRCH-06). The dashboard asks so as to show the name as GitHub spells it
-//! (FR-NAV-04).
+//! (FR-NAV-04). For a user, the page that says so suggests some of their repositories
+//! instead (FR-SRCH-06).
 
 use std::sync::Arc;
 
@@ -14,9 +15,13 @@ use tracing::error;
 
 use crate::cache::{self, Cache, Cached, Outcome, Viewer};
 use crate::github;
+use crate::repositories::{data, names, visibility};
 
 /// The longest account name GitHub allows.
 const MAX_LENGTH: usize = 39;
+
+/// FR-SRCH-06: the repositories suggested in place of a user's dashboard.
+const SUGGESTED: usize = 6;
 
 /// `/-/api/accounts/{name}`: `{"type": "organization" | "user", "login": …, "fetched_at": …}`,
 /// where `login` is the name as GitHub spells it, whatever case it was asked for in
@@ -62,6 +67,69 @@ pub async fn kind(
     }
 }
 
+/// `/-/api/users/{login}/repositories`: up to 6 of the repositories that the user `login`
+/// owns, those pushed to most recently first, which the page that says `login` is a user's
+/// account suggests opening instead (FR-SRCH-06),
+///
+/// ```json
+/// {"login": "octocat", "repositories": [{"name": "octocat/Hello-World"}, …]}
+/// ```
+///
+/// `login` is the user's login as GitHub spells it, from their repositories, or as it was
+/// asked for if they have none. Each `name` is a repository's `owner/repo`, as GitHub spells
+/// it, for its dashboard (FR-NAV-04). Forks are among them, as GitHub lists them, and
+/// private and internal ones are not. GitHub lists only public ones to any credential but a
+/// PAT, and the cache answers a list that holds any other as not found, and keeps it out of
+/// the shared cache (FR-DATA-04). A PAT's reads are cached for its user alone, yet only the
+/// public ones are suggested to anyone. The list is read for the dashboard at `/{login}`, as
+/// [`kind`] reads the account, so a visitor's load of both counts once (FR-DATA-10).
+///
+/// 404 if there is no such account. A name that cannot be an account's is 400, without
+/// asking GitHub (FR-SRCH-04). Its other statuses are those of a dashboard's data, as
+/// [`data`] tells them.
+pub async fn repositories(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path(login): Path<String>,
+) -> Response {
+    if !is_account_name(&login) {
+        return status(StatusCode::BAD_REQUEST);
+    }
+    let path = github::Path::new(["users", login.as_str(), "repos"])
+        .expect("an account name is neither empty nor dots")
+        .query("type", "owner")
+        .query("sort", "pushed");
+    let list = cache
+        .get_list(&viewer, &format!("/{login}"), &path, SUGGESTED)
+        .await;
+    let list = match data(list) {
+        Ok(list) => list.data,
+        Err(code) => return status(code),
+    };
+    let suggested: Vec<&str> = list
+        .items
+        .iter()
+        .filter(|repository| visibility(repository) == "public")
+        .filter_map(|repository| repository.get("full_name")?.as_str())
+        .filter(|name| names(name).is_some())
+        .collect();
+    // As GitHub spells it, in the names of the repositories it lists as theirs.
+    let spelled = suggested
+        .iter()
+        .filter_map(|name| names(name).map(|(owner, _)| owner))
+        .find(|owner| owner.eq_ignore_ascii_case(&login))
+        .unwrap_or(&login);
+    let suggested: Vec<Value> = suggested
+        .iter()
+        .map(|name| json!({ "name": name }))
+        .collect();
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({ "login": spelled, "repositories": suggested })),
+    )
+        .into_response()
+}
+
 /// Whether `name` can be a GitHub account's (FR-SRCH-04): up to 39 letters, digits,
 /// hyphens and underscores, not starting with a hyphen.
 ///
@@ -95,6 +163,7 @@ mod tests {
     use std::time::Duration;
 
     use axum::http::HeaderMap;
+    use axum::http::header::AUTHORIZATION;
     use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
     use sea_orm::sea_query::prelude::chrono::TimeDelta;
     use url::Url;
@@ -106,8 +175,28 @@ mod tests {
     use crate::test_cluster::cluster;
     use crate::visitors::Visitor;
 
-    /// A stub GitHub with an organization `Acme`, a user `octocat`, and a few odd answers.
-    /// Like GitHub, it ignores the case of names.
+    /// The repositories of the user `Mona`, pushed to most recently first, as GitHub lists
+    /// them to any credential, with some odd ones.
+    const MONAS: &str = r#"[
+        {"full_name": "Mona/widget", "private": false, "visibility": "public", "fork": false},
+        {"full_name": "Mona/fork", "private": false, "visibility": "public", "fork": true},
+        {"full_name": "../evil", "private": false},
+        {"name": "nameless", "private": false},
+        "odd",
+        {"full_name": "Mona/gadget", "private": false}
+    ]"#;
+
+    /// As GitHub lists them to Mona's PAT: her private and internal ones too.
+    const MONAS_TO_HER_PAT: &str = r#"[
+        {"full_name": "Mona/widget", "private": false, "visibility": "public", "fork": false},
+        {"full_name": "Mona/diary", "private": true, "visibility": "private"},
+        {"full_name": "Mona/inner", "private": true, "visibility": "internal"},
+        {"full_name": "Mona/gadget", "private": false}
+    ]"#;
+
+    /// A stub GitHub with an organization `Acme`, the users `octocat`, who has no
+    /// repositories, and `Mona`, and a few odd answers. Like GitHub, it ignores the case of
+    /// names.
     fn github() -> Arc<Stub> {
         Stub::new(
             |request| match request.uri().path().to_ascii_lowercase().as_str() {
@@ -115,7 +204,16 @@ mod tests {
                 "/users/octocat" => answer(200, &[], r#"{"login": "octocat", "type": "User"}"#),
                 "/users/mannequin" => answer(200, &[], r#"{"login": "mannequin", "type": "?"}"#),
                 "/users/nameless" => answer(200, &[], r#"{"type": "Organization"}"#),
-                "/users/broken" => answer(500, &[], r#"{"message": "Server Error"}"#),
+                "/users/broken" | "/users/broken/repos" => {
+                    answer(500, &[], r#"{"message": "Server Error"}"#)
+                }
+                "/users/octocat/repos" => answer(200, &[], "[]"),
+                "/users/mona/repos" if request.headers()[AUTHORIZATION] == "Bearer pat" => {
+                    answer(200, &[], MONAS_TO_HER_PAT)
+                }
+                "/users/mona/repos" => answer(200, &[], MONAS),
+                // As GitHub would not: a private one, without a PAT.
+                "/users/leaky/repos" => answer(200, &[], MONAS_TO_HER_PAT),
                 _ => answer(404, &[], r#"{"message": "Not Found"}"#),
             },
         )
@@ -295,6 +393,138 @@ mod tests {
         let stub = github();
         let cache = cache(&stub, 0).await;
         assert_eq!(ask(&cache, "acme").await.0, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            suggest(&cache, "mona").await,
+            (StatusCode::TOO_MANY_REQUESTS, Value::Null)
+        );
         assert_eq!(stub.urls(), Vec::<String>::new());
+    }
+
+    /// The status and body of a visitor's request for the repositories that the page about
+    /// the user `login` suggests, as JSON, `null` if there is none.
+    async fn suggest(cache: &Arc<Cache>, login: &str) -> (StatusCode, Value) {
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let response = repositories(State(cache.clone()), visitor, Path(login.to_owned())).await;
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
+
+    #[tokio::test]
+    async fn a_users_own_repositories_pushed_to_last_are_suggested() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            suggest(&cache, "mona").await,
+            (
+                StatusCode::OK,
+                json!({
+                    // As GitHub spells it.
+                    "login": "Mona",
+                    // Forks too, and none that is not a repository's.
+                    "repositories": [
+                        {"name": "Mona/widget"},
+                        {"name": "Mona/fork"},
+                        {"name": "Mona/gadget"},
+                    ],
+                })
+            )
+        );
+        // As it was asked for, without any repositories to tell how GitHub spells it.
+        assert_eq!(
+            suggest(&cache, "OctoCat").await,
+            (
+                StatusCode::OK,
+                json!({"login": "OctoCat", "repositories": []})
+            )
+        );
+        // Up to 6, those the user owns, pushed to most recently first, and then cached.
+        assert_eq!(suggest(&cache, "mona").await.0, StatusCode::OK);
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://api.github.com/users/mona/repos?type=owner&sort=pushed&per_page=6",
+                "https://api.github.com/users/OctoCat/repos?type=owner&sort=pushed&per_page=6",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn only_public_repositories_are_suggested() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let token_user = Viewer::TokenUser {
+            user_id: 1,
+            credential_id: 1,
+            pat: Secret::new("pat".to_owned()),
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let response =
+            repositories(State(cache.clone()), token_user, Path("mona".to_owned())).await;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({
+                "login": "Mona",
+                "repositories": [{"name": "Mona/widget"}, {"name": "Mona/gadget"}],
+            })
+        );
+        // As a safeguard, a list that holds a private one is not found without a PAT, as
+        // the cache answers it, and kept out of the shared cache (FR-DATA-04).
+        assert_eq!(
+            suggest(&cache, "leaky").await,
+            (StatusCode::NOT_FOUND, Value::Null)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_account_and_its_suggestions_are_one_load() {
+        let stub = github();
+        // One load an hour.
+        let cache = cache(&stub, 1).await;
+        assert_eq!(ask(&cache, "octocat").await.0, StatusCode::OK);
+        assert_eq!(suggest(&cache, "OCTOCAT").await.0, StatusCode::OK);
+        assert_eq!(
+            suggest(&cache, "mona").await,
+            (StatusCode::TOO_MANY_REQUESTS, Value::Null)
+        );
+        assert_eq!(stub.urls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn suggestions_github_cannot_tell_are_not_an_answer() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            suggest(&cache, "nobody").await,
+            (StatusCode::NOT_FOUND, Value::Null)
+        );
+        assert_eq!(
+            suggest(&cache, "broken").await,
+            (StatusCode::BAD_GATEWAY, Value::Null)
+        );
+        for login in [
+            "",
+            "-mona",
+            "mona.com",
+            "mona/repo",
+            "mo na",
+            &"a".repeat(40),
+        ] {
+            assert_eq!(
+                suggest(&cache, login).await,
+                (StatusCode::BAD_REQUEST, Value::Null),
+                "{login}"
+            );
+        }
+        assert_eq!(stub.urls().len(), 2);
     }
 }

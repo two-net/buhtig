@@ -1,40 +1,49 @@
 @if (user(); as user) {
-  <button
-    #button
-    type="button"
-    class="avatar"
-    [attr.aria-expanded]="open()"
-    [attr.aria-controls]="open() ? 'account-menu' : null"
-    (click)="toggle()"
-  >
-    <img [src]="user.avatar_url" alt="" width="32" height="32" />
-    <span class="visually-hidden">Account menu, {{ user.login }}</span>
-  </button>
-  @if (open()) {
-    <div id="account-menu" class="menu">
-      <p>
-        @if (user.name) {
-          <strong>{{ user.name }}</strong>
-        }
-        <span>{{ user.login }}</span>
-      </p>
-      <ul>
-        <li><a routerLink="/-/settings">Settings</a></li>
-        <li>
-          <form method="post" action="/-/auth/sign-out">
-            <button type="submit">Sign out</button>
-          </form>
-        </li>
-      </ul>
-    </div>
-  } @else if (tokenNote(); as note) {
-    <p class="note" role="status">
-      {{ note }} <a routerLink="/-/settings">{{ REPLACE_TOKEN }}</a>
-    </p>
-  }
+  <div class="acct-wrap">
+    <button
+      #button
+      type="button"
+      class="avatar-btn"
+      aria-haspopup="menu"
+      [attr.aria-expanded]="open()"
+      [attr.aria-controls]="open() ? 'account-menu' : null"
+      [attr.aria-label]="'Account menu for @' + user.login"
+      (click)="toggle()"
+    >
+      <app-avatar [name]="user.login" [src]="user.avatar_url" [size]="32" [round]="true" />
+    </button>
+    @if (open()) {
+      <div #menu id="account-menu" class="menu" (keydown)="keydown($event)">
+        <div class="who">
+          <app-avatar [name]="user.login" [src]="user.avatar_url" [size]="32" [round]="true" />
+          <div>
+            <strong>&#64;{{ user.login }}</strong>
+            @if (user.name) {
+              <small>{{ user.name }}</small>
+            }
+          </div>
+        </div>
+        <p class="tok"><app-icon name="key" />{{ token() }}</p>
+        <ul role="menu" aria-label="Account">
+          <li role="none">
+            <a role="menuitem" routerLink="/" (click)="open.set(false)"
+              ><app-icon name="home" />Home</a
+            >
+          </li>
+          <li role="none">
+            <a role="menuitem" routerLink="/-/settings" (click)="open.set(false)"
+              ><app-icon name="sliders" />Settings</a
+            >
+          </li>
+          <li role="none">
+            <form method="post" action="/-/auth/sign-out">
+              <button role="menuitem" type="submit"><app-icon name="logout" />Sign out</button>
+            </form>
+          </li>
+        </ul>
+      </div>
+    }
+  </div>
 } @else if (user() === null) {
-  <a class="sign-in" [href]="signIn()">Sign in</a>
-  @if (ended()) {
-    <p class="ended" role="alert">{{ ENDED }}</p>
-  }
+  <a class="btn sm" [href]="signIn()">Sign in</a>
 }

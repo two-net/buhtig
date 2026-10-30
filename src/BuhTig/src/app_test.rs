@@ -343,7 +343,14 @@ const SIGNED_IN_ONLY: [(Method, &str); 8] = [
 async fn visitors_in_public_mode_see_public_data_only() {
     let served = serve("public").await;
 
-    for page in ["/", "/octo/public", "/octo", "/-/settings"] {
+    for page in [
+        "/",
+        "/octo/public",
+        "/octo/public/issues",
+        "/octo",
+        "/orgs/octo/people",
+        "/-/settings",
+    ] {
         let answer = served.get(&VISITOR, page).await;
         assert_eq!(answer.status, 200, "{page}: {answer:?}");
     }
@@ -381,7 +388,20 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
     for (page, location) in [
         ("/", "/-/sign-in"),
         ("/octo/public", "/-/sign-in?return_to=%2Focto%2Fpublic"),
+        (
+            "/octo/public/issues",
+            "/-/sign-in?return_to=%2Focto%2Fpublic%2Fissues",
+        ),
+        // Back to where it leads, once signed in.
+        (
+            "/octo/public/pull/1",
+            "/-/sign-in?return_to=%2Focto%2Fpublic%2Fpull%2F1",
+        ),
         ("/octo", "/-/sign-in?return_to=%2Focto"),
+        (
+            "/orgs/octo/people",
+            "/-/sign-in?return_to=%2Forgs%2Focto%2Fpeople",
+        ),
         ("/-/settings", "/-/sign-in?return_to=%2F-%2Fsettings"),
     ] {
         let answer = served.get(&VISITOR, page).await;
@@ -396,8 +416,11 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
         "/-/api/repositories/octo/public/stats",
         "/-/api/organizations/octo",
         "/-/api/organizations/octo/repositories",
+        "/-/api/organizations/octo/repositories/public/commit-activity",
         "/-/api/accounts/octo",
+        "/-/api/users/octo/repositories",
         "/-/api/surprise",
+        "/-/api/recent",
     ] {
         let answer = served.get(&VISITOR, path).await;
         assert_eq!(answer.status, 401, "{path}: {answer:?}");
@@ -565,6 +588,60 @@ async fn one_users_pat_never_serves_another() {
     );
     // Mona's list went to the shared cache, from which the visitor's came.
     assert_eq!(served.credentials_for("/orgs/octo/repos"), [pat, mona]);
+}
+
+/// FR-DATA-04, FR-ACC-06: the repositories that the home page offers anyone as viewed
+/// last are only those in the shared cache. What a token user's PAT fetched is never among
+/// them, even a public repository, until someone reads it without a PAT, and then it is
+/// what that read fetched.
+#[tokio::test(flavor = "multi_thread")]
+async fn what_a_pat_fetched_is_never_offered_as_viewed_last() {
+    let served = serve("public").await;
+    let mona = served.mona().await;
+    let hubot = served.hubot().await;
+    let offered = async |viewer: &Viewer| {
+        let recent = served.get(viewer, "/-/api/recent").await;
+        assert_eq!(recent.status, 200, "{recent:?}");
+        let names: Vec<String> = recent.json()["repositories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|repository| repository["name"].as_str().unwrap().to_owned())
+            .collect();
+        names
+    };
+
+    for repo in ["public", "secret", "inner"] {
+        let path = format!("/-/api/repositories/octo/{repo}");
+        assert_eq!(served.get(&hubot, &path).await.status, 200, "{path}");
+    }
+    assert_eq!(
+        served
+            .get(&hubot, "/-/api/organizations/octo/repositories")
+            .await
+            .status,
+        200
+    );
+    for viewer in [&VISITOR, &mona, &hubot] {
+        assert_eq!(offered(viewer).await, Vec::<String>::new());
+    }
+
+    // Others read without a PAT, which GitHub answers as not found for the private ones.
+    for viewer in [&VISITOR, &mona] {
+        for repo in ["public", "secret", "inner", "leaky"] {
+            served
+                .get(viewer, &format!("/-/api/repositories/octo/{repo}"))
+                .await;
+        }
+    }
+    for viewer in [&VISITOR, &mona, &hubot] {
+        assert_eq!(offered(viewer).await, ["octo/public"]);
+    }
+    // Hubot's PAT read the public one first, and visitors' requests were the next to.
+    assert_eq!(
+        served.credentials_for("/repos/octo/public"),
+        [format!("Bearer {HUBOTS_PAT}").as_str(), APP]
+    );
 }
 
 /// FR-DATA-04: once visitors, signed-in users and a token user have all looked at

@@ -26,14 +26,11 @@ describe('Surprise', () => {
   });
 
   const button = () => (fixture.nativeElement as HTMLElement).querySelector('button');
-  const slot = () => (fixture.nativeElement as HTMLElement).querySelector('.slot');
 
-  it('keeps its place while the server picks, so that nothing moves once it is there', async () => {
+  it('shows nothing until the server has picked a repository', async () => {
     expect(button()).toBeNull();
-    expect(slot()?.getAttribute('aria-hidden')).toBe('true');
     http.expectOne('/-/api/surprise').flush({ name: 'owner/repo' });
     await fixture.whenStable();
-    expect(slot()).toBeNull();
     expect(button()).not.toBeNull();
   });
 
@@ -41,11 +38,9 @@ describe('Surprise', () => {
     http.expectOne('/-/api/surprise').flush(null, { status: 404, statusText: 'Not Found' });
     await fixture.whenStable();
     expect(button()).toBeNull();
-    expect(slot()).toBeNull();
   });
 
   it('is hidden when the server cannot say', async () => {
-    expect(button()).toBeNull();
     http
       .expectOne('/-/api/surprise')
       .flush(null, { status: 503, statusText: 'Service Unavailable' });
@@ -57,9 +52,10 @@ describe('Surprise', () => {
     http.expectOne('/-/api/surprise').flush({ name: 'owner/repo' });
     await fixture.whenStable();
     expect(button()!.textContent?.trim()).toBe('Surprise me');
-    // It does not submit the search box's form, which it sits in.
+    // It submits no form that it may sit in.
     expect(button()!.type).toBe('button');
+    expect(navigate).not.toHaveBeenCalled();
     button()!.click();
-    expect(navigate).toHaveBeenCalledWith('/owner/repo');
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/owner/repo');
   });
 });

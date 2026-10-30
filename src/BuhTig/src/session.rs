@@ -35,7 +35,7 @@ use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
-use sea_orm::sea_query::prelude::chrono::TimeDelta;
+use sea_orm::sea_query::prelude::chrono::{SecondsFormat, TimeDelta};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set, TransactionTrait,
@@ -89,6 +89,8 @@ pub struct Profile {
 /// A signed-in user, the credential they signed in with, and their PAT.
 pub struct SignedIn {
     pub user: user::Model,
+    /// When they signed in, starting the session that the request carries.
+    pub signed_in_at: DateTimeUtc,
     pub sign_in: Secret<String>,
     /// Their PAT's row, if they have saved one, which tells what Settings shows of it.
     pub pat: Option<credential::Model>,
@@ -298,6 +300,7 @@ impl Sessions {
         }
         Ok(Some(SignedIn {
             user,
+            signed_in_at: session.created_at,
             sign_in,
             pat,
             token,
@@ -429,6 +432,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Viewer {
                 sign_in,
                 pat,
                 token,
+                ..
             })) => Ok(match pat.zip(token) {
                 Some((pat, token)) => Viewer::TokenUser {
                     user_id: user.id,
@@ -454,22 +458,29 @@ impl<S: Send + Sync> FromRequestParts<S> for Viewer {
 }
 
 /// `/-/api/session`: `{"user": null, "token": null}` for a visitor. For a signed-in user,
-/// `{"user": {"login": …, "name": … or null, "avatar_url": …}, "token": … or null}`: the
-/// user as GitHub described them when they last signed in, and what Settings shows of their
-/// PAT, as [`tokens::describe`] gives it, if they have saved one.
+/// `{"user": {"login": …, "name": … or null, "avatar_url": …, "signed_in_at": …},
+/// "token": … or null}`: the user as GitHub described them when they last signed in, when
+/// they signed in to the session that the request carries, as the UI is told times, such as
+/// `2026-10-22T12:00:00.123Z`, and what Settings shows of their PAT, as [`tokens::describe`]
+/// gives it, if they have saved one.
 pub async fn current(
     Extension(sessions): Extension<Arc<Sessions>>,
     headers: HeaderMap,
 ) -> Response {
     match sessions.resolve(&headers).await {
         Ok(signed_in) => {
-            let user = signed_in.as_ref().map(|SignedIn { user, .. }| {
-                json!({
-                    "login": user.login,
-                    "name": user.name,
-                    "avatar_url": user.avatar_url,
-                })
-            });
+            let user = signed_in.as_ref().map(
+                |SignedIn {
+                     user, signed_in_at, ..
+                 }| {
+                    json!({
+                        "login": user.login,
+                        "name": user.name,
+                        "avatar_url": user.avatar_url,
+                        "signed_in_at": signed_in_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+                    })
+                },
+            );
             let token = signed_in
                 .as_ref()
                 .and_then(|signed_in| signed_in.pat.as_ref())
@@ -986,12 +997,40 @@ mod tests {
             current(HeaderMap::new()).await,
             ok(r#"{"token":null,"user":null}"#)
         );
+        // When the session began, as the UI is told times.
+        let signed_in_at = rows(&db).await[0]
+            .created_at
+            .to_rfc3339_opts(SecondsFormat::Millis, true);
+        assert!(signed_in_at.ends_with('Z') && signed_in_at.len() == 24);
         assert_eq!(
             current(carrying(&cookie)).await,
-            ok(
-                r#"{"token":null,"user":{"avatar_url":"https://avatars.githubusercontent.com/u/583231","login":"Mona","name":"Mona Lisa"}}"#
-            )
+            ok(&format!(
+                r#"{{"token":null,"user":{{"avatar_url":"https://avatars.githubusercontent.com/u/583231","login":"Mona","name":"Mona Lisa","signed_in_at":"{signed_in_at}"}}}}"#
+            ))
         );
+    }
+
+    #[tokio::test]
+    async fn the_ui_is_told_when_the_session_began() {
+        let db = database().await;
+        let sessions = sessions(&db, KEY, settings(&[]));
+        let first = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(0))
+            .await
+            .unwrap();
+        let second = sessions
+            .sign_in_at(mona(), &token("gho_mona"), &HeaderMap::new(), at(DAY))
+            .await
+            .unwrap();
+        // Each session its own, used since.
+        for (cookie, began) in [(&first, at(0)), (&second, at(DAY))] {
+            let signed_in = sessions
+                .resolve_at(&carrying(cookie), at(2 * DAY))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(signed_in.signed_in_at, began);
+        }
     }
 
     /// Saves a classic PAT, sealed as `sealed`, for the user `user_id`.

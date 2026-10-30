@@ -1,97 +1,115 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { Component, signal } from '@angular/core';
+import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Router, provideRouter } from '@angular/router';
-import type { MockInstance } from 'vitest';
-import { Clock } from '../format/clock';
-import { compactNumber, relativeTime } from '../format/format';
+import { provideRouter } from '@angular/router';
+import type { Mock } from 'vitest';
+import { OrganizationData } from '../dashboard/data';
+import { ListedRepository } from '../dashboard/resources';
+import { Load } from '../widget/load';
 import { FAILED } from '../widget/messages';
-import { NO_MATCH, pageRange, repositoryCount } from './messages';
-import { OrganizationRepositories } from './repositories';
+import { FIND_REPOSITORY, NO_REPOSITORIES, listed, noMatch } from './messages';
+import { OrganizationRepositoriesTab } from './repositories';
 
-@Component({
-  imports: [OrganizationRepositories],
-  template: `<app-organization-repositories [org]="org()" />`,
-})
-class Host {
-  readonly org = signal('acme');
+/** A repository of `acme` named `name`, with `details` in place of the plainest. */
+function repository(name: string, details: Partial<ListedRepository> = {}): ListedRepository {
+  return {
+    name,
+    path: `/acme/${name}`,
+    description: undefined,
+    language: undefined,
+    stars: 0,
+    forks: 0,
+    openIssuesAndPullRequests: 0,
+    pushedAt: undefined,
+    fork: false,
+    archived: false,
+    visibility: 'public',
+    topics: [],
+    ...details,
+  };
 }
 
-/** `acme/widget`, as the server lists it. */
-const WIDGET = {
-  name: 'widget',
-  description: 'Widgets for everyone',
-  language: 'Rust',
-  stars: 1_200,
-  forks: 30,
-  open_issues_and_pull_requests: 12,
-  pushed_at: '2026-10-20T08:00:00Z',
-  fork: false,
-  archived: false,
-  visibility: 'public',
-};
-
-/** A repository named `name`, as the server lists it, with `details` in place of `widget`'s. */
-function listed(name: string, details: object = {}): object {
-  return { ...WIDGET, name, description: null, ...details };
+/** What stands in for the browser's IntersectionObserver, which sees nothing come into view. */
+class Unseeing {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): [] {
+    return [];
+  }
 }
 
-describe('OrganizationRepositories', () => {
-  const now = new Date('2026-10-22T12:00:00Z').getTime();
-  let fixture: ComponentFixture<Host>;
+describe('OrganizationRepositoriesTab', () => {
+  const scrolling = Element.prototype.scrollIntoView;
+  let fixture: ComponentFixture<OrganizationRepositoriesTab>;
   let http: HttpTestingController;
-  let navigate: MockInstance<Router['navigateByUrl']>;
+  let state: ReturnType<typeof signal<Load<ListedRepository[]>>>;
+  let retry: Mock<() => void>;
+  let scrollIntoView: Mock<Element['scrollIntoView']>;
 
   beforeEach(async () => {
+    // So that the rows' sparklines load nothing, which `repository-row.spec.ts` tests.
+    vi.stubGlobal('IntersectionObserver', Unseeing);
+    // The tests' jsdom scrolls nothing, and has no way to.
+    scrollIntoView = vi.fn<Element['scrollIntoView']>();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    state = signal<Load<ListedRepository[]>>({ status: 'loading' });
+    retry = vi.fn();
     TestBed.configureTestingModule({
+      imports: [OrganizationRepositoriesTab],
       providers: [
+        provideRouter([]),
         provideHttpClient(),
         provideHttpClientTesting(),
-        provideRouter([]),
-        { provide: Clock, useValue: { now: signal(now) } },
+        {
+          provide: OrganizationData,
+          useValue: {
+            login: signal('acme'),
+            displayName: signal('Acme Corp'),
+            repositories: () => ({ state, retry }),
+            languageColor: signal(() => 'var(--s1)'),
+          },
+        },
       ],
     });
     http = TestBed.inject(HttpTestingController);
-    navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
-    fixture = TestBed.createComponent(Host);
+    fixture = TestBed.createComponent(OrganizationRepositoriesTab);
     await fixture.whenStable();
   });
 
   afterEach(() => {
     http.verify();
+    vi.unstubAllGlobals();
+    Element.prototype.scrollIntoView = scrolling;
   });
 
   const element = () => fixture.nativeElement as HTMLElement;
-  const rows = () => [...element().querySelectorAll('tbody tr')];
-  /** The names of the repositories that the table shows, in its order. */
-  const names = () => rows().map((row) => row.querySelector('.name a')?.textContent?.trim());
-  const status = () => element().querySelector('[role="status"]')?.textContent?.trim();
-  const header = (label: string) =>
-    [...element().querySelectorAll('th')].find((th) => th.textContent?.trim() === label)!;
-  const button = (label: string) =>
-    [...element().querySelectorAll('button')].find(
-      (button) => button.textContent?.trim() === label,
+  /** The names of the repositories listed, in their order. */
+  const names = () =>
+    [...element().querySelectorAll('app-repository-row')].map(
+      (row) => row.querySelector('h3 a')!.textContent,
+    );
+  const status = () => element().querySelector('.count-note')!.textContent?.trim();
+  const search = () => element().querySelector<HTMLInputElement>('input[type="search"]')!;
+  const select = (label: string) =>
+    element().querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;
+  const options = (label: string) =>
+    [...select(label).options].map((option) => option.textContent?.trim());
+  const pager = () => element().querySelector('nav.pager');
+  /** What the pager offers, as its buttons' text, and gaps. */
+  const pages = () =>
+    [...(pager()?.children ?? [])].map((item) =>
+      item.classList.contains('gap') ? '…' : item.textContent?.trim(),
+    );
+  const page = (label: string) =>
+    [...pager()!.querySelectorAll('button')].find(
+      (button) => (button.getAttribute('aria-label') ?? button.textContent?.trim()) === label,
     )!;
-  /** The control that the label `text` names. */
-  const control = (text: string) => {
-    const label = [...element().querySelectorAll('label')].find(
-      (label) => label.textContent?.trim() === text,
-    )!;
-    return element().querySelector(`#${label.htmlFor}`)!;
-  };
-  const search = () => control('Find a repository') as HTMLInputElement;
-  const select = (label: string) => control(label) as HTMLSelectElement;
+  const current = () => pager()!.querySelector('[aria-current="page"]')?.textContent?.trim();
 
-  /** The text that `element` shows, without the tooltips that hover and focus show. */
-  function shown(element: Element): string | undefined {
-    const copy = element.cloneNode(true) as Element;
-    copy.querySelectorAll('[role="tooltip"]').forEach((tooltip) => tooltip.remove());
-    return copy.textContent?.replace(/\s+/g, ' ').trim();
-  }
-
-  async function answer(repositories: object[], org = 'acme'): Promise<void> {
-    http.expectOne(`/-/api/organizations/${org}/repositories`).flush({ repositories });
+  async function answer(repositories: ListedRepository[]): Promise<void> {
+    state.set({ status: 'ready', data: repositories });
     await fixture.whenStable();
   }
 
@@ -107,125 +125,89 @@ describe('OrganizationRepositories', () => {
     await fixture.whenStable();
   }
 
-  async function click(element: Element, init: MouseEventInit = {}): Promise<void> {
-    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init }));
+  async function click(button: HTMLElement): Promise<void> {
+    button.click();
     await fixture.whenStable();
   }
 
-  it('lists each repository with its description, language, figures and last push (FR-ORG-03)', async () => {
-    await answer([WIDGET]);
-    expect([...element().querySelectorAll('th')].map((th) => th.textContent?.trim())).toEqual([
-      'Name',
-      'Language',
-      'Stars',
-      'Forks',
-      'Open issues & pull requests',
-      'Last push',
+  /** `count` repositories, named `r01` and on, each pushed to a day before the one before. */
+  function many(count: number): ListedRepository[] {
+    return Array.from({ length: count }, (_, i) =>
+      repository(`r${String(i + 1).padStart(2, '0')}`, {
+        pushedAt: new Date(Date.UTC(2026, 9, 22) - i * 86_400_000),
+      }),
+    );
+  }
+
+  it('stands in its place until the repositories are there', () => {
+    expect(element().querySelector('.skel-row')).not.toBeNull();
+    expect(names()).toEqual([]);
+    expect(status()).toBe('');
+  });
+
+  it('lists the repositories pushed to last first, and says how many there are (FR-ORG-03)', async () => {
+    await answer([
+      repository('a', { pushedAt: new Date('2026-10-01T00:00:00Z') }),
+      repository('b', { pushedAt: new Date('2026-10-20T00:00:00Z') }),
+      repository('c'),
     ]);
-    const cells = [...rows()[0].querySelectorAll('td')];
-    expect(cells.slice(1).map(shown)).toEqual([
-      'Rust',
-      compactNumber(1_200),
-      '30',
-      '12',
-      relativeTime(new Date('2026-10-20T08:00:00Z'), now),
-    ]);
-    expect(cells[0].querySelector('a')!.textContent).toBe('widget');
-    expect(cells[0].querySelector('a')!.getAttribute('href')).toBe('/acme/widget');
-    expect(cells[0].querySelector('.description')?.textContent).toBe('Widgets for everyone');
-    expect(status()).toBe(repositoryCount(1));
-    expect(status()).toBe('1 repository');
+    expect(names()).toEqual(['b', 'a', 'c']);
+    expect(status()).toBe(listed(3, '', 1, 1));
+    expect(status()).toBe('3 repositories, page 1 of 1');
+    expect(element().querySelector('.count-note')!.getAttribute('aria-live')).toBe('polite');
     // One page needs no paging.
-    expect(element().querySelector('.pages')).toBeNull();
+    expect(pager()).toBeNull();
   });
 
-  it('shows nothing for what the server does not say', async () => {
-    await answer([listed('docs', { language: null, pushed_at: null })]);
-    const cells = [...rows()[0].querySelectorAll('td')];
-    expect(cells.map(shown)).toEqual(['docs', '', compactNumber(1_200), '30', '12', '']);
-    expect(cells[0].querySelector('.description, .badge')).toBeNull();
+  it('offers to find a repository by name, its type, language and order', async () => {
+    await answer([repository('a', { language: 'Rust' }), repository('b', { language: 'Go' })]);
+    expect(search().placeholder).toBe(FIND_REPOSITORY);
+    expect(search().getAttribute('aria-label')).toBe('Find a repository');
+    // Only a token user's repositories may be private or internal (FR-ORG-09).
+    expect(options('Type')).toEqual(['All', 'Sources', 'Forks', 'Archived']);
+    expect(options('Language')).toEqual(['All languages', 'Go', 'Rust']);
+    expect(options('Sort')).toEqual(['Last updated', 'Name', 'Stars']);
+    expect(select('Type').value).toBe('all');
+    expect(select('Language').value).toBe('');
+    expect(select('Sort').value).toBe('pushed');
   });
 
-  it('marks private, internal, forked and archived repositories, in words (FR-ORG-09)', async () => {
+  it('offers public, and private and internal ones, once there is one that is not public (FR-ORG-09)', async () => {
     await answer([
-      listed('secret', { visibility: 'private' }),
-      listed('shared', { visibility: 'internal', fork: true }),
-      listed('old', { archived: true }),
-      listed('odd', { visibility: 'secret' }),
+      repository('open'),
+      repository('secret', { visibility: 'private' }),
+      repository('shared', { visibility: 'internal' }),
     ]);
-    // Pushed to at once, so by name.
-    expect(
-      rows().map((row) => [...row.querySelectorAll('.badge')].map((badge) => badge.textContent)),
-    ).toEqual([[], ['Archived'], ['Private'], ['Internal', 'Fork']]);
-  });
-
-  it('leaves out what names no repository', async () => {
-    await answer([listed('widget'), listed('../evil'), listed('a/b'), listed('')]);
-    expect(names()).toEqual(['widget']);
-  });
-
-  it('lists those pushed to most recently first, and sorts by each figure either way', async () => {
-    await answer([
-      listed('a', { stars: 10, forks: 2, pushed_at: '2026-10-01T00:00:00Z' }),
-      listed('b', { stars: 30, forks: 1, pushed_at: '2026-10-20T00:00:00Z' }),
-      listed('c', { stars: 20, forks: 3, pushed_at: null }),
-    ]);
-    const orders = () =>
-      ['Stars', 'Forks', 'Open issues & pull requests', 'Last push'].map((label) =>
-        header(label).getAttribute('aria-sort'),
-      );
-    expect(names()).toEqual(['b', 'a', 'c']);
-    expect(orders()).toEqual(['none', 'none', 'none', 'descending']);
-    expect(header('Name').hasAttribute('aria-sort')).toBe(false);
-
-    await click(button('Stars'));
-    expect(names()).toEqual(['b', 'c', 'a']);
-    expect(orders()).toEqual(['descending', 'none', 'none', 'none']);
-
-    await click(button('Stars'));
-    expect(names()).toEqual(['a', 'c', 'b']);
-    expect(orders()).toEqual(['ascending', 'none', 'none', 'none']);
-
-    // Another column starts with the most.
-    await click(button('Forks'));
-    expect(names()).toEqual(['c', 'a', 'b']);
-    expect(orders()).toEqual(['none', 'descending', 'none', 'none']);
-
-    await click(button('Last push'));
-    expect(names()).toEqual(['b', 'a', 'c']);
-    await click(button('Last push'));
-    expect(names()).toEqual(['c', 'a', 'b']);
-  });
-
-  it('filters by name, type and language, and says how many match', async () => {
-    await answer([
-      listed('widget', { language: 'Rust' }),
-      listed('gadget', { language: 'TypeScript', fork: true }),
-      listed('sprocket', { language: 'Rust', archived: true }),
-      listed('docs', { language: null }),
-    ]);
-    expect(status()).toBe('4 repositories');
-    expect([...select('Language').options].map((option) => option.textContent?.trim())).toEqual([
+    expect(options('Type')).toEqual([
       'All',
-      'Rust',
-      'TypeScript',
-    ]);
-    expect([...select('Type').options].map((option) => option.textContent?.trim())).toEqual([
-      'All',
+      'Public',
+      'Private and internal',
       'Sources',
       'Forks',
       'Archived',
     ]);
+    await choose('Type', 'public');
+    expect(names()).toEqual(['open']);
+    await choose('Type', 'private');
+    expect(names()).toEqual(['secret', 'shared']);
+  });
 
+  it('finds repositories by name, type and language, and says how many match', async () => {
+    await answer([
+      repository('widget', { language: 'Rust' }),
+      repository('gadget', { language: 'TypeScript', fork: true }),
+      repository('sprocket', { language: 'Rust', archived: true }),
+      repository('docs'),
+    ]);
     await type('WIDG');
     expect(names()).toEqual(['widget']);
-    expect(status()).toBe('1 repository');
+    expect(status()).toBe(listed(1, 'WIDG', 1, 1));
+    expect(status()).toBe('1 repository matching “WIDG”, page 1 of 1');
 
     await type('');
     await choose('Type', 'forks');
     expect(names()).toEqual(['gadget']);
     await choose('Type', 'sources');
-    // Pushed to at once, so by name.
     expect(names()).toEqual(['docs', 'sprocket', 'widget']);
     await choose('Type', 'archived');
     expect(names()).toEqual(['sprocket']);
@@ -233,122 +215,112 @@ describe('OrganizationRepositories', () => {
     await choose('Type', 'all');
     await choose('Language', 'Rust');
     expect(names()).toEqual(['sprocket', 'widget']);
-    expect(status()).toBe('2 repositories');
+    expect(status()).toBe('2 repositories, page 1 of 1');
     await choose('Language', '');
     expect(names()).toHaveLength(4);
   });
 
-  it('says when no repository matches, and what to do', async () => {
-    await answer([listed('widget')]);
+  it('sorts by name, or by stars, most first', async () => {
+    await answer([
+      repository('b', { stars: 10, pushedAt: new Date('2026-10-20T00:00:00Z') }),
+      repository('c', { stars: 30, pushedAt: new Date('2026-10-01T00:00:00Z') }),
+      repository('a', { stars: 20 }),
+    ]);
+    expect(names()).toEqual(['b', 'c', 'a']);
+    await choose('Sort', 'name');
+    expect(names()).toEqual(['a', 'b', 'c']);
+    await choose('Sort', 'stars');
+    expect(names()).toEqual(['c', 'a', 'b']);
+    await choose('Sort', 'pushed');
+    expect(names()).toEqual(['b', 'c', 'a']);
+  });
+
+  it("says when no repository matches, in the organization's name", async () => {
+    await answer([repository('widget')]);
     await type('gizmo');
-    expect(element().querySelector('table')).toBeNull();
-    expect(status()).toBe(NO_MATCH);
-    expect(NO_MATCH).toBe('No repositories match. Try another name, type or language.');
+    expect(names()).toEqual([]);
+    expect(element().querySelector('.empty-note')!.textContent?.trim()).toBe(noMatch('Acme Corp'));
+    expect(noMatch('Acme Corp')).toBe("Acme Corp doesn't have any repositories that match.");
+    expect(status()).toBe('');
     await type('');
     expect(names()).toEqual(['widget']);
-  });
-
-  it('shows 25 repositories at a time (FR-ORG-03)', async () => {
-    // Pushed to one a day apart, so that they are listed in the order of their names.
-    const many = Array.from({ length: 30 }, (_, i) =>
-      listed(`r${String(i).padStart(2, '0')}`, {
-        stars: i,
-        pushed_at: new Date(now - i * 86_400_000).toISOString(),
-      }),
-    );
-    await answer(many);
-    const disabled = (label: string) => button(label).getAttribute('aria-disabled');
-    expect(names()).toHaveLength(25);
-    expect([names()[0], names()[24]]).toEqual(['r00', 'r24']);
-    expect(status()).toBe(pageRange(1, 25, 30));
-    expect(status()).toBe('1–25 of 30 repositories');
-    expect([disabled('Previous'), disabled('Next')]).toEqual(['true', 'false']);
-
-    await click(button('Next'));
-    expect(names()).toEqual(['r25', 'r26', 'r27', 'r28', 'r29']);
-    expect(status()).toBe('26–30 of 30 repositories');
-    expect([disabled('Previous'), disabled('Next')]).toEqual(['false', 'true']);
-
-    // Not past the last, where the focus stays.
-    await click(button('Next'));
-    expect(names()).toHaveLength(5);
-
-    await click(button('Previous'));
-    expect(names()).toHaveLength(25);
-
-    // A new order starts on the first page again, as does a new filter.
-    await click(button('Next'));
-    await click(button('Stars'));
-    expect([names()[0], status()]).toEqual(['r29', '1–25 of 30 repositories']);
-    await click(button('Next'));
-    await type('r2');
-    expect(names()).toHaveLength(10);
-    expect(status()).toBe('10 repositories');
-    expect(element().querySelector('.pages')).toBeNull();
-  });
-
-  it("opens a repository's dashboard from anywhere in its row", async () => {
-    await answer([WIDGET]);
-    const [name, language, stars] = [...rows()[0].querySelectorAll('td')];
-
-    await click(language);
-    expect(navigate).toHaveBeenCalledExactlyOnceWith('/acme/widget');
-
-    // Not from what does something else, nor from a click meant for the browser.
-    navigate.mockClear();
-    await click(stars.querySelector('app-exact')!);
-    await click(language, { ctrlKey: true });
-    await click(language, { metaKey: true });
-    await click(language, { shiftKey: true });
-    expect(navigate).not.toHaveBeenCalled();
-
-    // Its name's link opens it once.
-    await click(name.querySelector('a')!);
-    expect(navigate).toHaveBeenCalledOnce();
+    expect(element().querySelector('.empty-note')).toBeNull();
   });
 
   it('says when the organization has no repositories', async () => {
     await answer([]);
-    expect(element().querySelector('.message')?.textContent?.trim()).toBe('No repositories yet.');
-    expect(element().querySelector('table, input')).toBeNull();
+    expect(element().querySelector('app-widget')!.textContent).toContain(NO_REPOSITORIES);
+    expect(element().querySelector('.repo-list')).toBeNull();
+    expect(status()).toBe('');
   });
 
-  it('spans the grid, under a heading', async () => {
+  it('says when the repositories could not be loaded, and tries again', async () => {
+    state.set({ status: 'error', failure: 'github' });
+    await fixture.whenStable();
     const widget = element().querySelector('app-widget')!;
-    const heading = widget.querySelector('h2')!;
-    expect(widget.classList.contains('wide')).toBe(true);
-    expect(heading.textContent?.trim()).toBe('Repositories');
-    expect(heading.classList.contains('visually-hidden')).toBe(false);
-    await answer([WIDGET]);
+    expect(widget.textContent).toContain(FAILED);
+    widget.querySelector<HTMLButtonElement>('.w-state button')!.click();
+    expect(retry).toHaveBeenCalledOnce();
   });
 
-  it('says when the repositories failed to load, and tries again (FR-REPO-09)', async () => {
-    http
-      .expectOne('/-/api/organizations/acme/repositories')
-      .flush(null, { status: 502, statusText: 'Bad Gateway' });
-    await fixture.whenStable();
-    expect(element().querySelector('.message')?.textContent?.trim()).toBe(FAILED);
-    await click(button('Try again'));
-    await answer([WIDGET]);
-    expect(names()).toEqual(['widget']);
+  it('shows 25 repositories a page, with a page of each (FR-ORG-03)', async () => {
+    await answer(many(60));
+    expect(names()).toHaveLength(25);
+    expect(names()[0]).toBe('r01');
+    expect(status()).toBe('60 repositories, page 1 of 3');
+    expect(pages()).toEqual(['Previous', '1', '2', '3', 'Next']);
+    expect(current()).toBe('1');
+    expect(page('Previous').disabled).toBe(true);
+    expect(page('Next').disabled).toBe(false);
+    expect(pager()!.getAttribute('aria-label')).toBe('Pages');
+
+    await click(page('Next'));
+    expect(names()[0]).toBe('r26');
+    expect(status()).toBe('60 repositories, page 2 of 3');
+    expect(current()).toBe('2');
+    expect(page('Previous').disabled).toBe(false);
+
+    await click(page('Page 3'));
+    expect(names()).toHaveLength(10);
+    expect(names()[9]).toBe('r60');
+    expect(page('Next').disabled).toBe(true);
+
+    await click(page('Previous'));
+    expect(current()).toBe('2');
   });
 
-  it('starts afresh for another organization', async () => {
-    await answer([listed('widget', { language: 'Rust' }), listed('gadget')]);
-    await type('widg');
-    await choose('Language', 'Rust');
-    await click(button('Stars'));
+  it('leaves pages out between the first, the last and those next to the page shown', async () => {
+    await answer(many(250));
+    expect(pages()).toEqual(['Previous', '1', '2', '…', '10', 'Next']);
+    await click(page('Page 10'));
+    await click(page('Previous'));
+    await click(page('Previous'));
+    await click(page('Previous'));
+    await click(page('Previous'));
+    expect(current()).toBe('6');
+    expect(pages()).toEqual(['Previous', '1', '…', '5', '6', '7', '…', '10', 'Next']);
+    // The gaps are for the eye alone.
+    expect(pager()!.querySelector('.gap')!.getAttribute('aria-hidden')).toBe('true');
+  });
 
-    fixture.componentInstance.org.set('globex');
-    await fixture.whenStable();
-    await answer(
-      [listed('gizmo', { language: 'Go', pushed_at: '2026-10-21T08:00:00Z' }), listed('gear')],
-      'globex',
-    );
-    expect(names()).toEqual(['gizmo', 'gear']);
-    expect(search().value).toBe('');
-    expect(select('Language').value).toBe('');
-    expect(header('Last push').getAttribute('aria-sort')).toBe('descending');
-    expect(rows()[0].querySelector('a')!.getAttribute('href')).toBe('/globex/gizmo');
+  it('shows the new page from the top of the list', async () => {
+    await answer(many(30));
+    await click(page('Page 2'));
+    expect(scrollIntoView).toHaveBeenCalledOnce();
+    expect(scrollIntoView.mock.contexts[0]).toBe(search());
+    expect(scrollIntoView.mock.calls[0][0]).toEqual(expect.objectContaining({ block: 'start' }));
+  });
+
+  it('goes back to the first page as what the list holds changes', async () => {
+    await answer(many(60));
+    await click(page('Page 3'));
+    await type('r');
+    expect(current()).toBe('1');
+    await click(page('Page 2'));
+    await choose('Sort', 'name');
+    expect(current()).toBe('1');
+    await click(page('Page 2'));
+    await answer(many(55));
+    expect(current()).toBe('1');
   });
 });

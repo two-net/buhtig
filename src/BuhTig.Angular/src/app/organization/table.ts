@@ -1,15 +1,16 @@
 import { ListedRepository } from '../dashboard/resources';
 
-/** How many repositories the repository table shows at once (FR-ORG-03). */
+/** How many repositories the repository list shows at once (FR-ORG-03). */
 export const PAGE_SIZE = 25;
 
 /**
- * The kinds of repository that the table can be filtered to, as GitHub tells them apart:
- * sources are those that are not forks, and archived ones are among either.
+ * The kinds of repository that the list can be filtered to, as GitHub tells them apart: sources
+ * are those that are not forks, and archived ones are among either. Private and internal ones
+ * are only a token user's (FR-ORG-09).
  */
-export type RepositoryType = 'all' | 'sources' | 'forks' | 'archived';
+export type RepositoryType = 'all' | 'public' | 'private' | 'sources' | 'forks' | 'archived';
 
-/** What the table can be filtered by (FR-ORG-03). */
+/** What the list can be filtered by (FR-ORG-03). */
 export interface Filter {
   /** Text that the names must hold, whatever its letter case. */
   name: string;
@@ -18,29 +19,17 @@ export interface Filter {
   type: RepositoryType;
 }
 
-/** The table as it starts, with every repository. */
+/** The list as it starts, with every repository. */
 export const NO_FILTER: Filter = { name: '', language: undefined, type: 'all' };
 
-/** The columns that the table can be sorted by: each numeric and date column (FR-ORG-03). */
-export type SortColumn = 'stars' | 'forks' | 'issues' | 'pushed';
+/** The orders of the list: pushed to last first, by name, or most stars first (FR-ORG-03). */
+export type Sort = 'pushed' | 'name' | 'stars';
 
-/** An order of the table, its direction as `aria-sort` names it. */
-export interface Sort {
-  column: SortColumn;
-  direction: 'ascending' | 'descending';
-}
-
-/** The order the table starts in, as GitHub gives the repositories: pushed to most recently first. */
-export const DEFAULT_SORT: Sort = { column: 'pushed', direction: 'descending' };
-
-/** One page of the table. */
+/** One page of the list. */
 export interface Page {
   repositories: ListedRepository[];
   /** Which page it is, from 0. */
   index: number;
-  /** Where its first and last repositories are among all, from 1. */
-  first: number;
-  last: number;
   /** How many pages there are, at least one. */
   count: number;
 }
@@ -56,12 +45,19 @@ export function matches(repository: ListedRepository, filter: Filter): boolean {
 
 /** `repositories` in the order of `sort`, those with the same figure by name. */
 export function sorted(repositories: ListedRepository[], sort: Sort): ListedRepository[] {
-  const sign = sort.direction === 'ascending' ? 1 : -1;
-  return [...repositories].sort(
-    (a, b) =>
-      sign * compare(figure(a, sort.column), figure(b, sort.column)) ||
-      a.name.localeCompare(b.name),
-  );
+  return [...repositories].sort((a, b) => {
+    switch (sort) {
+      case 'name':
+        return a.name.localeCompare(b.name);
+      case 'stars':
+        return b.stars - a.stars || a.name.localeCompare(b.name);
+      case 'pushed':
+        return (
+          (b.pushedAt?.getTime() ?? -Infinity) - (a.pushedAt?.getTime() ?? -Infinity) ||
+          a.name.localeCompare(b.name)
+        );
+    }
+  });
 }
 
 /** The primary languages of `repositories`, each once, by name. */
@@ -75,20 +71,33 @@ export function pageOf(repositories: ListedRepository[], index: number): Page {
   const count = Math.max(1, Math.ceil(repositories.length / PAGE_SIZE));
   const shown = Math.min(Math.max(index, 0), count - 1);
   const start = shown * PAGE_SIZE;
-  const page = repositories.slice(start, start + PAGE_SIZE);
-  return {
-    repositories: page,
-    index: shown,
-    first: start + 1,
-    last: start + page.length,
-    count,
-  };
+  return { repositories: repositories.slice(start, start + PAGE_SIZE), index: shown, count };
+}
+
+/**
+ * The pages that the pager offers, from 0, around the page at `index` of `count`: the first and
+ * the last, and those next to it, with `gap` where pages are left out between.
+ */
+export function pagesAround(index: number, count: number): (number | 'gap')[] {
+  const pages: (number | 'gap')[] = [];
+  for (let page = 0; page < count; page++) {
+    if (page === 0 || page === count - 1 || Math.abs(page - index) <= 1) {
+      pages.push(page);
+    } else if (pages[pages.length - 1] !== 'gap') {
+      pages.push('gap');
+    }
+  }
+  return pages;
 }
 
 function isOfType(repository: ListedRepository, type: RepositoryType): boolean {
   switch (type) {
     case 'all':
       return true;
+    case 'public':
+      return repository.visibility === 'public';
+    case 'private':
+      return repository.visibility !== 'public';
     case 'sources':
       return !repository.fork;
     case 'forks':
@@ -96,22 +105,4 @@ function isOfType(repository: ListedRepository, type: RepositoryType): boolean {
     case 'archived':
       return repository.archived;
   }
-}
-
-/** The figure of `repository` in `column`. A repository never pushed to is the oldest. */
-function figure(repository: ListedRepository, column: SortColumn): number {
-  switch (column) {
-    case 'stars':
-      return repository.stars;
-    case 'forks':
-      return repository.forks;
-    case 'issues':
-      return repository.openIssuesAndPullRequests;
-    case 'pushed':
-      return repository.pushedAt?.getTime() ?? -Infinity;
-  }
-}
-
-function compare(a: number, b: number): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }

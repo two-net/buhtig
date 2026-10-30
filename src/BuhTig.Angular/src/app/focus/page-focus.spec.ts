@@ -48,6 +48,10 @@ describe('focusPageOnNavigation', () => {
           { path: 'second', component: Second },
           { path: 'search', component: Search },
           { path: 'headless', component: Headless },
+          // A dashboard and two of its tabs, and its owner's.
+          { path: ':org', component: Second },
+          { path: ':owner/:repo', component: Second },
+          { path: ':owner/:repo/issues', component: Second },
         ]),
       ],
     });
@@ -101,6 +105,28 @@ describe('focusPageOnNavigation', () => {
     kept.focus();
     await go('/second', true);
     expect(document.activeElement).toBe(kept);
+  });
+
+  it('leaves focus on the tab as the user moves to another tab of the same dashboard', async () => {
+    await go('/acme/widget');
+    const kept = element().querySelector<HTMLInputElement>('#kept')!;
+    kept.focus();
+    await go('/acme/widget/issues');
+    expect(document.activeElement).toBe(kept);
+    // Whatever the letter case of its names.
+    await go('/Acme/Widget');
+    expect(document.activeElement).toBe(kept);
+  });
+
+  it("focuses the heading of another dashboard, or of a dashboard's owner", async () => {
+    await go('/acme/widget');
+    const kept = element().querySelector<HTMLInputElement>('#kept')!;
+    kept.focus();
+    await go('/acme/gadget/issues');
+    expect(document.activeElement).toBe(heading());
+    kept.focus();
+    await go('/acme');
+    expect(document.activeElement).toBe(heading());
   });
 
   it('focuses the main content of a page without a heading', async () => {

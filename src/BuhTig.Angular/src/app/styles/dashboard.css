@@ -1,0 +1,306 @@
+/* A dashboard's layout, its heads, boxes, widgets and tables, with the dashboards' code. */
+/* The content and its sidebar, in one column below 1012 px (UI-05). */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 296px;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 1012px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.stack-v > * {
+  display: block;
+}
+.stack-v > * + * {
+  margin-top: 24px;
+}
+.repohead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 16px 0;
+}
+.repohead .title {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.repohead h1 {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 30px;
+  overflow-wrap: anywhere;
+}
+.repohead h1 a {
+  color: var(--fg);
+}
+.repohead .desc {
+  flex-basis: 100%;
+  color: var(--fg-muted);
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.freshness {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.forked {
+  display: flex;
+  flex-basis: 100%;
+  align-items: center;
+  gap: 4px;
+  margin-top: -10px;
+  padding-left: 32px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.forked app-icon {
+  --icon: 12px;
+}
+.orghead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px 24px;
+  padding: 24px 0;
+}
+.org-av {
+  width: 100px;
+  height: 100px;
+  border-radius: 12px;
+}
+.oh-main {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.oh-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.oh-title h1 {
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.oh-desc {
+  margin-top: 4px;
+  color: var(--fg-muted);
+  font-size: 16px;
+}
+.orghead .rmeta {
+  margin-top: 10px;
+  font-size: 14px;
+}
+.orghead .rmeta strong {
+  color: var(--fg);
+}
+@media (max-width: 640px) {
+  .org-av {
+    width: 64px;
+    height: 64px;
+  }
+}
+.sec-title {
+  margin-bottom: 8px;
+  font-size: 16px;
+  font-weight: 400;
+}
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+.grid-2 > * + * {
+  margin-top: 0;
+}
+@media (max-width: 860px) {
+  .grid-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.Box,
+.w {
+  display: block;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.Box-header,
+.w-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+  background: var(--bg-muted);
+}
+.Box-title,
+.w-head h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.Box-header a {
+  font-size: 12px;
+}
+.Box-body {
+  padding: 16px;
+}
+.Box-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.Box.danger {
+  border-color: var(--fg-danger);
+}
+.w-sub {
+  padding: 12px 16px 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.w-body {
+  min-height: 40px;
+  padding: 16px;
+}
+.w-body.flush {
+  padding: 0;
+}
+.w-body.flush > .w-state {
+  padding: 16px;
+}
+.w-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 0;
+  color: var(--fg-muted);
+}
+.w-state app-icon {
+  --icon: 18px;
+}
+.calc app-icon {
+  color: var(--fg-accent);
+  animation: spin 1.6s linear infinite;
+}
+.pad {
+  padding: 16px;
+}
+.flushwrap > .pad {
+  border-bottom: 1px solid var(--border-muted);
+}
+.tbl-wrap {
+  overflow-x: auto;
+}
+table.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.tbl th {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+.tbl tbody th {
+  background: none;
+  color: var(--fg);
+  font-weight: 400;
+  white-space: normal;
+}
+.tbl td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-muted);
+}
+.tbl .num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.dtable {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+/* Placeholders, while data is on its way (FR-ANIM-04), which keep still without motion. */
+.skel {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--skel) 0%, var(--skel-hi) 40%, var(--skel) 80%) 0 0 / 300%
+    100%;
+  animation: shimmer 1.4s linear infinite;
+}
+.skel.line {
+  height: 12px;
+  margin: 9px 0;
+}
+.skel.line.lg {
+  height: 22px;
+}
+.skel.line.xl {
+  height: 28px;
+  margin-top: 2px;
+}
+.skel.block {
+  height: var(--sh, 180px);
+}
+.skel.av-skel {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+}
+.skel-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.skel-row .skel.dot {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+}
+.skel-row .grow {
+  flex: 1;
+}
+.skel.line.thin {
+  height: 9px;
+}
+.skel.line.bar {
+  height: 14px;
+  margin: 13px 0;
+}
+
+.still .skel {
+  animation: none !important;
+}

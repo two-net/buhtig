@@ -1,9 +1,11 @@
 import { ActivatedRouteSnapshot, Routes } from '@angular/router';
 import { Home } from './home/home';
-import { NotFound } from './not-found/not-found';
-import { SignInFailed } from './sign-in/failed';
-import { NotAllowed } from './sign-in/not-allowed';
-import { SignIn } from './sign-in/sign-in';
+import {
+  ORGANIZATION_TABS,
+  REPOSITORY_TABS,
+  organizationMatcher,
+  repositoryMatcher,
+} from './dashboard/tabs';
 import { TITLES, dashboardTitle } from './messages';
 
 /**
@@ -11,7 +13,12 @@ import { TITLES, dashboardTitle } from './messages';
  * (NFR-PERF-01). Each page loads it ahead of need once it has settled, so that it opens at once
  * (NFR-PERF-04), from the search box as from a link.
  */
-const dashboard = () => import('./dashboard/dashboard').then((module) => module.Dashboard);
+const repository = () =>
+  import('./dashboard/repository').then((module) => module.RepositoryDashboard);
+const organization = () =>
+  import('./dashboard/organization').then((module) => module.OrganizationDashboard);
+
+const notFound = () => import('./not-found/not-found').then((module) => module.NotFound);
 
 export const routes: Routes = [
   { path: '', component: Home, title: TITLES.home },
@@ -35,24 +42,58 @@ export const routes: Routes = [
         loadComponent: () => import('./settings/settings').then((module) => module.Settings),
         title: TITLES.settings,
       },
-      // Where private mode sends visitors, to sign in and come back (FR-ACC-03). Sign-in ends
-      // on these pages with a page load of its own, so they come with the app.
-      { path: 'sign-in', component: SignIn, title: TITLES.signIn },
+      // Where private mode sends visitors, to sign in and come back (FR-ACC-03).
+      {
+        path: 'sign-in',
+        loadComponent: () => import('./sign-in/sign-in').then((module) => module.SignIn),
+        title: TITLES.signIn,
+      },
       // Where sign-in ends when it does not sign the user in (FR-AUTH-08).
-      { path: 'not-allowed', component: NotAllowed, title: TITLES.notAllowed },
-      { path: 'sign-in-failed', component: SignInFailed, title: TITLES.signInFailed },
-      { path: '**', component: NotFound, title: TITLES.notFound },
+      {
+        path: 'not-allowed',
+        loadComponent: () => import('./sign-in/not-allowed').then((module) => module.NotAllowed),
+        title: TITLES.notAllowed,
+      },
+      {
+        path: 'sign-in-failed',
+        loadComponent: () => import('./sign-in/failed').then((module) => module.SignInFailed),
+        title: TITLES.signInFailed,
+      },
+      { path: '**', loadComponent: notFound, title: TITLES.notFound },
     ],
   },
-  { path: ':owner/:repo', loadComponent: dashboard, title: titleOf, data: { preload: true } },
-  { path: ':org', loadComponent: dashboard, title: titleOf, data: { preload: true } },
+  // A dashboard and its tabs, at the paths of the matching pages on GitHub (FR-NAV-01). Moving
+  // between tabs keeps the dashboard, and what it has loaded.
+  {
+    matcher: organizationMatcher,
+    loadComponent: organization,
+    title: organizationTitle,
+    data: { preload: true },
+  },
+  {
+    matcher: repositoryMatcher,
+    loadComponent: repository,
+    title: repositoryTitle,
+    data: { preload: true },
+  },
+  // Other paths below a dashboard are the server's to redirect, before the app loads.
+  { path: '**', loadComponent: notFound, title: TITLES.notFound },
 ];
 
 /**
- * "{owner}/{repo} · BuhTig" or "{org} · BuhTig" (UI-04), with the names as GitHub spells them
- * once the dashboard has moved to its canonical URL (FR-NAV-04).
+ * "{owner}/{repo} · BuhTig", after the tab's name unless it is the overview, such as "Issues ·
+ * owner/repo · BuhTig" (UI-04), with the names as GitHub spells them once the dashboard has
+ * moved to its canonical URL (FR-NAV-04).
  */
-function titleOf(route: ActivatedRouteSnapshot): string {
+function repositoryTitle(route: ActivatedRouteSnapshot): string {
   const params = route.paramMap;
-  return dashboardTitle(params.get('org') ?? `${params.get('owner')}/${params.get('repo')}`);
+  const tab = REPOSITORY_TABS.find(({ tab }) => tab === params.get('tab'));
+  return dashboardTitle(`${params.get('owner')}/${params.get('repo')}`, tab?.label);
+}
+
+/** "{org} · BuhTig", after the tab's name unless it is the overview (UI-04). */
+function organizationTitle(route: ActivatedRouteSnapshot): string {
+  const params = route.paramMap;
+  const tab = ORGANIZATION_TABS.find(({ tab }) => tab === params.get('tab'));
+  return dashboardTitle(params.get('org') ?? '', tab?.label);
 }

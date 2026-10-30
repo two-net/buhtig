@@ -42,13 +42,9 @@ function contrast(a, b) {
 }
 
 const styles = read('src/styles.css');
-const languages = read('src/app/repository/languages.css');
 const dark = '(prefers-color-scheme: dark)';
-const light = { ...colors(block(styles, ':root')), ...colors(block(languages, ':host')) };
-const themes = {
-  light,
-  dark: { ...light, ...colors(block(styles, dark)), ...colors(block(languages, dark)) },
-};
+const light = colors(block(styles, ':root'));
+const themes = { light, dark: { ...light, ...colors(block(styles, dark)) } };
 
 for (const [theme, color] of Object.entries(themes)) {
   /** Asserts that `foreground` is at least `minimum`:1 against each of `backgrounds`. */
@@ -65,23 +61,32 @@ for (const [theme, color] of Object.entries(themes)) {
   };
 
   test(`${theme}: text is at least 4.5:1 against what it sits on`, () => {
-    for (const text of ['text', 'muted', 'accent']) atLeast(4.5, text, 'background', 'raised');
-    atLeast(4.5, 'on-accent', 'accent');
+    const texts = [
+      'fg',
+      'fg-muted',
+      'fg-accent',
+      'fg-success',
+      'fg-danger',
+      'fg-attention',
+      'fg-done',
+    ];
+    for (const text of texts) atLeast(4.5, text, 'bg', 'bg-muted', 'bg-inset');
+    atLeast(4.5, 'on-primary', 'btn-primary');
   });
 
   test(`${theme}: lines that mark controls are at least 3:1 against what they sit on`, () => {
-    atLeast(3, 'line', 'background', 'raised');
+    atLeast(3, 'control-line', 'bg', 'bg-muted', 'bg-inset');
   });
 
-  test(`${theme}: each language's color is at least 3:1 against the background`, () => {
-    const names = Object.keys(color).filter((name) => name.startsWith('language-'));
-    // The first language is in the accent, and "Other" in the color of lines.
-    assert.equal(names.length, 7);
-    for (const name of names) atLeast(3, name, 'background');
+  test(`${theme}: the colors of charts are at least 3:1 against the background`, () => {
+    const names = Object.keys(color).filter((name) => /^(s\d|s-other|st-)/.test(name));
+    // Eight series and "Other", and the states of issues and pull requests.
+    assert.equal(names.length, 12);
+    for (const name of names) atLeast(3, name, 'bg');
   });
 }
 
-test("the favicon is the B on the accent's circle, in each theme's colors", () => {
+test("the favicon is a B in the background's color on the accent's circle, in each theme", () => {
   const icon = read('public/favicon.svg');
   const inDark = block(icon, dark);
   assert.deepEqual(
@@ -94,8 +99,8 @@ test("the favicon is the B on the accent's circle, in each theme's colors", () =
       ),
     },
     {
-      light: [themes.light.accent, themes.light['on-accent']],
-      dark: [themes.dark.accent, themes.dark['on-accent']],
+      light: [themes.light['fg-accent'], themes.light.bg],
+      dark: [themes.dark['fg-accent'], themes.dark.bg],
     },
   );
 });

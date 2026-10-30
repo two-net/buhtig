@@ -164,60 +164,68 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 
 ### 3.1 User interface
 
-The home page follows the pattern of a search engine's front page: a wordmark, one box, a couple of buttons, and almost nothing else. Dashboards follow the results-page pattern: a slim header with the wordmark on the left and the search box beside it, then the content.
+BuhTig looks like GitHub, after its open-source Primer design system, so that its users feel at home. A visitor's home page is a hero around the search box. A signed-in user's home page lists their dashboards beside the search box. Every other page has a slim header with the wordmark on the left, then breadcrumbs, the search box and the account. Dashboards have tabs below the header, at the paths of the matching pages on GitHub.
 
-**Home page (wireframe)**
+**Home page for visitors (wireframe)**
 
 ```
 +-----------------------------------------------------------------------+
-|                                                          [ Sign in ]  |
-|                                                                       |
+| BuhTig   About  Privacy                                    [ Sign in ] |
 |                                                                       |
 |                                BuhTig                                 |
+|                 Every GitHub repository, at a glance                  |
+|       +-----------------------------------------+ [Show dashboard]    |
+|       | github.com/owner/repo or github.com/org |                     |
+|       +-----------------------------------------+                     |
+|          Try  owner/repo  owner/another  org/repo   [Surprise me]     |
 |                                                                       |
-|       +-------------------------------------------------------+       |
-|       |  Enter a GitHub repository or organization URL        |       |
-|       +-------------------------------------------------------+       |
-|                                                                       |
-|                 [ Show dashboard ]   [ Surprise me ]                  |
-|                                                                       |
-|             owner/repo     my-org     owner/another-repo              |
-|         (pinned and recent dashboards, signed-in users only)          |
-|                                                                       |
-| About   Privacy                            Not affiliated with GitHub |
+|  Repository dashboards   Organization insights   Private when needed  |
+| BuhTig   About   Privacy                    Not affiliated with GitHub |
 +-----------------------------------------------------------------------+
+```
+
+**Home page for signed-in users (wireframe)**
+
+```
++-----------------------------------------------------------------------+
+| BuhTig                               [ Type / to open a dashboard ] (@) |
++-----------------+-------------------------------------+---------------+
+| Top dashboards  | Home                                | Private repos |
+| [Find a dash…]  | [ search box          ][Show dash.] | (token state) |
+| * owner/repo    | Recently viewed on this BuhTig      | Keyboard      |
+|   org           | +---------------------------------+ | shortcuts     |
+|   owner/other   | | owner/repo        viewed 3m ago | |               |
+|                 | +---------------------------------+ |               |
++-----------------+-------------------------------------+---------------+
 ```
 
 **Repository dashboard (wireframe)**
 
 ```
 +-----------------------------------------------------------------------+
-| BuhTig  [ github.com/owner/repo                          ]       (@)  |
+| BuhTig  owner / repo                   [ github.com/owner/repo ]  (@) |
+| Overview  Activity  Issues 12  Pull requests 3  Contributors 40  ... |
 +-----------------------------------------------------------------------+
-| (avatar) owner / repo  [Public]                       Open on GitHub  |
-| Description of the repository                                         |
-| topics, license, default branch        Updated 4 min ago  [ Refresh ] |
-+-----------------------------------------------------------------------+
-| [ Stars ]  [ Forks ]  [ Watchers ]  [ Issues ]  [ PRs ]  [ Release ]  |
-+-----------------------------------+-----------------------------------+
-| Commit activity (52 weeks)        | Languages                         |
-+-----------------------------------+-----------------------------------+
-| Top contributors                  | Issues & pull requests            |
-+-----------------------------------+-----------------------------------+
-| Recent commits                    | Releases                          |
-+-----------------------------------+-----------------------------------+
+| (av) repo [Public]           Updated 4 min ago [Refresh] [Pin] [GitHub]|
++-------------------------------------------------+---------------------+
+| Overview: Stars Forks Watching Issues PRs Release| About, topics,      |
+|           issues and pull requests by state      | license, dates      |
+| Commit activity (52 weeks)                       | Releases            |
+| Recent commits                                   | Contributors        |
+| Recent issues and pull requests                  | Languages           |
++-------------------------------------------------+---------------------+
 ```
 
 | ID | Requirement | Priority |
 |---|---|---|
 | UI-01 | Every screen shall have one obvious primary action, generous whitespace, and a restrained palette. | Must |
-| UI-02 | The home page shall center the BuhTig wordmark, the search box, and a primary "Show dashboard" button. It shall also show "Surprise me" if FR-SRCH-10 is built. The top-right corner shall hold "Sign in" or, when signed in, the user's avatar with a menu (Settings, Sign out). | Must |
-| UI-03 | The dashboard header shall show the wordmark (linking home), the search box pre-filled with the current resource, and "Sign in" or the avatar menu. | Must |
+| UI-02 | A visitor's home page shall center the BuhTig wordmark, the search box, and a primary "Show dashboard" button, with "Surprise me" (FR-SRCH-10) and repositories to try (FR-SRCH-11) below. A signed-in user's home page shall show the search box with their shortcuts beside it (FR-SRCH-08). The top-right corner shall hold "Sign in" or, when signed in, the user's avatar with a menu (Home, Settings, Sign out) that says whether BuhTig has a personal access token of theirs. | Must |
+| UI-03 | The dashboard header shall show the wordmark (linking home), breadcrumbs of the resource, the search box pre-filled with the current resource, and "Sign in" or the avatar menu. Below it, the dashboard's tabs shall show how many items each has, once known. | Must |
 | UI-04 | Page titles shall be "BuhTig" on the home page and "{owner}/{repo} · BuhTig" or "{org} · BuhTig" on dashboards. | Must |
-| UI-05 | Dashboard widgets shall sit in a responsive grid that collapses to one column below 768 px. | Must |
+| UI-05 | Dashboard widgets shall sit in a main column with a sidebar, which collapses to one column below 1012 px. | Must |
 | UI-06 | Large numbers shall be shown compactly (e.g., 12.3k) and dates relatively (e.g., "3 days ago"). Exact values shall appear on hover and focus. All numbers and dates shall be formatted for the browser's locale. | Must |
 | UI-07 | Light and dark themes shall follow the operating system's preference. | Should |
-| UI-08 | The home-page footer shall link to the About and Privacy pages and state that BuhTig is not affiliated with GitHub. | Should |
+| UI-08 | The visitor's home-page footer shall link to the About and Privacy pages and state that BuhTig is not affiliated with GitHub. | Should |
 
 ### 3.2 Software interfaces
 
@@ -248,11 +256,12 @@ The home page follows the pattern of a search engine's front page: a wordmark, o
 | FR-SRCH-03 | Pressing Enter or the primary button shall open the recognized resource's dashboard at its canonical URL (FR-NAV-01). | Must |
 | FR-SRCH-04 | Before calling GitHub, BuhTig shall check names for allowed characters and length. The check shall be permissive enough to accept older names that predate GitHub's current naming rules. Input that fails shall produce an inline message and no navigation. | Must |
 | FR-SRCH-05 | URLs on any host other than github.com shall be rejected with the message "BuhTig supports github.com URLs only." | Must |
-| FR-SRCH-06 | If an account turns out to be a user rather than an organization, BuhTig shall say so and suggest entering one of that user's repositories instead. | Must |
+| FR-SRCH-06 | If an account turns out to be a user rather than an organization, its dashboard shall say so and offer up to 6 of that user's public repositories, those pushed to last, instead. | Must |
 | FR-SRCH-07 | On desktop, the input shall be focused when the home page loads. Pressing `/` outside a text field shall focus it, and Esc shall clear it. | Should |
-| FR-SRCH-08 | Signed-in users shall see up to 8 shortcuts below the input: pinned dashboards first, then recent ones (§4.8). | Should |
+| FR-SRCH-08 | Signed-in users' home page shall list up to 12 shortcuts beside the input, which they can filter by name: pinned dashboards first, then recent ones (§4.8). | Should |
 | FR-SRCH-09 | As the user types, the input shall show what it recognizes (e.g., "Repository · owner/repo" or "Organization · org") or why the input is invalid. | Could |
 | FR-SRCH-10 | A secondary "Surprise me" button shall open the dashboard of a random public repository from the shared cache. The button shall be hidden while that cache is empty. | Could |
+| FR-SRCH-11 | The signed-in home page shall list up to 8 public repositories whose dashboards were opened on the instance lately, from the shared cache only, with their description, language, stars, forks and last push. The visitor's home page shall offer the first 3 to try. Neither shall call GitHub, nor show anything fetched with a PAT (FR-DATA-04). | Could |
 
 **Table 4-1. Accepted input**
 
@@ -270,8 +279,8 @@ The home page follows the pattern of a search engine's front page: a wordmark, o
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-NAV-01 | Each dashboard shall have a stable, shareable URL that mirrors its GitHub path: `/{owner}/{repo}` for a repository and `/{org}` for an organization. | Must |
-| FR-NAV-02 | Deeper paths under a dashboard URL (e.g., `/{owner}/{repo}/pull/42`) and paths of the form `/orgs/{org}/…` shall redirect to the canonical dashboard URL. Replacing `github.com` with BuhTig's host in any GitHub link therefore opens the matching dashboard. | Should |
+| FR-NAV-01 | Each dashboard shall have a stable, shareable URL that mirrors its GitHub path: `/{owner}/{repo}` for a repository and `/{org}` for an organization. Each tab shall have the path of the matching page on GitHub: `/{owner}/{repo}/activity`, `/issues`, `/pulls`, `/graphs/contributors` and `/releases`, and `/orgs/{org}/repositories` and `/orgs/{org}/people`. | Must |
+| FR-NAV-02 | Deeper paths under a dashboard URL shall redirect to the tab that shows the same, e.g. `/{owner}/{repo}/pull/42` to `/{owner}/{repo}/pulls`, `/commits` and `/pulse` to `/activity`, and `/tags` to `/releases`, and any other to the overview. Other paths of the form `/orgs/{org}/…` shall redirect to `/{org}`. Replacing `github.com` with BuhTig's host in any GitHub link therefore opens the matching dashboard. | Should |
 | FR-NAV-03 | BuhTig's own pages shall live under the reserved prefix `/-/` (e.g., `/-/settings`, `/-/about`, `/-/privacy`, `/-/health`). This prefix cannot collide with GitHub account names, which never start with a hyphen. | Must |
 | FR-NAV-04 | Canonical URLs shall use names exactly as GitHub returns them. Other letter cases shall redirect to the canonical form. | Should |
 | FR-NAV-05 | When GitHub reports that a repository was renamed or transferred, BuhTig shall follow the redirect and switch the browser to the new canonical URL. | Should |
@@ -285,10 +294,10 @@ The home page follows the pattern of a search engine's front page: a wordmark, o
 | FR-REPO-02 | Stat cards shall show stars, forks, watchers (notification subscribers, not stargazers), and the latest release tag with its date. Open issues and open pull requests shall be separate figures, because GitHub's own open-issue count includes pull requests. | Must |
 | FR-REPO-03 | A commit-activity chart shall show commits per week to the default branch over the last 52 weeks. | Must |
 | FR-REPO-04 | A languages chart shall show each language's share of the code, listing the top 8 and grouping the rest as "Other". | Must |
-| FR-REPO-05 | A contributors widget shall list up to 10 top contributors by commit count. Each entry shall show the avatar, the login (linking to the GitHub profile), and the commit count. | Must |
-| FR-REPO-06 | An issues and pull requests widget shall show open and closed issue counts, and open, merged, and closed-unmerged pull request counts. It shall list the 10 most recently updated issues and pull requests with state, author, and age. | Should |
-| FR-REPO-07 | A recent-commits widget shall list the 10 latest commits on the default branch with the first line of the message, the author, and the age. | Should |
-| FR-REPO-08 | A releases widget shall list the 5 latest releases with tag, name, and date. | Should |
+| FR-REPO-05 | A contributors widget shall list up to 10 top contributors by commit count. Each entry shall show the avatar, the login (linking to the GitHub profile), and the commit count. The Contributors tab shall say how many contributors there are, when GitHub says. | Must |
+| FR-REPO-06 | The overview shall show open and closed issue counts, and open, merged, and closed-unmerged pull request counts, and list the 6 most recently updated issues and pull requests with state, author, and when each was last updated. The Issues and Pull requests tabs shall each show their counts and those of the 20 most recently updated that are of their kind. | Should |
+| FR-REPO-07 | A recent-commits widget shall list the latest commits on the default branch, 5 on the overview and 10 on the Activity tab, with the first line of the message, the author's avatar and login, the age, and the short SHA. | Should |
+| FR-REPO-08 | A releases widget shall list the 5 latest releases with tag, name, date and the branch or commit each was made from, marking the one GitHub calls the latest. The Releases tab shall say how many releases there are. | Should |
 | FR-REPO-09 | Every widget shall have loading, empty, and error states. A failure in one widget shall not prevent the others from rendering. | Must |
 | FR-REPO-10 | If GitHub is still computing a statistic, the widget shall show "Calculating on GitHub…" and retry automatically with increasing delays for up to 60 seconds. After that, it shall show an error with a retry action. | Must |
 | FR-REPO-11 | An empty repository (no commits) shall render with empty states, not errors. | Must |
@@ -300,9 +309,9 @@ The home page follows the pattern of a search engine's front page: a wordmark, o
 |---|---|---|
 | FR-ORG-01 | The header shall show the avatar, display name, login, description, location, website, creation date, and an "Open on GitHub" link. It shall show a verified badge when GitHub reports the organization as verified. | Must |
 | FR-ORG-02 | Stat cards shall show the number of repositories, total stars, total forks, total open issues and pull requests, and the most-used primary language. All figures shall be computed over the repositories the viewer can see. | Must |
-| FR-ORG-03 | A repository table shall list name, description, primary language, stars, forks, open issues and pull requests, and last push. It shall be sortable by every numeric and date column, filterable by name, language, and type (sources, forks, archived), and paginated at 25 rows per page. Selecting a row shall open that repository's BuhTig dashboard. | Must |
+| FR-ORG-03 | A repository list shall show each repository's name, badges, description, primary language, stars, forks, open issues and pull requests, last push, and its commits per week over the last 26 weeks as a sparkline. It shall be sortable by last push, name or stars, filterable by name, language, and type (public, private and internal, sources, forks, archived), and paginated at 25 per page. Each name shall open that repository's BuhTig dashboard. A sparkline shall be fetched only once its row is in view, and a visitor's sparklines shall count as one load of the organization's dashboard (FR-DATA-10). | Must |
 | FR-ORG-04 | A languages chart shall show the number of repositories per primary language (top 8 plus "Other"). | Must |
-| FR-ORG-05 | A top-repositories chart shall show the 10 repositories with the most stars. | Should |
+| FR-ORG-05 | A top-repositories chart shall show the 10 repositories with the most stars, and the overview shall show the 6 with the most stars as cards, the 5 pushed to last, and the 8 topics of the most repositories. | Should |
 | FR-ORG-06 | Activity charts shall show repositories grouped by last push (last 7 days, last 30 days, last 12 months, older) and the number of repositories created per year. | Should |
 | FR-ORG-07 | A members widget shall show the number of members visible to the viewer and up to 24 member avatars linking to their GitHub profiles. | Could |
 | FR-ORG-08 | If an organization has more repositories than `limits.org_repositories` (default 1,000), all figures shall be computed over the most recently pushed repositories up to that limit. The dashboard shall say so. | Must |
@@ -393,7 +402,7 @@ Motion is part of BuhTig's character, but it must feel fast and stay out of the 
 |---|---|---|
 | FR-ANIM-01 | The wordmark shall play a short entrance animation (≤ 800 ms) on the first home-page load of a browser session. | Should |
 | FR-ANIM-02 | The search box shall lift with a soft shadow on hover and focus (≤ 200 ms). | Must |
-| FR-ANIM-03 | When the user goes from home to a dashboard, the search box shall glide from the page center into the header while the dashboard fades in (≤ 400 ms). | Should |
+| FR-ANIM-03 | When the user goes from home to a dashboard, the search box shall glide from the home page into the header while the dashboard fades in (≤ 400 ms). Moving between a dashboard's tabs shall play no entrance again. | Should |
 | FR-ANIM-04 | Each widget shall show a skeleton placeholder with a shimmer until its data arrives. Widgets shall appear independently as their data arrives. | Must |
 | FR-ANIM-05 | Stat-card numbers shall count up to their value when first shown (≤ 1 s). Assistive technology shall receive only the final value. | Must |
 | FR-ANIM-06 | Charts shall animate in when first shown (bars grow, lines draw, segments sweep; ≤ 800 ms). Tooltips shall fade in on hover and focus. | Must |
@@ -545,7 +554,7 @@ The design targets one instance with up to 10,000 users, up to 100,000 cache ent
 |---|---|---|
 | NFR-PRIV-01 | BuhTig shall collect only the data in §5.1 and use no analytics or third-party tracking. It shall set only strictly necessary cookies: the session cookie and a short-lived sign-in state cookie. | Must |
 | NFR-PRIV-02 | For visitors, BuhTig shall keep no server-side records other than transient rate-limit counters and standard request logs. | Must |
-| NFR-PRIV-03 | The Privacy page shall state what BuhTig stores, why, for how long, and how to delete it. | Should |
+| NFR-PRIV-03 | The Privacy page shall state what BuhTig stores, why, for how long, and how to delete it, and that public repositories opened on the instance are listed on its home pages (FR-SRCH-11). | Should |
 
 ### 6.6 Usability and accessibility
 

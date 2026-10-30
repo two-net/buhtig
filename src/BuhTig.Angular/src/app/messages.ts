@@ -13,7 +13,10 @@ export const TITLES = {
   notFound: 'Page not found · BuhTig',
 };
 
-/** UI-04: a dashboard's title, after its resource's name, such as "owner/repo · BuhTig". */
-export function dashboardTitle(name: string): string {
-  return `${name} · BuhTig`;
+/**
+ * UI-04: a dashboard's title, after its resource's name, such as "owner/repo · BuhTig", or
+ * "Issues · owner/repo · BuhTig" on a tab other than the overview.
+ */
+export function dashboardTitle(name: string, tab?: string): string {
+  return tab && tab !== 'Overview' ? `${tab} · ${name} · BuhTig` : `${name} · BuhTig`;
 }

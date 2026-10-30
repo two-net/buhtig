@@ -1,61 +1,87 @@
-<section aria-labelledby="pins-heading">
-  <h2 id="pins-heading" tabindex="-1">Pinned dashboards</h2>
-  <p>{{ PINS_PURPOSE }}</p>
+<section id="shortcuts" class="section" aria-labelledby="shortcuts-heading">
+  <h2 id="shortcuts-heading" tabindex="-1">Pinned dashboards and history</h2>
+  <p class="help">{{ PINS_PURPOSE }}</p>
   @if (pins(); as pins) {
+    <h3 class="sublabel">{{ pinnedCount(pins.length) }}</h3>
     @if (pins.length > 0) {
-      <ol class="pins">
+      <ol class="mini-list pins">
         @for (
           pin of pins;
           track pin.kind + ':' + pin.name;
           let index = $index, first = $first, last = $last
         ) {
           <li>
-            <a [routerLink]="'/' + pin.name">{{ pin.name }}</a>
-            <span class="actions">
-              <button
-                type="button"
-                class="up"
-                [disabled]="busy() || first"
-                (click)="move(index, -1)"
-              >
-                Move up<span class="visually-hidden"> {{ pin.name }}</span>
-              </button>
-              <button
-                type="button"
-                class="down"
-                [disabled]="busy() || last"
-                (click)="move(index, 1)"
-              >
-                Move down<span class="visually-hidden"> {{ pin.name }}</span>
-              </button>
-              <button type="button" class="unpin" [disabled]="busy()" (click)="unpin(index)">
-                Unpin<span class="visually-hidden"> {{ pin.name }}</span>
-              </button>
-            </span>
+            <app-avatar [name]="pin.name.split('/')[0]" [round]="pin.kind === 'repository'" />
+            <a class="grow" [routerLink]="'/' + pin.name">{{ pin.name }}</a>
+            <button
+              type="button"
+              class="iconbtn up"
+              [attr.aria-label]="'Move ' + pin.name + ' up'"
+              [disabled]="busy() || first"
+              (click)="move(index, -1)"
+            >
+              <app-icon name="up" />
+            </button>
+            <button
+              type="button"
+              class="iconbtn down"
+              [attr.aria-label]="'Move ' + pin.name + ' down'"
+              [disabled]="busy() || last"
+              (click)="move(index, 1)"
+            >
+              <app-icon name="down" />
+            </button>
+            <button
+              type="button"
+              class="iconbtn unpin"
+              [attr.aria-label]="'Unpin ' + pin.name"
+              [disabled]="busy()"
+              (click)="unpin(index)"
+            >
+              <app-icon name="x" />
+            </button>
           </li>
         }
       </ol>
     } @else {
-      <p>{{ NO_PINS }}</p>
+      <p class="empty-note">{{ NO_PINS }}</p>
     }
   }
-</section>
 
-<section aria-labelledby="history-heading">
-  <h2 id="history-heading" tabindex="-1">History</h2>
-  <p>{{ HISTORY_PURPOSE }}</p>
-  @if (hasHistory() === true) {
-    <div class="actions">
-      <button type="button" class="clear" [disabled]="busy()" (click)="clearHistory()">
-        Clear history
-      </button>
-    </div>
-  } @else if (hasHistory() === false) {
-    <p>{{ NO_HISTORY }}</p>
+  <h3 id="history-heading" class="sublabel" tabindex="-1">Recently viewed</h3>
+  <p class="help">{{ HISTORY_PURPOSE }}</p>
+  @if (history(); as history) {
+    @if (history.length > 0) {
+      <ul class="mini-list">
+        @for (item of history; track item.shortcut.kind + ':' + item.shortcut.name) {
+          <li>
+            <app-avatar
+              [name]="item.shortcut.name.split('/')[0]"
+              [round]="item.shortcut.kind === 'repository'"
+            />
+            <a class="grow" [routerLink]="'/' + item.shortcut.name">{{ item.shortcut.name }}</a>
+            @if (item.at; as at) {
+              <span class="when"><app-relative-time [value]="at" /></span>
+            }
+          </li>
+        }
+      </ul>
+      <div class="field history-actions">
+        <button
+          type="button"
+          class="btn ghost sm clear"
+          [disabled]="busy()"
+          (click)="clearHistory()"
+        >
+          <app-icon name="history" />Clear history
+        </button>
+      </div>
+    } @else {
+      <p class="empty-note">{{ NO_HISTORY }}</p>
+    }
+  }
+
+  @if (problem(); as problem) {
+    <p class="field-msg err" role="alert"><app-icon name="alert" />{{ problem }}</p>
   }
 </section>
-
-<p class="done" role="status">{{ done() }}</p>
-@if (problem()) {
-  <p class="problem" role="alert">{{ problem() }}</p>
-}

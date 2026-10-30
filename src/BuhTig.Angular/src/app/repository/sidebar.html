@@ -1,0 +1,156 @@
+<aside aria-label="About this repository">
+  <section class="side-sec" aria-labelledby="about-heading">
+    <h2 id="about-heading">About</h2>
+    @if (repository(); as repository) {
+      @if (repository.description; as description) {
+        <p class="about">{{ description }}</p>
+      } @else {
+        <p class="about muted">{{ NO_DESCRIPTION }}</p>
+      }
+      @if (repository.homepage; as site) {
+        <a class="homelink" [href]="site"><app-icon name="link" />{{ homepage() }}</a>
+      }
+      @if (repository.topics.length > 0) {
+        <ul class="topics" aria-label="Topics">
+          @for (topic of repository.topics; track topic) {
+            <li class="topic-tag">{{ topic }}</li>
+          }
+        </ul>
+      }
+      <ul class="side-list">
+        @if (repository.license; as license) {
+          <li><app-icon name="law" />{{ license }}</li>
+        }
+        @if (stats(); as stats) {
+          <li>
+            <app-icon name="star" /><strong><app-compact-number [value]="stats.stars" /></strong
+            >stars
+          </li>
+          <li>
+            <app-icon name="eye" /><strong><app-compact-number [value]="stats.watchers" /></strong
+            >watching
+          </li>
+          <li>
+            <app-icon name="fork" /><strong><app-compact-number [value]="stats.forks" /></strong
+            >forks
+          </li>
+        }
+        @if (repository.defaultBranch; as branch) {
+          <li>
+            <app-icon name="branch" />Default branch<strong>{{ branch }}</strong>
+          </li>
+        }
+        @if (repository.createdAt; as createdAt) {
+          <li>
+            <app-icon name="calendar" />Created
+            <time [attr.datetime]="createdAt.toISOString()" [title]="exactTime(createdAt)">{{
+              exactDay(createdAt)
+            }}</time>
+          </li>
+        }
+        @if (repository.pushedAt; as pushedAt) {
+          <li><app-icon name="clock" />Last push <app-relative-time [value]="pushedAt" /></li>
+        }
+      </ul>
+    } @else {
+      <div aria-hidden="true">
+        <span class="skel line lg"></span>
+        <span class="skel line"></span>
+        <span class="skel line"></span>
+      </div>
+    }
+  </section>
+
+  <section class="side-sec" aria-labelledby="releases-heading">
+    <h2 id="releases-heading">
+      <a [routerLink]="link('releases')">Releases</a>
+      @if (releases(); as releases) {
+        <span class="counter">{{ releases.count }}</span>
+      }
+    </h2>
+    @if (releases(); as releases) {
+      @if (latest(); as release) {
+        <div class="side-release">
+          <app-icon name="tag" />
+          <div>
+            <div class="tag-line">
+              <strong>{{ release.tag }}</strong
+              ><span class="label success">{{ LATEST }}</span>
+            </div>
+            @if (release.publishedAt; as publishedAt) {
+              <div class="muted small">{{ exactDay(publishedAt) }}</div>
+            }
+          </div>
+        </div>
+      } @else if (releases.releases[0]; as release) {
+        <div class="side-release">
+          <app-icon name="tag" />
+          <div>
+            <strong>{{ release.tag }}</strong>
+            @if (release.publishedAt; as publishedAt) {
+              <div class="muted small">{{ exactDay(publishedAt) }}</div>
+            }
+          </div>
+        </div>
+      } @else {
+        <p class="muted">No releases published</p>
+      }
+      @if (releases.count > 1) {
+        <a class="small-link" [routerLink]="link('releases')">{{
+          moreReleases(releases.count - 1)
+        }}</a>
+      }
+    }
+  </section>
+
+  <section class="side-sec" aria-labelledby="contributors-heading">
+    <h2 id="contributors-heading">
+      <a [routerLink]="link('contributors')">Contributors</a>
+      @if (contributors()?.count; as count) {
+        <span class="counter"><app-compact-number [value]="count" [plain]="true" /></span>
+      }
+    </h2>
+    @if (contributors(); as contributors) {
+      @if (contributors.tooLarge) {
+        <p class="muted">{{ TOO_MANY_CONTRIBUTORS }}</p>
+      } @else if (contributors.contributors.length > 0) {
+        <ul class="people">
+          @for (contributor of contributors.contributors; track contributor.login) {
+            <li>
+              <a
+                [href]="contributor.url ?? 'https://github.com/' + contributor.login"
+                [title]="'@' + contributor.login"
+                [attr.aria-label]="'@' + contributor.login"
+              >
+                <app-avatar
+                  [name]="contributor.login"
+                  [src]="contributor.avatarUrl"
+                  [size]="32"
+                  [round]="true"
+                />
+              </a>
+            </li>
+          }
+        </ul>
+      } @else {
+        <p class="muted">No contributors yet</p>
+      }
+    }
+  </section>
+
+  <section
+    class="side-sec"
+    aria-labelledby="languages-heading"
+    appEnter="Repository languages"
+    [appEnterReady]="segments().length > 0"
+  >
+    <h2 id="languages-heading">Languages</h2>
+    @if (languages(); as languages) {
+      @if (segments().length > 0) {
+        <app-split-bar [segments]="segments()" unit="bytes" [summary]="languagesSummary()" />
+      } @else {
+        <p class="muted">{{ NO_CODE }}</p>
+      }
+    }
+  </section>
+</aside>

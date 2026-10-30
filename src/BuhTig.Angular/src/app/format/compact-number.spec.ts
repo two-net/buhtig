@@ -29,6 +29,32 @@ describe('CompactNumber', () => {
     expect(element.querySelector('app-exact, [tabindex]')).toBeNull();
   });
 
+  describe('plain, as within a link', () => {
+    async function showPlain(value: number): Promise<HTMLElement> {
+      fixture = TestBed.createComponent(CompactNumber);
+      fixture.componentRef.setInput('value', value);
+      fixture.componentRef.setInput('plain', true);
+      await fixture.whenStable();
+      return fixture.nativeElement as HTMLElement;
+    }
+
+    it('takes no focus, and has the exact number as its title, which assistive technology reads', async () => {
+      const element = await showPlain(12_345);
+      expect(element.querySelector('app-exact, [tabindex], [role="tooltip"]')).toBeNull();
+      const shown = element.querySelector('[title]')!;
+      expect(shown.textContent).toBe(compactNumber(12_345));
+      expect(shown.getAttribute('title')).toBe(exactNumber(12_345));
+      expect(shown.getAttribute('aria-hidden')).toBe('true');
+      expect(element.querySelector('.sr')?.textContent).toBe(exactNumber(12_345));
+    });
+
+    it('shows a short number as it is, once', async () => {
+      const element = await showPlain(42);
+      expect(element.textContent?.trim()).toBe('42');
+      expect(element.querySelector('[title], .sr')).toBeNull();
+    });
+  });
+
   it('follows its value', async () => {
     const element = await show(42);
     fixture.componentRef.setInput('value', 1_234_567);

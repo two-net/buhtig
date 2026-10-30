@@ -150,11 +150,15 @@ describe('Session', () => {
     expect(session.user()).toEqual(MONA);
   });
 
-  it('remembers for the visit that the user put away the note about their token', () => {
-    http.expectOne('/-/api/session');
-    expect(session.tokenNoted()).toBe(false);
-    session.dismissTokenNote();
-    expect(session.tokenNoted()).toBe(true);
+  it('knows when the user signed in on this browser, once the server says', () => {
+    const since = { ...MONA, signed_in_at: '2026-10-20T08:15:00Z' };
+    http.expectOne('/-/api/session').flush({ user: since, token: null });
+    expect(session.user()?.signed_in_at).toBe('2026-10-20T08:15:00Z');
+  });
+
+  it('takes a user whom the server tells no sign-in time of as they are', () => {
+    http.expectOne('/-/api/session').flush({ user: MONA });
+    expect(session.user()?.signed_in_at).toBeUndefined();
   });
 
   it('starts sign-in with the page to return to (FR-AUTH-05)', () => {

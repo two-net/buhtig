@@ -41,9 +41,11 @@ each file that they make smaller, which BuhTig serves in its place, and fails if
 would transfer more than its 300 KB budget (NFR-PERF-02), counting the dashboard's code, which
 the home page loads ahead of need. Its tests run with `npm run test:scripts`.
 
-Pages other than the home page and the sign-in pages load as they are opened, so that the home
-page comes quickly (NFR-PERF-01). Lazy chunks are named after what they hold, such as
-`dashboard-mEQccZib.js`: BuhTig preloads that one on a dashboard's page.
+Pages other than the home page load as they are opened, so that the home page comes quickly
+(NFR-PERF-01), and so does the signed-in home page, once the page knows the user is signed in.
+Lazy chunks are named after what they hold, such as `repository-mEQccZib.js` and
+`organization-Bq3_Xy9z.js`: BuhTig preloads the one a dashboard's page needs. The styles that
+only some pages need, in `src/app/styles`, come with those pages' code, not in `styles.css`.
 
 ## Running unit tests
 

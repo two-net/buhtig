@@ -1,5 +1,6 @@
 import {
   compactNumber,
+  exactDay,
   exactNumber,
   exactTime,
   list,
@@ -128,6 +129,14 @@ describe('format', () => {
     const time = new Date('2026-10-21T12:03:00Z');
     expect(plain(exactTime(time, 'en-US', 'UTC'))).toBe('Oct 21, 2026, 12:03 PM');
     expect(plain(exactTime(time, 'de-DE', 'Europe/Berlin'))).toBe('21.10.2026, 14:03');
+  });
+
+  it("shows the day of a time, in the browser's time zone, for the locale (UI-06)", () => {
+    // Late in the evening where the browser is, whichever time zone that is.
+    const evening = new Date(2026, 9, 21, 23, 30);
+    expect(plain(exactDay(evening, 'en-US'))).toBe('Oct 21, 2026');
+    expect(plain(exactDay(evening, 'de-DE'))).toBe('21.10.2026');
+    expect(exactDay(new Date(2026, 9, 22, 0, 30), 'en-US')).not.toBe(exactDay(evening, 'en-US'));
   });
 
   it("tells the day a week starts on, and its month, in GitHub's time zone", () => {

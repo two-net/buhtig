@@ -1,19 +1,19 @@
 import { Component, inject, viewChild } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { NavigationStart, RouterLink, Router } from '@angular/router';
+import { takeUntilDestroyed, toSignal } from '@angular/core/rxjs-interop';
+import { NavigationStart, Router } from '@angular/router';
 import { filter } from 'rxjs';
-import { Account } from '../account/account';
 import { Glide } from '../motion/glide';
 import { Motion } from '../motion/motion';
+import { Recent } from '../recent/recent';
 import { Search } from '../search/search';
-import { Shortcuts } from '../shortcuts/shortcuts';
-import { Surprise } from '../surprise/surprise';
-import { Wordmark } from '../wordmark/wordmark';
+import { Session } from '../session/session';
+import { SignedInHome } from './signed-in';
+import { VisitorHome } from './visitor';
 
 /**
- * The home page, after a search engine's (§3.1): the wordmark, the search box with "Surprise
- * me" (FR-SRCH-10), and the signed-in user's shortcuts, with "Sign in" or the avatar menu above
- * and links to About and Privacy below (UI-02, UI-08).
+ * The home page: for a visitor, BuhTig's wordmark and what it does, around the search box
+ * (UI-02); for a signed-in user, their dashboards, the search box, and what others opened on this
+ * BuhTig lately (FR-SRCH-08).
  *
  * The wordmark makes an entrance on the first home page of a browser session (FR-ANIM-01). As
  * the page gives way to a dashboard, by whichever way it is opened, the search box glides into
@@ -21,15 +21,26 @@ import { Wordmark } from '../wordmark/wordmark';
  */
 @Component({
   selector: 'app-home',
-  imports: [Account, RouterLink, Search, Shortcuts, Surprise, Wordmark],
-  templateUrl: './home.html',
-  styleUrl: './home.css',
+  imports: [SignedInHome, VisitorHome],
+  template: `
+    @if (user()) {
+      <!-- Its code comes once the page knows the user is signed in, as most visitors are not. -->
+      @defer (on immediate) {
+        <app-signed-in-home #signedIn [recent]="recent()" />
+      }
+    } @else if (user() === null) {
+      <app-visitor-home [recent]="recent()" [entrance]="entrance" />
+    }
+  `,
 })
 export class Home {
-  /** The search box, once the page has been shown. */
-  private readonly search = viewChild(Search);
-
+  protected readonly user = inject(Session).user;
+  protected readonly recent = toSignal(inject(Recent).list());
   protected readonly entrance = isFirstOfSession() && inject(Motion).full();
+
+  /** The page, once it has been shown, for its search box. */
+  private readonly visitor = viewChild(VisitorHome);
+  private readonly signedIn = viewChild<{ search(): Search }>('signedIn');
 
   constructor() {
     const glide = inject(Glide);
@@ -39,7 +50,7 @@ export class Home {
         takeUntilDestroyed(),
       )
       .subscribe((event) => {
-        const search = this.search();
+        const search: Search | undefined = (this.visitor() ?? this.signedIn())?.search();
         if (search !== undefined) {
           glide.leave(event.id, search.bounds());
         }

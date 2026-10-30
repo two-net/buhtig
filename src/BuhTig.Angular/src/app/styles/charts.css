@@ -1,0 +1,272 @@
+/* Charts, and how they make their entrance, with the dashboards' code. */
+.colchart {
+  --plot-h: 180px;
+  user-select: none;
+}
+.colchart .plot {
+  position: relative;
+  height: var(--plot-h);
+  margin-left: 34px;
+}
+.colchart .plot.capped {
+  margin-top: 20px;
+}
+.colchart .gl {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px solid var(--border-muted);
+}
+.colchart .gl.base {
+  border-top-color: var(--border);
+}
+.colchart .gl span {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: -8px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.colchart .bars {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+.colchart .col {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  align-items: flex-end;
+  justify-content: center;
+  min-width: 0;
+  height: 100%;
+}
+.colchart .col i {
+  display: block;
+  width: 100%;
+  max-width: 24px;
+  height: var(--h);
+  border-radius: 4px 4px 0 0;
+  background: var(--s1);
+  transition: opacity 0.15s;
+}
+.colchart .col b {
+  position: absolute;
+  bottom: calc(var(--h) + 4px);
+  left: 50%;
+  translate: -50% 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.colchart .bars:hover .col i,
+.colchart .plot.kbd .col i {
+  opacity: 0.45;
+}
+.colchart .bars .col:hover i,
+.colchart .col.active i {
+  opacity: 1;
+}
+.colchart .xaxis {
+  position: relative;
+  height: 22px;
+  margin-left: 34px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.colchart .xaxis span {
+  position: absolute;
+  top: 5px;
+  translate: -50% 0;
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .colchart .xaxis .minor {
+    display: none;
+  }
+}
+.hbars {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.hbar {
+  display: grid;
+  grid-template-columns: minmax(84px, 36%) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 2px 0;
+  border-radius: 6px;
+  color: var(--fg);
+  font-size: 13px;
+  text-decoration: none !important;
+}
+a.hbar:hover .lab span,
+a.hbar:focus-visible .lab span {
+  color: var(--fg-accent);
+  text-decoration: underline;
+}
+.hbar .lab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.hbar .lab span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hbar .track {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.hbar .track i {
+  display: block;
+  width: calc((100% - 60px) * var(--w));
+  min-width: 2px;
+  height: 12px;
+  border-radius: 0 4px 4px 0;
+  background: var(--s1);
+}
+.hbar .track b {
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.hbars:hover .hbar .track i {
+  opacity: 0.55;
+}
+.hbars .hbar:hover .track i {
+  opacity: 1;
+}
+.stack {
+  display: flex;
+  gap: 2px;
+  height: 8px;
+}
+.stack i {
+  display: block;
+  flex: 1 1 0;
+  min-width: 3px;
+  height: 100%;
+  transition: opacity 0.15s;
+}
+.stack i:first-child {
+  border-radius: 6px 0 0 6px;
+}
+.stack i:last-child {
+  border-radius: 0 6px 6px 0;
+}
+.stack i:only-child {
+  border-radius: 6px;
+}
+.stack:hover i {
+  opacity: 0.55;
+}
+.stack i:hover {
+  opacity: 1;
+}
+.sublabel {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 8px;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.legend .sw {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.legend .nm {
+  color: var(--fg);
+  font-weight: 600;
+}
+.legend .pc {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.spark {
+  flex: none;
+  align-self: center;
+  width: 155px;
+  height: 30px;
+}
+.spark polyline {
+  fill: none;
+  stroke: var(--s1);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.spark path {
+  fill: var(--s1);
+  opacity: 0.1;
+}
+.spark.waiting {
+  border-radius: 6px;
+  background: var(--skel);
+}
+@media (max-width: 640px) {
+  .spark {
+    display: none;
+  }
+}
+/*
+ * What a widget or a section shows makes its entrance as it first comes into view (FR-ANIM-06 to
+ * FR-ANIM-08): bars grow, a split bar sweeps across, and lists come in one item after another,
+ * all within 800 ms.
+ */
+.entering .colchart .col i {
+  transform-origin: bottom;
+  animation: growy 0.5s var(--ease) both;
+  animation-delay: calc(var(--i) * 5ms);
+}
+.entering .colchart .col b {
+  animation: fade 0.3s 0.45s both;
+}
+.entering .hbar .track i {
+  transform-origin: left;
+  animation: growx 0.5s var(--ease) both;
+  animation-delay: calc(var(--i) * 30ms);
+}
+.entering .stack {
+  animation: sweep 0.7s var(--ease) both;
+}
+.entering .stagger > li {
+  animation: rise 0.35s var(--ease) both;
+  animation-delay: calc(min(var(--i, 0), 10) * 30ms);
+}

@@ -1,0 +1,110 @@
+<app-home-styles />
+<app-header [slash]="false" />
+<main id="main" class="dash" tabindex="-1">
+  <aside class="dash-side" aria-labelledby="dashboards-heading">
+    <h2 id="dashboards-heading">{{ TOP_DASHBOARDS }}</h2>
+    <input
+      #filter
+      class="input"
+      type="search"
+      [placeholder]="FIND_DASHBOARD"
+      aria-label="Filter your dashboards"
+      (input)="query.set(filter.value)"
+    />
+    <ul class="side-repos">
+      @for (item of shown(); track item.kind + item.name) {
+        <li>
+          <a [routerLink]="'/' + item.name" [title]="item.pinned ? PINNED : RECENTLY_VIEWED">
+            <app-avatar
+              [name]="item.name.split('/')[0]"
+              [size]="16"
+              [round]="item.kind === 'repository'"
+            />
+            <span>{{ item.name }}</span>
+            @if (item.pinned) {
+              <app-icon name="pin-fill" /><span class="sr">({{ PINNED }})</span>
+            }
+          </a>
+        </li>
+      }
+      @if (empty(); as empty) {
+        <li class="empty-note">{{ empty }}</li>
+      }
+    </ul>
+  </aside>
+
+  <div class="dash-main">
+    <h1>Home</h1>
+    <div class="dash-search">
+      <app-search #dash variant="dash" [focusOnDesktop]="true" />
+    </div>
+    <h2 class="recent-title">{{ RECENT_HEADING }}</h2>
+    @if (recent(); as recent) {
+      @if (recent.length > 0) {
+        <ul class="feed">
+          @for (repository of recent; track repository.name) {
+            <li class="feed-card">
+              <div class="fc-top">
+                <app-avatar
+                  [name]="repository.name.split('/')[0]"
+                  [src]="repository.ownerAvatarUrl"
+                  [size]="32"
+                />
+                <a [routerLink]="'/' + repository.name">{{ repository.name }}</a>
+                @if (repository.fetchedAt; as fetchedAt) {
+                  <span>viewed <app-relative-time [value]="fetchedAt" /></span>
+                }
+              </div>
+              @if (repository.description; as description) {
+                <p>{{ description }}</p>
+              }
+              <div class="rmeta">
+                @if (repository.language; as language) {
+                  <span
+                    ><span class="lang-dot" [style.background]="languageColor()(language)"></span
+                    >{{ language }}</span
+                  >
+                }
+                <span
+                  ><app-icon name="star" /><app-compact-number
+                    [value]="repository.stars"
+                    [plain]="true"
+                /></span>
+                <span
+                  ><app-icon name="fork" /><app-compact-number
+                    [value]="repository.forks"
+                    [plain]="true"
+                /></span>
+                @if (repository.pushedAt; as pushedAt) {
+                  <span>Updated <app-relative-time [value]="pushedAt" /></span>
+                }
+              </div>
+            </li>
+          }
+        </ul>
+      } @else {
+        <p class="empty-note">{{ NOTHING_RECENT }}</p>
+      }
+    }
+  </div>
+
+  <aside class="dash-aside" aria-label="Account">
+    <section class="aside-card" aria-labelledby="private-heading">
+      <h2 id="private-heading">{{ PRIVATE_REPOSITORIES }}</h2>
+      <p>{{ tokenText() }}</p>
+      <a class="btn sm" routerLink="/-/settings"
+        ><app-icon name="key" />{{ token() === 'valid' ? 'Manage token' : 'Add a token' }}</a
+      >
+    </section>
+    <section class="aside-card" aria-labelledby="keyboard-heading">
+      <h2 id="keyboard-heading">{{ KEYBOARD }}</h2>
+      <ul>
+        @if (slashOn()) {
+          <li><kbd>/</kbd>Jump to search</li>
+        }
+        <li><kbd>Esc</kbd>Clear the search box</li>
+        <li><kbd>←</kbd><kbd>→</kbd>Read chart values</li>
+      </ul>
+    </section>
+  </aside>
+</main>

@@ -59,6 +59,12 @@ const REPOSITORIES: usize = 20;
 const ORGANIZATIONS: [(&str, usize); 2] = [("big", 1000), ("mid", 100)];
 /// How many of their members show their membership.
 const MEMBERS: [(&str, usize); 2] = [("big", 57), ("mid", 10)];
+/// The rows of an organization's repository table on a page, each of which asks for its
+/// repository's commit activity.
+const ROWS: usize = 25;
+/// How many contributors and releases each repository has, more than a widget lists.
+const CONTRIBUTORS: usize = 240;
+const RELEASES: usize = 42;
 
 /// What a repository dashboard asks for, besides its summary, and how each is reported.
 const REPOSITORY_WIDGETS: [(&str, &str); 7] = [
@@ -353,6 +359,7 @@ impl View {
         let base = match self {
             View::Home => {
                 calls.push(Call::get("surprise", "/-/api/surprise".to_owned()));
+                calls.push(Call::get("recent", "/-/api/recent".to_owned()));
                 if signed_in {
                     calls.push(Call::get("shortcuts", "/-/api/shortcuts".to_owned()));
                 }
@@ -371,6 +378,13 @@ impl View {
                 calls.push(Call::get("organization", base.clone()));
                 for (widget, label) in ORGANIZATION_WIDGETS {
                     calls.push(Call::get(label, format!("{base}/{widget}")));
+                }
+                // The first page of the table, pushed to most recently first.
+                for row in 0..ROWS {
+                    calls.push(Call::get(
+                        "organization row commit-activity",
+                        format!("{base}/repositories/repo-{row}/commit-activity"),
+                    ));
                 }
                 base
             }
@@ -703,20 +717,27 @@ fn github(path: &str, query: &HashMap<String, String>) -> (u16, Option<String>, 
             "Shell": 9_800, "Dockerfile": 1_200, "Makefile": 900, "JavaScript": 600,
             "Python": 300, "Nix": 120
         })),
-        ["repos", _, _, "contributors"] => ok((0..10)
-            .map(|n| {
+        ["repos", _, _, "contributors"] => {
+            let contributors = (0..10).map(|n| {
                 let mut contributor = account(&format!("contributor-{n}"), 5_000 + n);
                 contributor["contributions"] = json!(1_000 / (n + 1));
                 contributor
-            })
-            .collect()),
-        ["repos", owner, name, "issues"] => ok((0..10).map(|n| issue(owner, name, n)).collect()),
+            });
+            paged(path, query, contributors.collect(), CONTRIBUTORS)
+        }
+        ["repos", owner, name, "issues"] => ok((0..20).map(|n| issue(owner, name, n)).collect()),
         ["repos", owner, name, "commits"] => ok((0..10).map(|n| commit(owner, name, n)).collect()),
-        ["repos", owner, name, "releases"] => ok((0..5).map(|n| release(owner, name, n)).collect()),
+        ["repos", owner, name, "releases"] => {
+            let releases = (0..5).map(|n| release(owner, name, n));
+            paged(path, query, releases.collect(), RELEASES)
+        }
         ["repos", owner, name, "releases", "latest"] => ok(release(owner, name, 0)),
         ["search", "issues"] => ok(json!({
             "total_count": 1_234, "incomplete_results": false, "items": []
         })),
+        ["users", login, "repos"] => ok((0..6)
+            .map(|n| repository(login, &format!("repo-{n}"), n))
+            .collect()),
         ["orgs", org] => ok(organization(org)),
         ["orgs", org, "repos"] => {
             let total = ORGANIZATIONS
@@ -763,6 +784,31 @@ fn github(path: &str, query: &HashMap<String, String>) -> (u16, Option<String>, 
         }
         _ => (404, None, json!({"message": "Not Found"}).to_string()),
     }
+}
+
+/// A page of a list of `total` items at `path`, of which `items` are the first: the first
+/// item alone with a link to the last page, when one item a page is asked for, as to count
+/// them, or else `items` with a link to the next page.
+fn paged(
+    path: &str,
+    query: &HashMap<String, String>,
+    items: Vec<Value>,
+    total: usize,
+) -> (u16, Option<String>, String) {
+    let at = |per_page: usize, page: usize| {
+        format!("https://api.github.com{path}?per_page={per_page}&page={page}")
+    };
+    if query.get("per_page").map(String::as_str) == Some("1") {
+        let link = format!(
+            "<{}>; rel=\"next\", <{}>; rel=\"last\"",
+            at(1, 2),
+            at(1, total)
+        );
+        let first: Vec<Value> = items.into_iter().take(1).collect();
+        return (200, Some(link), Value::from(first).to_string());
+    }
+    let link = format!("<{}>; rel=\"next\"", at(items.len(), 2));
+    (200, Some(link), Value::from(items).to_string())
 }
 
 /// The number at the end of a name such as `repo-7`.

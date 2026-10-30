@@ -1,18 +1,29 @@
+import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { Privacy } from './privacy';
 
 describe('Privacy', () => {
   async function page(): Promise<HTMLElement> {
-    TestBed.configureTestingModule({ imports: [Privacy], providers: [provideRouter([])] });
+    TestBed.configureTestingModule({
+      imports: [Privacy],
+      providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting()],
+    });
     const fixture = TestBed.createComponent(Privacy);
     fixture.autoDetectChanges();
     await fixture.whenStable();
     return fixture.nativeElement as HTMLElement;
   }
 
+  it('is a page of prose below the header, with the search box (UI-03)', async () => {
+    const shown = await page();
+    expect(shown.querySelector('app-header + main#main .prose h1')?.textContent).toBe('Privacy');
+    expect(shown.querySelector('app-header form[role="search"]')).not.toBeNull();
+  });
+
   it('says what BuhTig keeps of visitors and of signed-in users (NFR-PRIV-03)', async () => {
-    const headings = [...(await page()).querySelectorAll('h2')].map((heading) =>
+    const headings = [...(await page()).querySelectorAll('main h2')].map((heading) =>
       heading.textContent?.trim(),
     );
     expect(headings).toEqual([
@@ -32,7 +43,10 @@ describe('Privacy', () => {
   });
 
   it("says what BuhTig notes in the browser's storage, and that it stays there", async () => {
-    const text = (await page()).textContent?.replace(/\s+/g, ' ');
+    const shown = await page();
+    const text = shown.querySelector('main')?.textContent?.replace(/\s+/g, ' ');
+    // Where the / shortcut is turned off.
+    expect(shown.querySelector('main a[href="/-/about"]')?.textContent).toBe('About');
     expect(text).toContain("notes in your browser's session storage that it has played");
     expect(text).toContain(
       "If you turn off the / shortcut on the About page, BuhTig notes that in your browser's " +
@@ -41,7 +55,7 @@ describe('Privacy', () => {
   });
 
   it('says where to delete it all, and where to revoke access on GitHub (FR-PERS-04)', async () => {
-    const links = [...(await page()).querySelectorAll('a')].map((link) => [
+    const links = [...(await page()).querySelectorAll('main a')].map((link) => [
       link.textContent?.trim(),
       link.getAttribute('href'),
     ]);

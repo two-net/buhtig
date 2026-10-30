@@ -7,7 +7,12 @@ import { Shortcut, resourceOf } from './pick';
 /** A signed-in user's pins, in their order, and what they viewed recently, newest first. */
 export interface PinsAndHistory {
   pins: Shortcut[];
-  recent: Shortcut[];
+  recent: Viewed[];
+}
+
+/** A dashboard that the user viewed, and when they last did, as the server tells it. */
+export interface Viewed extends Shortcut {
+  viewed_at?: string;
 }
 
 /** Why the server did not pin or unpin a dashboard. */

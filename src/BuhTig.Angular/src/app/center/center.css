@@ -1,0 +1,62 @@
+app-center {
+  display: block;
+}
+/* A page of one message in the middle, with its code. */
+.center {
+  max-width: 760px;
+  margin: 40px auto 0;
+  padding: 40px 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  text-align: center;
+}
+@media (max-width: 808px) {
+  .center {
+    margin: 24px 16px 0;
+    padding: 32px 16px;
+  }
+}
+.center .big-icon {
+  display: grid;
+  place-items: center;
+  margin: 0 auto 16px;
+  color: var(--fg-muted);
+  --icon: 32px;
+}
+.center h1 {
+  margin: 0 0 8px;
+  font-size: 24px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.center p {
+  max-width: 52ch;
+  margin: 0 auto 24px;
+  color: var(--fg-muted);
+  font-size: 16px;
+}
+.center .row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.center .row + .row {
+  margin-top: 16px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 2em;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+.chip:hover {
+  background: var(--control-bg-hover);
+  text-decoration: none;
+}

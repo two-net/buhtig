@@ -1,5 +1,14 @@
 import { ListedRepository } from '../dashboard/resources';
-import { DEFAULT_SORT, NO_FILTER, PAGE_SIZE, languagesOf, matches, pageOf, sorted } from './table';
+import {
+  NO_FILTER,
+  PAGE_SIZE,
+  RepositoryType,
+  languagesOf,
+  matches,
+  pageOf,
+  pagesAround,
+  sorted,
+} from './table';
 
 function repository(name: string, details: Partial<ListedRepository> = {}): ListedRepository {
   return {
@@ -14,6 +23,7 @@ function repository(name: string, details: Partial<ListedRepository> = {}): List
     fork: false,
     archived: false,
     visibility: 'public',
+    topics: [],
     ...details,
   };
 }
@@ -23,8 +33,8 @@ const names = (repositories: ListedRepository[]) => repositories.map(({ name }) 
 describe('matches', () => {
   const widget = repository('Widget', { language: 'Rust' });
   const fork = repository('gadget', { fork: true });
-  const archived = repository('sprocket', { archived: true });
-  const archivedFork = repository('cog', { fork: true, archived: true });
+  const archived = repository('sprocket', { archived: true, visibility: 'private' });
+  const archivedFork = repository('cog', { fork: true, archived: true, visibility: 'internal' });
   const all = [widget, fork, archived, archivedFork];
 
   it('lets every repository through to begin with', () => {
@@ -36,6 +46,7 @@ describe('matches', () => {
     expect(named('dge')).toEqual(['Widget', 'gadget']);
     expect(named('WIDG')).toEqual(['Widget']);
     expect(named('  get ')).toEqual(['Widget', 'gadget']);
+    // Not the language, nor anything else.
     expect(named('rust')).toEqual([]);
   });
 
@@ -45,11 +56,19 @@ describe('matches', () => {
   });
 
   it('tells sources, forks and archived repositories apart, as GitHub does', () => {
-    const of = (type: 'sources' | 'forks' | 'archived') =>
+    const of = (type: RepositoryType) =>
       names(all.filter((r) => matches(r, { ...NO_FILTER, type })));
     expect(of('sources')).toEqual(['Widget', 'sprocket']);
     expect(of('forks')).toEqual(['gadget', 'cog']);
     expect(of('archived')).toEqual(['sprocket', 'cog']);
+  });
+
+  it('tells public repositories from private and internal ones (FR-ORG-09)', () => {
+    const of = (type: RepositoryType) =>
+      names(all.filter((r) => matches(r, { ...NO_FILTER, type })));
+    expect(of('public')).toEqual(['Widget', 'gadget']);
+    expect(of('private')).toEqual(['sprocket', 'cog']);
+    expect(of('all')).toEqual(['Widget', 'gadget', 'sprocket', 'cog']);
   });
 
   it('lets through only what passes every filter', () => {
@@ -63,59 +82,34 @@ describe('matches', () => {
 });
 
 describe('sorted', () => {
-  const a = repository('a', {
-    stars: 10,
-    forks: 1,
-    openIssuesAndPullRequests: 5,
-    pushedAt: new Date('2026-10-01T00:00:00Z'),
-  });
-  const b = repository('b', {
-    stars: 30,
-    forks: 1,
-    openIssuesAndPullRequests: 0,
-    pushedAt: new Date('2026-10-20T00:00:00Z'),
-  });
-  const c = repository('c', { stars: 20, forks: 3, openIssuesAndPullRequests: 9 });
+  const a = repository('a', { stars: 10, pushedAt: new Date('2026-10-01T00:00:00Z') });
+  const b = repository('b', { stars: 30, pushedAt: new Date('2026-10-20T00:00:00Z') });
+  const c = repository('c', { stars: 20 });
 
-  it('puts the repositories pushed to most recently first to begin with', () => {
-    expect(names(sorted([c, a, b], DEFAULT_SORT))).toEqual(['b', 'a', 'c']);
+  it('puts the repositories pushed to most recently first, and those never pushed to last', () => {
+    expect(names(sorted([c, a, b], 'pushed'))).toEqual(['b', 'a', 'c']);
   });
 
-  it('sorts by each figure, either way', () => {
-    expect(names(sorted([a, b, c], { column: 'stars', direction: 'descending' }))).toEqual([
-      'b',
-      'c',
-      'a',
-    ]);
-    expect(names(sorted([a, b, c], { column: 'stars', direction: 'ascending' }))).toEqual([
-      'a',
-      'c',
-      'b',
-    ]);
-    expect(names(sorted([a, b, c], { column: 'issues', direction: 'descending' }))).toEqual([
-      'c',
-      'a',
-      'b',
-    ]);
-    // A repository never pushed to is the oldest.
-    expect(names(sorted([a, b, c], { column: 'pushed', direction: 'ascending' }))).toEqual([
-      'c',
-      'a',
-      'b',
-    ]);
+  it('sorts by name', () => {
+    expect(names(sorted([c, a, b], 'name'))).toEqual(['a', 'b', 'c']);
   });
 
-  it('sorts those with the same figure by name, whichever way', () => {
-    for (const direction of ['ascending', 'descending'] as const) {
-      expect(names(sorted([c, b, a], { column: 'forks', direction })).slice(0, 2)).toEqual(
-        direction === 'ascending' ? ['a', 'b'] : ['c', 'a'],
-      );
-    }
+  it('puts the repositories with the most stars first', () => {
+    expect(names(sorted([a, b, c], 'stars'))).toEqual(['b', 'c', 'a']);
+  });
+
+  it('sorts those with the same figure by name', () => {
+    const d = repository('d', { stars: 20 });
+    const e = repository('e', { pushedAt: new Date('2026-10-20T00:00:00Z') });
+    expect(names(sorted([d, a, c, b], 'stars'))).toEqual(['b', 'c', 'd', 'a']);
+    expect(names(sorted([e, b, a], 'pushed'))).toEqual(['b', 'e', 'a']);
+    // Two never pushed to, too.
+    expect(names(sorted([d, c], 'pushed'))).toEqual(['c', 'd']);
   });
 
   it('leaves the list it was given as it was', () => {
     const list = [a, b, c];
-    sorted(list, { column: 'stars', direction: 'descending' });
+    sorted(list, 'stars');
     expect(names(list)).toEqual(['a', 'b', 'c']);
   });
 });
@@ -132,6 +126,11 @@ describe('languagesOf', () => {
       ]),
     ).toEqual(['C', 'Go', 'TypeScript']);
   });
+
+  it('names none when no repository has a language', () => {
+    expect(languagesOf([repository('a'), repository('b')])).toEqual([]);
+    expect(languagesOf([])).toEqual([]);
+  });
 });
 
 describe('pageOf', () => {
@@ -141,20 +140,43 @@ describe('pageOf', () => {
     expect(PAGE_SIZE).toBe(25);
     const first = pageOf(many, 0);
     expect(first.repositories).toEqual(many.slice(0, 25));
-    expect([first.index, first.first, first.last, first.count]).toEqual([0, 1, 25, 3]);
+    expect([first.index, first.count]).toEqual([0, 3]);
+    const middle = pageOf(many, 1);
+    expect(middle.repositories).toEqual(many.slice(25, 50));
     const last = pageOf(many, 2);
     expect(last.repositories).toEqual(many.slice(50));
-    expect([last.index, last.first, last.last, last.count]).toEqual([2, 51, 60, 3]);
+    expect([last.index, last.count]).toEqual([2, 3]);
   });
 
   it('shows the nearest page there is', () => {
     expect(pageOf(many, 7).index).toBe(2);
+    expect(pageOf(many, 7).repositories).toEqual(many.slice(50));
     expect(pageOf(many, -1).index).toBe(0);
     expect(pageOf(many.slice(0, 25), 1).count).toBe(1);
+    expect(pageOf(many.slice(0, 26), 1).repositories).toEqual([many[25]]);
   });
 
   it('has one page, an empty one, when there are no repositories', () => {
     const page = pageOf([], 0);
     expect([page.repositories, page.index, page.count]).toEqual([[], 0, 1]);
+  });
+});
+
+describe('pagesAround', () => {
+  it('offers every page when there are few', () => {
+    expect(pagesAround(0, 1)).toEqual([0]);
+    expect(pagesAround(0, 3)).toEqual([0, 1, 2]);
+    expect(pagesAround(1, 4)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('offers the first and the last, and those next to the page shown, with gaps between', () => {
+    expect(pagesAround(0, 10)).toEqual([0, 1, 'gap', 9]);
+    expect(pagesAround(5, 10)).toEqual([0, 'gap', 4, 5, 6, 'gap', 9]);
+    expect(pagesAround(9, 10)).toEqual([0, 'gap', 8, 9]);
+  });
+
+  it('puts a gap where a single page is left out too', () => {
+    expect(pagesAround(3, 7)).toEqual([0, 'gap', 2, 3, 4, 'gap', 6]);
+    expect(pagesAround(2, 7)).toEqual([0, 1, 2, 3, 'gap', 6]);
   });
 });

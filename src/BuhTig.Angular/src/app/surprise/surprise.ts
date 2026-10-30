@@ -3,15 +3,22 @@ import { Component, inject } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { Router } from '@angular/router';
 import { catchError, map, of } from 'rxjs';
+import { Icon } from '../icon/icon';
 
 /**
- * "Surprise me", beside "Show dashboard" on the home page: it opens the dashboard of a random
- * public repository that BuhTig has cached (FR-SRCH-10, UI-02).
+ * "Surprise me", on the visitor's home page: it opens the dashboard of a random public
+ * repository that BuhTig has cached (FR-SRCH-10, UI-02). It is there only while the cache holds
+ * one.
  */
 @Component({
   selector: 'app-surprise',
-  templateUrl: './surprise.html',
-  styleUrl: './surprise.css',
+  imports: [Icon],
+  template: `
+    @if (name(); as picked) {
+      <button type="button" (click)="open(picked)"><app-icon name="sparkle" />Surprise me</button>
+    }
+  `,
+  styles: ':host { display: contents; }',
 })
 export class Surprise {
   private readonly router = inject(Router);

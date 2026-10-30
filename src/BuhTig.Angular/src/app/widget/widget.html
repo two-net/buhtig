@@ -1,30 +1,89 @@
-<section #section tabindex="-1" [attr.aria-labelledby]="id" [attr.aria-busy]="busy()">
-  <h2 [id]="id" [class.visually-hidden]="hideHeading()">{{ heading() }}</h2>
-  @switch (state().status) {
-    @case ('loading') {
-      <!-- A placeholder of about the content's size, so that little moves once it is there. -->
-      <div class="skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
-      <p class="visually-hidden">{{ loading }}</p>
+<section #section class="w" tabindex="-1" [attr.aria-labelledby]="id" [attr.aria-busy]="busy()">
+  <div class="w-head">
+    <h2 [id]="id">{{ heading() }}</h2>
+    @if (ready() && table()) {
+      <button
+        type="button"
+        class="linkbtn"
+        [attr.aria-pressed]="tabled()"
+        (click)="tabled.set(!tabled())"
+      >
+        {{ toggle() }}
+      </button>
     }
-    @case ('computing') {
-      <p class="message">{{ computing }}</p>
-      <div class="skeleton" aria-hidden="true"><span></span><span></span><span></span></div>
-    }
-    @case ('empty') {
-      <p class="message">{{ empty() }}</p>
-    }
-    @case ('error') {
-      <p class="message">{{ failed() }}</p>
-      @if (held()) {
-        <a class="action" [href]="signIn()">Sign in</a>
-      } @else {
-        <button type="button" class="action" (click)="retry()">Try again</button>
+  </div>
+  @if (ready() && summary()) {
+    <p class="w-sub">{{ summary() }}</p>
+  }
+  <div class="w-body" [class.flush]="flush() && ready()">
+    @switch (state().status) {
+      @case ('loading') {
+        <!-- A placeholder of about the content's shape, so that little moves once it is there. -->
+        <div aria-hidden="true">
+          @switch (skeleton()) {
+            @case ('list') {
+              @for (width of rows; track $index) {
+                <div class="skel-row">
+                  <span class="skel dot"></span>
+                  <div class="grow">
+                    <span class="skel line" [style.width.%]="width"></span>
+                    <span class="skel line thin" [style.width.%]="width - 24"></span>
+                  </div>
+                </div>
+              }
+            }
+            @case ('bars') {
+              @for (width of bars; track $index) {
+                <span class="skel line bar" [style.width.%]="width"></span>
+              }
+            }
+            @case ('stack') {
+              <span class="skel line"></span>
+              @for (width of legend; track $index) {
+                <span class="skel line" [style.width.%]="width"></span>
+              }
+            }
+            @default {
+              <span class="skel block"></span>
+            }
+          }
+        </div>
+        <p class="sr">{{ loading }}</p>
+      }
+      @case ('computing') {
+        <div class="w-state calc">
+          <app-icon name="spinner" /><span>{{ computing }}</span>
+        </div>
+      }
+      @case ('empty') {
+        <div class="w-state">
+          <app-icon [name]="emptyIcon()" /><span>{{ empty() }}</span>
+        </div>
+      }
+      @case ('error') {
+        <div class="w-state">
+          <app-icon name="alert" /><span>{{ failed() }}</span>
+          @if (held()) {
+            <a class="btn sm" [href]="signIn()">Sign in</a>
+          } @else {
+            <button type="button" class="btn sm" (click)="retry()">
+              <app-icon name="refresh" />Try again
+            </button>
+          }
+        </div>
+      }
+      @case ('ready') {
+        @if (tabled() && table(); as table) {
+          <app-data-table [table]="table" />
+        } @else {
+          <ng-container *ngTemplateOutlet="content().template; context: { $implicit: data() }" />
+        }
       }
     }
-    @case ('ready') {
-      <ng-container *ngTemplateOutlet="content().template; context: { $implicit: data() }" />
-    }
+  </div>
+  @if (ready()) {
+    <ng-content select="[footer]" />
   }
   <!-- Always there, so that assistive technology announces what "Try again" came to. -->
-  <p class="visually-hidden" role="status">{{ outcome() }}</p>
+  <p class="sr" role="status">{{ outcome() }}</p>
 </section>

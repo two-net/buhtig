@@ -1,0 +1,277 @@
+/* Lists of commits, issues, releases, repositories and people, with the dashboards' code. */
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rows > li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-muted);
+}
+.rows > li:first-child {
+  border-top: 0;
+}
+.rows .t {
+  flex: 1;
+  min-width: 0;
+}
+.rows .ttl {
+  display: block;
+  overflow: hidden;
+  color: var(--fg);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rows a.ttl:hover {
+  color: var(--fg-accent);
+}
+.rows .m {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+  margin-top: 2px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.rows .m .who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rows .lead {
+  flex: none;
+  margin-top: 2px;
+}
+.sha {
+  flex: none;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+  font: 12px/20px var(--mono);
+}
+a.sha:hover {
+  color: var(--fg-accent);
+  text-decoration: none;
+}
+.st-open {
+  color: var(--fg-success);
+}
+.st-closed {
+  color: var(--fg-danger);
+}
+.st-merged,
+.st-done {
+  color: var(--fg-done);
+}
+.list-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+}
+.list-tabs li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+}
+.list-tabs li.on {
+  color: var(--fg);
+  font-weight: 600;
+}
+.list-tabs .lang-dot {
+  width: 8px;
+  height: 8px;
+  box-shadow: none;
+}
+.rows > li.release {
+  display: block;
+  padding: 16px;
+}
+.release h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.release h3 a {
+  color: var(--fg);
+}
+.release .rel-name {
+  margin-top: 4px;
+}
+.release .m {
+  gap: 4px 16px;
+  margin-top: 6px;
+}
+.release .m span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.repo-row {
+  display: flex;
+  gap: 16px;
+}
+.rows.boxed-repos > li {
+  padding: 16px;
+}
+.rows.repo-list > li {
+  padding: 24px 0;
+}
+app-repository-row {
+  flex: 1;
+  min-width: 0;
+}
+.repo-row h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.repo-row h3 a {
+  overflow-wrap: anywhere;
+}
+.repo-row p {
+  max-width: 68ch;
+  margin-top: 4px;
+  color: var(--fg-muted);
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 640px) {
+  .cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.card .c-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.card .c-head app-icon {
+  color: var(--fg-muted);
+}
+.card .c-head a {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card p {
+  flex: 1;
+  margin: 8px 0 16px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.card .rmeta {
+  margin-top: 0;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-muted);
+}
+.filters .input {
+  flex: 1;
+  min-width: 200px;
+}
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 16px;
+  font-size: 14px;
+}
+.pager button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-accent);
+  cursor: pointer;
+}
+.pager button:hover:not([disabled]) {
+  border-color: var(--border);
+}
+.pager button[aria-current='page'] {
+  background: var(--accent-emph);
+  color: #fff;
+  font-weight: 600;
+}
+.pager button[disabled] {
+  color: var(--fg-muted);
+  cursor: default;
+}
+.pager .gap {
+  padding: 0 6px;
+  color: var(--fg-muted);
+}
+.count-note {
+  margin: 16px 0 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.people-grid a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg);
+  font-weight: 600;
+}

@@ -1,19 +1,9 @@
-<header class="page-header">
-  <a class="wordmark" routerLink="/"><app-wordmark /></a>
-</header>
-<main class="prose">
-  <h1>Sign-in didn't work</h1>
-  @if (tooMany()) {
-    <p>
-      Too many sign-ins have come from your network in the last minute. Wait a minute, then try
-      again.
-    </p>
-  } @else {
-    <p>
-      BuhTig couldn't finish signing you in with GitHub. This can happen when signing in takes
-      longer than a few minutes, or when you started it in another tab. Signing in also needs your
-      browser to accept cookies from this site.
-    </p>
-  }
-  <p><a [href]="tryAgain()">Try again</a> or <a routerLink="/">go to the home page</a>.</p>
+<app-header />
+<main id="main" class="page" tabindex="-1">
+  <app-center icon="alert" heading="Sign-in didn't work" [text]="text()">
+    <div class="row">
+      <a class="btn primary" [href]="tryAgain()">Try again</a>
+      <a class="btn" routerLink="/">Go to the home page</a>
+    </div>
+  </app-center>
 </main>

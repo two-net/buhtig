@@ -1,0 +1,37 @@
+/* Notices, with the code of the pages that show them. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 16px 0 0;
+  padding: 16px;
+  border: 1px solid var(--fg-accent);
+  border-radius: 6px;
+  background: var(--accent-muted);
+  color: var(--fg);
+}
+.notice > app-icon {
+  margin-top: 2px;
+  color: var(--fg-accent);
+}
+.notice.warn {
+  border-color: var(--fg-attention);
+  background: var(--attention-muted);
+}
+.notice.warn > app-icon {
+  color: var(--fg-attention);
+}
+.notice.crit {
+  border-color: var(--fg-danger);
+  background: var(--danger-muted);
+}
+.notice.crit > app-icon {
+  color: var(--fg-danger);
+}
+.notice .grow {
+  flex: 1;
+  min-width: 0;
+}
+.notice a {
+  font-weight: 600;
+}

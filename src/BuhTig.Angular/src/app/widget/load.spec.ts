@@ -1,9 +1,9 @@
-import { HttpClient, provideHttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { map } from 'rxjs';
-import { Computing, Loader, RECHECK_MS, load } from './load';
+import { Computing, Load, Loader, RECHECK_MS, emptyWhen, failureOf, load } from './load';
 
 describe('load', () => {
   const repo = signal('acme/widget');
@@ -126,5 +126,64 @@ describe('load', () => {
       http.expectOne('/activity/acme/widget').flush(null, { status, statusText: 'Failed' });
       expect(loader.state(), String(status)).toEqual({ status: 'error', failure });
     }
+  });
+});
+
+describe('failureOf (NFR-UX-06)', () => {
+  const answered = (status: number) => new HttpErrorResponse({ status, statusText: 'Failed' });
+
+  it('tells that the server asks GitHub for no more for visitors (FR-DATA-10)', () => {
+    expect(failureOf(answered(429))).toBe('held');
+  });
+
+  it('tells that the server cannot reach its database', () => {
+    expect(failureOf(answered(503))).toBe('unavailable');
+  });
+
+  it("puts any other failure down to GitHub's", () => {
+    for (const status of [0, 400, 404, 500, 502, 504]) {
+      expect(failureOf(answered(status)), String(status)).toBe('github');
+    }
+    for (const error of [new Computing(), new Error('odd'), 'odd', undefined]) {
+      expect(failureOf(error), String(error)).toBe('github');
+    }
+  });
+});
+
+describe('emptyWhen', () => {
+  /** A loader whose state the test sets, and which counts its retries. */
+  function source() {
+    const state = signal<Load<number[]>>({ status: 'loading' });
+    const retry = vi.fn();
+    return { state, retry, loader: { state: state.asReadonly(), retry } };
+  }
+
+  it('shows data that holds nothing for the widget as empty', () => {
+    const { state, loader } = source();
+    const shown = emptyWhen(loader, (data) => data.every((value) => value === 0));
+    state.set({ status: 'ready', data: [0, 0] });
+    expect(shown.state()).toEqual({ status: 'empty' });
+    state.set({ status: 'ready', data: [0, 3] });
+    expect(shown.state()).toEqual({ status: 'ready', data: [0, 3] });
+  });
+
+  it('leaves every other state be', () => {
+    const { state, loader } = source();
+    const shown = emptyWhen(loader, () => true);
+    for (const other of [
+      { status: 'loading' },
+      { status: 'computing' },
+      { status: 'empty' },
+      { status: 'error', failure: 'held' },
+    ] as Load<number[]>[]) {
+      state.set(other);
+      expect(shown.state()).toEqual(other);
+    }
+  });
+
+  it('tries again by the loader it wraps', () => {
+    const { retry, loader } = source();
+    emptyWhen(loader, () => false).retry();
+    expect(retry).toHaveBeenCalledOnce();
   });
 });

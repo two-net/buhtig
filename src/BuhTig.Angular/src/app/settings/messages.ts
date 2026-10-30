@@ -4,7 +4,9 @@
 import { SaveProblem } from './tokens';
 
 /** FR-ACC-02: Settings are for signed-in users. */
-export const SIGN_IN_FIRST = 'Sign in with GitHub to see your settings.';
+export const SIGN_IN_TO_MANAGE = 'Sign in to manage settings';
+export const SIGN_IN_FIRST =
+  'Settings hold your personal access token, pinned dashboards and history.';
 
 /** FR-PAT-09: what a personal access token is for. */
 export const TOKEN_PURPOSE =
@@ -39,18 +41,37 @@ export const TYPE_LABELS = { classic: 'Classic', fine_grained: 'Fine-grained' } 
 export const PERMISSIONS_UNKNOWN =
   "GitHub doesn't report a fine-grained token's permissions. You can see them on GitHub.";
 
-/** FR-PAT-01: the label of the input that takes a token, or one to replace the token saved. */
-export const TOKEN = 'Token';
-export const NEW_TOKEN = 'New token';
+/** FR-PAT-04: a classic token without scopes, and one with. */
+export const NO_SCOPES = 'No scopes: public data only';
+export function scopes(list: string): string {
+  return `Scopes: ${list}`;
+}
 
-/** FR-PAT-04: a classic token without scopes. */
-export const NO_SCOPES = 'None: public data only';
+/** FR-PAT-04: whether GitHub still accepts the token. */
+export const TOKEN_ACTIVE = 'Active';
 
 /** FR-PAT-04: a token without an expiry date. */
-export const NEVER_EXPIRES = 'Never';
+export const NEVER_EXPIRES = 'No expiry date';
+
+/** FR-PAT-10: a token that expires within 7 days, `when` such as "in 3 days". */
+export function expiresSoon(when: string): string {
+  return `This token expires ${when}. Replace it before then to keep seeing private repositories.`;
+}
 
 export const SAVED = 'Token saved.';
 export const REMOVED = 'Token removed. BuhTig no longer keeps any data it read with it.';
+
+/** What the side navigation of Settings leads to. */
+export const SECTIONS = [
+  { id: 'token', icon: 'key', label: 'Personal access token' },
+  { id: 'shortcuts', icon: 'pin', label: 'Pins and history' },
+  { id: 'data', icon: 'trash', label: 'Your data' },
+] as const;
+
+/** When the user signed in on this browser, before the time, such as "@octocat, signed in". */
+export function signedIn(login: string): string {
+  return `@${login}, signed in`;
+}
 
 /** Why a token was not saved, and what to do about it. */
 export function saveProblemMessage(problem: SaveProblem): string {
@@ -88,14 +109,19 @@ export const PINS_PURPOSE =
   'Pinned dashboards come first below the search box on the home page. Pin a dashboard with ' +
   'the Pin button at its top. You can pin up to 12.';
 
-export const NO_PINS = "You haven't pinned any dashboards.";
+export const NO_PINS = 'Nothing pinned yet. Use Pin on any dashboard.';
+
+/** FR-PERS-02: how many of the 12 the user has pinned. */
+export function pinnedCount(count: number): string {
+  return `Pinned (${count} of 12)`;
+}
 
 /** FR-PERS-01, FR-SRCH-08: what history is for, and all it keeps. */
 export const HISTORY_PURPOSE =
   'BuhTig remembers the last 20 dashboards you opened, and offers them below the search box on ' +
   'the home page. It keeps only which dashboards you opened, and when.';
 
-export const NO_HISTORY = 'Your history is empty.';
+export const NO_HISTORY = 'No history yet.';
 
 /** FR-PERS-03 */
 export const HISTORY_CLEARED = 'History cleared. Your pins stay.';
@@ -137,10 +163,18 @@ export const GITHUB_ACCESS =
 export const REVIEW_GITHUB_ACCESS = 'Review your authorized apps on GitHub';
 
 /** FR-PERS-04: what the user confirms before anything is deleted. */
-export const CONFIRM_DELETION = "Delete all your BuhTig data? This can't be undone.";
+export const CONFIRM_DELETION = 'Delete your BuhTig data?';
+
+/** FR-PERS-04: what the user is asked to confirm, `login` being theirs. */
+export function deletionWarning(login: string): string {
+  return (
+    `This deletes everything BuhTig stores for @${login} and signs you out on every browser. ` +
+    "You can sign in again later, but your pins and history won't come back. This can't be " +
+    'undone.'
+  );
+}
 
 /** FR-PERS-04 */
-export const DATA_DELETED =
-  "All your BuhTig data is deleted, and you're signed out on every browser.";
+export const DATA_DELETED = 'Your BuhTig data was deleted';
 
 export const DELETE_FAILED = "BuhTig couldn't delete your data. Try again in a moment.";

@@ -7,19 +7,26 @@ export interface Shortcut {
   name: string;
 }
 
+/** A shortcut as the home page lists it, which says whether it is pinned. */
+export interface Picked extends Shortcut {
+  pinned: boolean;
+}
+
 /** How many shortcuts the home page shows (FR-SRCH-08). */
-export const MAX_SHORTCUTS = 8;
+export const MAX_SHORTCUTS = 12;
 
 /**
  * The home page's shortcuts (FR-SRCH-08): the pins first, in the user's order, then the
  * dashboards viewed recently that are not pinned, newest first, up to `MAX_SHORTCUTS`.
  */
-export function pick(pins: Shortcut[], recent: Shortcut[]): Shortcut[] {
+export function pick(pins: Shortcut[], recent: Shortcut[]): Picked[] {
   const pinned = new Set(pins.map(key));
-  return [...pins, ...recent.filter((shortcut) => !pinned.has(key(shortcut)))].slice(
-    0,
-    MAX_SHORTCUTS,
-  );
+  return [
+    ...pins.map(({ kind, name }) => ({ kind, name, pinned: true })),
+    ...recent
+      .filter((shortcut) => !pinned.has(key(shortcut)))
+      .map(({ kind, name }) => ({ kind, name, pinned: false })),
+  ].slice(0, MAX_SHORTCUTS);
 }
 
 /** Whether `a` and `b` are the same dashboard, whatever the case of their names. */

@@ -2,7 +2,7 @@ import { HttpClient, HttpErrorResponse, HttpStatusCode } from '@angular/common/h
 import { Injectable, inject, signal } from '@angular/core';
 import { Observable, catchError, map, of, tap } from 'rxjs';
 import { Resource, dashboardPath, parse } from '../search/parse';
-import { Computing } from '../widget/load';
+import { Computing, Failure, failureOf } from '../widget/load';
 import { organizationUrl, repositoryUrl, resourceUrl } from './urls';
 
 /** What a dashboard learns of its repository or organization before its widgets load. */
@@ -31,7 +31,17 @@ export interface Summary {
    * asking GitHub (FR-SRCH-04), as of a URL typed by hand.
    */
   invalid: boolean;
+  /**
+   * Why the data is older than `cache.ttl`, if it is (FR-DATA-05): GitHub failed, or the server
+   * asks GitHub for no more for visitors for now (FR-DATA-10, FR-DATA-11).
+   */
+  stale: Stale | undefined;
+  /** Why BuhTig could show nothing of the resource, if it could not, and has nothing saved. */
+  failure: Failure | undefined;
 }
+
+/** Why a dashboard shows saved data, older than `cache.ttl`. */
+export type Stale = 'held' | 'github';
 
 /** What came of a request to refresh a dashboard (FR-DATA-07). */
 export type Refreshed =
@@ -124,6 +134,7 @@ export interface ListedRepository {
   archived: boolean;
   /** Only a token user sees private and internal ones (FR-ORG-09). */
   visibility: 'public' | 'private' | 'internal';
+  topics: string[];
 }
 
 /** How many of an organization's repositories have each primary language (FR-ORG-04). */
@@ -236,6 +247,8 @@ export interface Contributors {
   contributors: Contributor[];
   /** Whether GitHub does not list them, as for its largest repositories. */
   tooLarge: boolean;
+  /** How many contributors it has in all, unless GitHub does not say. */
+  count: number | undefined;
 }
 
 export interface Contributor {
@@ -256,7 +269,7 @@ export interface IssuesAndPullRequests {
    * the repository has turned them off on GitHub.
    */
   pullRequests: { open: number; merged: number; closed: number } | undefined;
-  /** Up to 10, those updated last first. */
+  /** Up to 20, those updated last first. */
   recent: IssueOrPullRequest[];
 }
 
@@ -270,6 +283,8 @@ export interface IssueOrPullRequest {
   author: string | undefined;
   /** When it was opened. */
   createdAt: Date | undefined;
+  /** When it last changed. */
+  updatedAt: Date | undefined;
   /** Its page on GitHub (FR-REPO-12). */
   url: string | undefined;
 }
@@ -281,6 +296,8 @@ export interface Commit {
   message: string | undefined;
   /** Its author's GitHub login, or else the name the commit gives. */
   author: string | undefined;
+  /** Its author's avatar, an `https` URL, if they have a GitHub account. */
+  authorAvatarUrl: string | undefined;
   /** When it was committed, which for a commit merged from elsewhere is when it landed. */
   committedAt: Date | undefined;
   /** Its page on GitHub (FR-REPO-12). */
@@ -292,12 +309,23 @@ export interface ListedRelease extends Release {
   /** Its name, unless it only repeats the tag. */
   name: string | undefined;
   prerelease: boolean;
+  /** The branch or commit it was made from. */
+  target: string | undefined;
+}
+
+/** A repository's latest releases (FR-REPO-08). */
+export interface Releases {
+  /** Up to 5, the latest first. */
+  releases: ListedRelease[];
+  /** How many releases it has in all. */
+  count: number;
 }
 
 /** The server's answer about a repository or an organization. */
 interface Answer {
   name: string;
   fetched_at?: string;
+  stale?: string | null;
   repository?: RepositoryAnswer;
   organization?: OrganizationAnswer;
 }
@@ -306,6 +334,7 @@ interface Answer {
 interface RepositoryAnswer {
   name: string;
   fetched_at?: string;
+  stale?: string | null;
   owner_avatar_url?: string | null;
   description?: string | null;
   visibility?: string;
@@ -325,6 +354,7 @@ interface RepositoryAnswer {
 interface OrganizationAnswer {
   name: string;
   fetched_at?: string;
+  stale?: string | null;
   avatar_url?: string | null;
   display_name?: string | null;
   description?: string | null;
@@ -359,6 +389,7 @@ interface OrganizationRepositoriesAnswer {
     fork: boolean;
     archived: boolean;
     visibility: string;
+    topics?: string[];
   }[];
 }
 
@@ -420,6 +451,7 @@ interface ContributorsAnswer {
     commits: number;
   }[];
   too_large: boolean;
+  count?: number | null;
 }
 
 /** The server's answer about a repository, for its issues and pull requests. */
@@ -433,6 +465,7 @@ interface IssuesAnswer {
     state: string;
     author: string | null;
     created_at: string | null;
+    updated_at?: string | null;
     url: string | null;
   }[];
 }
@@ -443,6 +476,7 @@ interface CommitsAnswer {
     sha: string;
     message: string | null;
     author: string | null;
+    author_avatar_url?: string | null;
     committed_at: string | null;
     url: string | null;
   }[];
@@ -456,7 +490,9 @@ interface ReleasesAnswer {
     published_at: string | null;
     prerelease: boolean;
     url: string | null;
+    target?: string | null;
   }[];
+  count?: number;
 }
 
 /** What BuhTig knows of repositories and organizations as a whole. */
@@ -474,10 +510,10 @@ export class Resources {
 
   /**
    * What BuhTig knows of `resource`: what it is, or that GitHub says there is no such resource,
-   * or keeps it from the viewer's credential, or that its name cannot be one. `undefined` when
-   * BuhTig cannot tell now: the dashboard then stays as it is.
+   * or keeps it from the viewer's credential, or that its name cannot be one, or why BuhTig
+   * cannot tell now.
    */
-  summary(resource: Resource): Observable<Summary | undefined> {
+  summary(resource: Resource): Observable<Summary> {
     const answer: Observable<Answer> =
       resource.kind === 'repository'
         ? this.http
@@ -487,11 +523,13 @@ export class Resources {
             .get<OrganizationAnswer>(organizationUrl(resource.org))
             .pipe(map((organization) => ({ ...organization, organization })));
     return answer.pipe(
-      map(({ name, fetched_at, repository, organization }) => {
+      map(({ name, fetched_at, stale, repository, organization }): Summary => {
         const path = canonicalPath(name, resource.kind);
         return {
           path,
           fetchedAt: date(fetched_at),
+          stale: stale === 'held' || stale === 'github' ? stale : undefined,
+          failure: undefined,
           repository:
             repository !== undefined && path !== undefined ? header(repository) : undefined,
           organization:
@@ -508,19 +546,17 @@ export class Resources {
         const status = error instanceof HttpErrorResponse ? error.status : undefined;
         const notFound = status === HttpStatusCode.NotFound;
         const invalid = status === HttpStatusCode.BadRequest;
-        return of(
-          denied || notFound || invalid
-            ? {
-                path: undefined,
-                fetchedAt: undefined,
-                repository: undefined,
-                organization: undefined,
-                denied,
-                notFound,
-                invalid,
-              }
-            : undefined,
-        );
+        return of<Summary>({
+          path: undefined,
+          fetchedAt: undefined,
+          repository: undefined,
+          organization: undefined,
+          denied,
+          notFound,
+          invalid,
+          stale: undefined,
+          failure: denied || notFound || invalid ? undefined : failureOf(error),
+        });
       }),
     );
   }
@@ -613,6 +649,7 @@ export class Resources {
                 archived: repository.archived === true,
                 visibility:
                   visibility === 'private' || visibility === 'internal' ? visibility : 'public',
+                topics: (repository.topics ?? []).filter((topic) => typeof topic === 'string'),
               },
             ];
           }),
@@ -688,15 +725,7 @@ export class Resources {
    * GitHub is still computing it (FR-REPO-10), and otherwise as `stats` does.
    */
   commitActivity(owner: string, repo: string): Observable<CommitActivity> {
-    return this.part<CommitActivityAnswer>(owner, repo, 'commit-activity').pipe(
-      map((answer) => {
-        const weeks = answer.weeks.flatMap(({ week, commits }) => {
-          const start = date(week);
-          return start !== undefined ? [{ start, commits }] : [];
-        });
-        return { weeks, total: weeks.reduce((total, week) => total + week.commits, 0) };
-      }),
-    );
+    return this.part<CommitActivityAnswer>(owner, repo, 'commit-activity').pipe(map(activity));
   }
 
   /** The languages of the repository `owner/repo`, which fail as `commitActivity` does. */
@@ -721,6 +750,7 @@ export class Resources {
           commits: contributor.commits,
         })),
         tooLarge: answer.too_large === true,
+        count: typeof answer.count === 'number' ? answer.count : undefined,
       })),
     );
   }
@@ -741,6 +771,7 @@ export class Resources {
           state: item.state === 'closed' || item.state === 'merged' ? item.state : 'open',
           author: item.author || undefined,
           createdAt: date(item.created_at),
+          updatedAt: date(item.updated_at),
           url: link(item.url, ['https:']),
         })),
       })),
@@ -755,6 +786,7 @@ export class Resources {
           sha: commit.sha,
           message: commit.message || undefined,
           author: commit.author || undefined,
+          authorAvatarUrl: link(commit.author_avatar_url, ['https:']),
           committedAt: date(commit.committed_at),
           url: link(commit.url, ['https:']),
         })),
@@ -763,18 +795,61 @@ export class Resources {
   }
 
   /** The latest releases of the repository `owner/repo`, which fail as `commitActivity` does. */
-  releases(owner: string, repo: string): Observable<ListedRelease[]> {
+  releases(owner: string, repo: string): Observable<Releases> {
     return this.part<ReleasesAnswer>(owner, repo, 'releases').pipe(
-      map(({ releases }) =>
-        releases.map((release) => ({
+      map((answer) => {
+        const releases = answer.releases.map((release) => ({
           tag: release.tag,
           name: release.name || undefined,
           publishedAt: date(release.published_at),
           prerelease: release.prerelease === true,
           url: link(release.url, ['https:']),
-        })),
-      ),
+          target: release.target || undefined,
+        }));
+        return { releases, count: Math.max(answer.count ?? 0, releases.length) };
+      }),
     );
+  }
+
+  /**
+   * The commit activity of the repository `repo` of the organization `org`, for a row of its
+   * repository list, which fails as `commitActivity` does. It counts as a load of the
+   * organization's dashboard (FR-DATA-10).
+   */
+  organizationActivity(org: string, repo: string): Observable<CommitActivity> {
+    return this.computed<CommitActivityAnswer>(
+      `${organizationUrl(org)}/repositories/${encodeURIComponent(repo)}/commit-activity`,
+    ).pipe(map(activity));
+  }
+
+  /**
+   * Whether `name` is a user's account rather than an organization's (FR-SRCH-06), or `undefined`
+   * when BuhTig cannot tell, as when there is no such account.
+   */
+  accountType(name: string): Observable<'user' | 'organization' | undefined> {
+    return this.http.get<{ type: string }>(`/-/api/accounts/${encodeURIComponent(name)}`).pipe(
+      map(({ type }) => (type === 'user' || type === 'organization' ? type : undefined)),
+      catchError(() => of(undefined)),
+    );
+  }
+
+  /**
+   * Some of the repositories of the user `login`, `owner/repo`, those pushed to last first, to
+   * suggest in place of a dashboard of the user (FR-SRCH-06). Any that the server gives a name no
+   * repository can have is left out.
+   */
+  userRepositories(login: string): Observable<string[]> {
+    return this.http
+      .get<{
+        repositories: { name: string }[];
+      }>(`/-/api/users/${encodeURIComponent(login)}/repositories`)
+      .pipe(
+        map(({ repositories }) =>
+          repositories.flatMap(({ name }) =>
+            canonicalPath(name, 'repository') !== undefined ? [name] : [],
+          ),
+        ),
+      );
   }
 
   /**
@@ -782,7 +857,12 @@ export class Resources {
    * which fails with `Computing` while GitHub is still computing it (FR-REPO-10).
    */
   private part<T>(owner: string, repo: string, part: string): Observable<T> {
-    return this.http.get<T>(`${repositoryUrl(owner, repo)}/${part}`, { observe: 'response' }).pipe(
+    return this.computed<T>(`${repositoryUrl(owner, repo)}/${part}`);
+  }
+
+  /** The server's answer at `url`, which fails with `Computing` while GitHub computes it. */
+  private computed<T>(url: string): Observable<T> {
+    return this.http.get<T>(url, { observe: 'response' }).pipe(
       map((response) => {
         if (response.status === HttpStatusCode.Accepted) {
           throw new Computing();
@@ -791,6 +871,15 @@ export class Resources {
       }),
     );
   }
+}
+
+/** The commit activity that the server describes as `answer`. */
+function activity(answer: CommitActivityAnswer): CommitActivity {
+  const weeks = answer.weeks.flatMap(({ week, commits }) => {
+    const start = date(week);
+    return start !== undefined ? [{ start, commits }] : [];
+  });
+  return { weeks, total: weeks.reduce((total, week) => total + week.commits, 0) };
 }
 
 /** Why GitHub keeps a resource from the viewer, if `error` is the server's word that it does. */

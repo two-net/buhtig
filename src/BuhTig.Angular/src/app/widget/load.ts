@@ -32,6 +32,20 @@ export interface Loader<T> {
 }
 
 /**
+ * `loader`, but empty when `isEmpty` says that its data holds nothing for the widget that shows
+ * it, as when another widget shows the same data and has something to show.
+ */
+export function emptyWhen<T>(loader: Loader<T>, isEmpty: (data: T) => boolean): Loader<T> {
+  return {
+    state: computed(() => {
+      const state = loader.state();
+      return state.status === 'ready' && isEmpty(state.data) ? { status: 'empty' } : state;
+    }),
+    retry: () => loader.retry(),
+  };
+}
+
+/**
  * What a widget's request fails with while GitHub is still computing its data, as it computes a
  * repository's statistics. The widget then asks again (FR-REPO-10).
  */
@@ -88,13 +102,13 @@ function answer<T>(
             of<Load<T>>({ status: 'computing' }),
             timer(RECHECK_MS[rechecks]).pipe(switchMap(() => answer(data, isEmpty, rechecks + 1))),
           )
-        : of<Load<T>>({ status: 'error', failure: failure(error) }),
+        : of<Load<T>>({ status: 'error', failure: failureOf(error) }),
     ),
   );
 }
 
 /** Why a request failed with `error`, as the server's status says. */
-function failure(error: unknown): Failure {
+export function failureOf(error: unknown): Failure {
   if (!(error instanceof HttpErrorResponse)) {
     return 'github';
   }

@@ -1,0 +1,82 @@
+/* Sidebars, with the dashboards' code. */
+.side-sec {
+  padding: 24px 0;
+  border-top: 1px solid var(--border-muted);
+}
+.side-sec:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.side-sec h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.side-sec h2 a {
+  color: var(--fg);
+}
+.side-sec h2 a:hover {
+  color: var(--fg-accent);
+  text-decoration: none;
+}
+.side-sec .about {
+  font-size: 16px;
+  line-height: 1.5;
+}
+.side-sec .homelink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.side-sec h2 + .topics {
+  margin-top: 0;
+}
+.side-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.side-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--fg-muted);
+}
+.side-list li strong {
+  color: var(--fg);
+}
+.side-release {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.side-release > app-icon {
+  margin-top: 3px;
+  color: var(--fg-success);
+}
+.small-link {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.side-release .tag-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}

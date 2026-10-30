@@ -1,12 +1,8 @@
-<header class="page-header">
-  <a class="wordmark" routerLink="/"><app-wordmark /></a>
-</header>
-<main class="prose">
-  <h1>Not allowed on this instance</h1>
-  <p>
-    The GitHub account you signed in with isn't allowed on this instance of BuhTig. If you think it
-    should be, ask the person who runs this instance to add it.
-  </p>
-  <p>To sign in with another GitHub account, sign out of GitHub first.</p>
-  <p><a routerLink="/">Go to the home page</a></p>
+<app-header />
+<main id="main" class="page" tabindex="-1">
+  <app-center icon="lock" heading="Not allowed on this instance" [text]="text">
+    <div class="row">
+      <a class="btn" routerLink="/">Go to the home page</a>
+    </div>
+  </app-center>
 </main>

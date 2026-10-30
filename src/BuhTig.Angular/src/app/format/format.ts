@@ -37,6 +37,9 @@ const timeFormat = once(
   (locale?: string, timeZone?: string) =>
     new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', timeZone }),
 );
+const dayFormat = once(
+  (locale?: string) => new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }),
+);
 const weekFormat = once(
   (locale?: string) => new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' }),
 );
@@ -113,6 +116,11 @@ export function timeUntil(time: Date, now: number, locale?: string): string {
 /** A time in full, such as "Oct 21, 2026, 12:03 PM", in the browser's time zone. */
 export function exactTime(time: Date, locale?: string, timeZone?: string): string {
   return timeFormat(locale, timeZone).format(time);
+}
+
+/** The day of a time, such as "Oct 21, 2026", in the browser's time zone. */
+export function exactDay(time: Date, locale?: string): string {
+  return dayFormat(locale).format(time);
 }
 
 /**

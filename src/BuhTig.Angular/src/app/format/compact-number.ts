@@ -25,6 +25,11 @@ export class CompactNumber {
   readonly value = input.required<number>();
   /** Whether it counts up to its value as the widget around it makes its entrance. */
   readonly countUp = input(false);
+  /**
+   * Whether it takes no focus, as within a link, which a tooltip of its own would be nested in:
+   * the exact number is then its title, and what assistive technology reads.
+   */
+  readonly plain = input(false);
 
   protected readonly compact = computed(() => compactNumber(this.value()));
   protected readonly exact = computed(() => exactNumber(this.value()));

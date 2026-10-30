@@ -33,9 +33,10 @@ use crate::auth::{self, Auth};
 use crate::cache::Cache;
 use crate::config::AccessMode;
 use crate::health::{self, Health};
-use crate::navigation;
+use crate::navigation::{self, Dashboard};
 use crate::organizations;
 use crate::preview::Previews;
+use crate::recent;
 use crate::repositories;
 use crate::security::{self, Security};
 use crate::session::{self, Sessions};
@@ -99,6 +100,10 @@ pub fn router(
             get(accounts::kind).with_state(cache.clone()),
         )
         .route(
+            "/-/api/users/{login}/repositories",
+            get(accounts::repositories).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/organizations/{org}",
             get(organizations::summary).with_state(cache.clone()),
         )
@@ -109,6 +114,10 @@ pub fn router(
         .route(
             "/-/api/organizations/{org}/repositories",
             get(organizations::repositories).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/organizations/{org}/repositories/{repo}/commit-activity",
+            get(organizations::commit_activity).with_state(cache.clone()),
         )
         .route(
             "/-/api/organizations/{org}/languages",
@@ -205,7 +214,11 @@ pub fn router(
             "/-/api/token",
             put(tokens::save).delete(tokens::remove).with_state(tokens),
         )
-        .route("/-/api/surprise", get(surprise::pick).with_state(cache))
+        .route(
+            "/-/api/surprise",
+            get(surprise::pick).with_state(cache.clone()),
+        )
+        .route("/-/api/recent", get(recent::list).with_state(cache))
         .fallback(get(page).with_state(pages))
         .with_state(health);
     let router = match mode {
@@ -251,18 +264,19 @@ fn compression() -> CompressionLayer<And<SizeAbove, NotForContentType>> {
         .compress_when(SizeAbove::new(1024).and(NotForContentType::IMAGES))
 }
 
-/// Every other path: a file of the UI, a redirect from a page beneath a dashboard to the
-/// dashboard, or else the app, which takes the path as its route (`/owner/repo`,
-/// `/-/about`, …). A dashboard's page carries its link preview, if it has one, and every
-/// page says when the UI is to keep still.
+/// Every other path: a file of the UI, a redirect from another path to the page of a
+/// dashboard's tab that it leads to, or else the app, which takes the path as its route
+/// (`/owner/repo`, `/owner/repo/issues`, `/-/about`, …). Each tab's page carries its
+/// dashboard's link preview, if it has one, and every page says when the UI is to keep
+/// still.
 async fn page(State(pages): State<Pages>, uri: Uri, headers: HeaderMap) -> Response {
     if let Some(asset) = ui::asset::<Ui>(uri.path(), &headers) {
         return asset;
     }
-    // A GitHub link with BuhTig's host opens the dashboard (FR-NAV-02). That needs no
+    // A GitHub link with BuhTig's host opens the matching tab (FR-NAV-02). That needs no
     // database either.
-    if let Some(dashboard) = navigation::redirect(uri.path()) {
-        return moved(&dashboard);
+    if let Some(tab) = navigation::redirect(uri.path()) {
+        return moved(&tab);
     }
     // The files need no database, but the app does for nearly everything it shows.
     if !pages.health.database_reachable().await {
@@ -272,10 +286,13 @@ async fn page(State(pages): State<Pages>, uri: Uri, headers: HeaderMap) -> Respo
         Some(previews) => previews.of(uri.path()).await,
         None => None,
     };
-    let preload = navigation::dashboard_at(uri.path())
-        .is_some()
-        .then(ui::dashboard_preload::<Ui>)
-        .flatten();
+    // The UI's build names each kind of dashboard's code after it.
+    let preload = navigation::dashboard_at(uri.path()).and_then(|(dashboard, _)| {
+        ui::dashboard_preload::<Ui>(match dashboard {
+            Dashboard::Repository { .. } => "repository",
+            Dashboard::Organization { .. } => "organization",
+        })
+    });
     let tags = preview.map(|preview| preview.tags());
     ui::app::<Ui>(head(preload, tags, pages.animations).as_deref())
 }
@@ -292,15 +309,17 @@ fn head(preload: Option<String>, tags: Option<String>, animations: bool) -> Opti
     (!head.is_empty()).then_some(head)
 }
 
-/// The response to a request for a page beneath `dashboard`, or another path to it.
+/// The response to a request for a path that leads to the page of a dashboard's tab at
+/// `tab`, such as a GitHub page that no tab of its own is for, or a tab's path in another
+/// case.
 ///
-/// The redirect is permanent, so that links and previews take the dashboard's URL. Yet
-/// browsers check it again each time, so that a later release can give such pages their
-/// own place.
-fn moved(dashboard: &str) -> Response {
+/// The redirect is permanent, so that links and previews take the tab's URL. Yet browsers
+/// check it again each time, so that a later release can lead such paths elsewhere, as
+/// this one leads GitHub's pages to the tabs it gave them.
+fn moved(tab: &str) -> Response {
     (
         [(header::CACHE_CONTROL, "no-cache")],
-        Redirect::permanent(dashboard),
+        Redirect::permanent(tab),
     )
         .into_response()
 }
@@ -508,7 +527,7 @@ mod tests {
 
     #[test]
     fn dashboards_preload_their_code_before_all_else() {
-        let preload = "<link rel=\"modulepreload\" href=\"/dashboard-ABCDEFGH.js\">\n";
+        let preload = "<link rel=\"modulepreload\" href=\"/repository-ABCDEFGH.js\">\n";
         let tags = "<meta name=\"description\" content=\"x\">\n";
         assert_eq!(
             head(Some(preload.into()), Some(tags.into()), false),

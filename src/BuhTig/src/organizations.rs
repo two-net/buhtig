@@ -4,8 +4,9 @@
 //! (FR-ORG-05), its activity (FR-ORG-06) and its members (FR-ORG-07). The figures, the table
 //! and the charts are over the repositories that the viewer may see, private and internal
 //! ones too for a token user (FR-ORG-09), and at most `limits.org_repositories` of them, those
-//! pushed to most recently (FR-ORG-08). The members are those that the viewer may see: those
-//! who show their membership publicly, and others too for a token user (FR-ACC-04).
+//! pushed to most recently (FR-ORG-08). The table shows each repository's commit activity
+//! too, read for it alone. The members are those that the viewer may see: those who show
+//! their membership publicly, and others too for a token user (FR-ACC-04).
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -22,7 +23,8 @@ use crate::accounts::is_account_name;
 use crate::cache::{self, Cache, Cached, Outcome, Viewer};
 use crate::github::{self, List};
 use crate::repositories::{
-    data, denied, is_repository_name, link, page, refreshed, respond, status, text, visibility,
+    data, denied, is_repository_name, link, page, refreshed, respond, stale, status, text, topics,
+    visibility, weeks,
 };
 
 /// FR-ORG-04: the languages the chart names. The rest are "Other".
@@ -41,11 +43,12 @@ const MEMBERS: usize = 24;
 /// What is kept of each of an organization's repositories: what its dashboard shows of them
 /// (FR-ORG-02 to FR-ORG-06), so that a large organization's list is small to cache and to
 /// read. `private` and `visibility` tell which are private or internal (FR-ORG-09).
-const REPOSITORY_FIELDS: [&str; 13] = [
+const REPOSITORY_FIELDS: [&str; 14] = [
     "name",
     "full_name",
     "description",
     "language",
+    "topics",
     "stargazers_count",
     "forks_count",
     "open_issues_count",
@@ -60,20 +63,21 @@ const REPOSITORY_FIELDS: [&str; 13] = [
 /// `/-/api/organizations/{org}`: what the dashboard's header shows (FR-ORG-01),
 ///
 /// ```json
-/// {"name": "org", "fetched_at": …, "avatar_url": …, "display_name": …, "description": …,
-///  "location": …, "website": …, "created_at": …, "verified": false}
+/// {"name": "org", "fetched_at": …, "stale": null | "held" | "github", "avatar_url": …,
+///  "display_name": …, "description": …, "location": …, "website": …, "created_at": …,
+///  "verified": false}
 /// ```
 ///
 /// The name is the organization's login as GitHub spells it, whatever case it was asked for
 /// in (FR-NAV-04), and `display_name` the name it goes by, if it gives one. `fetched_at` is
-/// when GitHub gave what BuhTig knows of it, which the dashboard shows (FR-DATA-06).
-/// `website` is the one it gives, with `https://` before it if it names no scheme, as
-/// organizations often write it. `verified` is whether GitHub has verified it. What GitHub
-/// does not say, or says in a form BuhTig does not show, is `null`: links are only to `http`
-/// and `https` URLs, and avatars only from `https` ones (NFR-SEC-03). 404 if there is no such
-/// organization, as for a user's account (FR-SRCH-06), or if it is private (FR-ACC-05). 403
-/// when GitHub keeps it from the viewer's credential, with why, as [`denied`] tells it
-/// (FR-PAT-08).
+/// when GitHub gave what BuhTig knows of it, which the dashboard shows (FR-DATA-06), and
+/// `stale` why it is no newer, as [`stale`] tells it. `website` is the one it gives, with
+/// `https://` before it if it names no scheme, as organizations often write it. `verified`
+/// is whether GitHub has verified it. What GitHub does not say, or says in a form BuhTig does
+/// not show, is `null`: links are only to `http` and `https` URLs, and avatars only from
+/// `https` ones (NFR-SEC-03). 404 if there is no such organization, as for a user's account
+/// (FR-SRCH-06), or if it is private (FR-ACC-05). 403 when GitHub keeps it from the viewer's
+/// credential, with why, as [`denied`] tells it (FR-PAT-08).
 ///
 /// Names that cannot be an account's are 400, without asking GitHub (FR-SRCH-04). Any other
 /// status means that BuhTig cannot tell now. The dashboard then keeps its URL.
@@ -102,6 +106,7 @@ pub async fn summary(
     respond(json!({
         "name": login,
         "fetched_at": cached.fetched_at_iso(),
+        "stale": stale(&cached),
         "avatar_url": link(data.get("avatar_url"), &["https"]),
         "display_name": text(data, "name"),
         "description": text(data, "description"),
@@ -144,15 +149,15 @@ pub async fn stats(
 ///
 /// ```json
 /// {"repositories": [{"name": "widget", "description": …, "language": "Rust" | null,
-///   "stars": …, "forks": …, "open_issues_and_pull_requests": …, "pushed_at": …,
-///   "fork": false, "archived": false, "visibility": "public"}]}
+///   "topics": ["widgets", …], "stars": …, "forks": …, "open_issues_and_pull_requests": …,
+///   "pushed_at": …, "fork": false, "archived": false, "visibility": "public"}]}
 /// ```
 ///
 /// The repositories are those that [`stats`] figures over, in the order GitHub gives them,
 /// pushed to most recently first. The dashboard sorts, filters and pages them itself. Each
 /// `name` is the repository's alone, without the organization's, and `visibility` is
 /// `public`, `private` or `internal` (FR-ORG-09). What GitHub does not say is `null`, or 0
-/// for a figure, and an item without a repository's name is left out.
+/// for a figure, or no topics, and an item without a repository's name is left out.
 ///
 /// Its statuses are those of [`stats`].
 pub async fn repositories(
@@ -263,6 +268,51 @@ pub async fn created_per_year(
     match listed(&cache, viewer, &org).await {
         Ok(list) => respond(years(&list, ChronoUtc::now())),
         Err(code) => status(code),
+    }
+}
+
+/// `/-/api/organizations/{org}/repositories/{repo}/commit-activity`: how many commits the
+/// default branch of the organization's repository `repo` had in each of the last 52 weeks,
+/// for its row in the repository table, as the repository's own dashboard tells them
+/// (FR-REPO-03),
+///
+/// ```json
+/// {"weeks": [{"week": "2025-10-26", "commits": 3}, …]}
+/// ```
+///
+/// The names are taken as GitHub spells them, as the repository table has them, and the
+/// statistic is read without reading the repository first: one request to GitHub for each
+/// row, and cached as the repository's dashboard caches it. It is read for the
+/// organization's dashboard, so a visitor's load of the whole table counts once
+/// (FR-DATA-10), and refreshing the dashboard refreshes it (FR-DATA-07).
+///
+/// The statistic carries no mark of whether the repository is private, which the shared
+/// cache must not hold (FR-DATA-04). GitHub answers "not found" for a private repository to
+/// every credential but a PAT that may see it, since signing in asks for no access to
+/// private data (A-03), and a PAT's reads are cached for its user alone.
+///
+/// 202 while GitHub is still computing it: ask again (FR-REPO-10). 404 if there is no such
+/// repository, or if it is private (FR-ACC-05). Names that cannot be an account's and a
+/// repository's are 400, without asking GitHub (FR-SRCH-04). Its other statuses are those
+/// that [`data`] tells, and 502 for weeks that BuhTig cannot read.
+pub async fn commit_activity(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((org, repo)): Path<(String, String)>,
+) -> Response {
+    if !is_account_name(&org) || !is_repository_name(&repo) {
+        return status(StatusCode::BAD_REQUEST);
+    }
+    let path = github::Path::new(["repos", &org, &repo, "stats", "commit_activity"])
+        .expect("names are neither empty nor dots");
+    let activity = cache.get(&viewer, &format!("/{org}"), &path).await;
+    let activity = match data(activity) {
+        Ok(activity) => activity.data,
+        Err(code) => return status(code),
+    };
+    match weeks(&activity) {
+        Some(weeks) => respond(json!({ "weeks": weeks })),
+        None => status(StatusCode::BAD_GATEWAY),
     }
 }
 
@@ -541,6 +591,7 @@ fn row(repository: &Value) -> Option<Value> {
         "name": name,
         "description": text(repository, "description"),
         "language": text(repository, "language"),
+        "topics": topics(repository),
         "stars": figure("stargazers_count"),
         "forks": figure("forks_count"),
         "open_issues_and_pull_requests": figure("open_issues_count"),
@@ -576,6 +627,7 @@ fn website(value: Option<&Value>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use axum::http::{HeaderMap, header};
@@ -632,7 +684,8 @@ mod tests {
     const REPOSITORIES: &str = r#"[
         {"name": "widget", "full_name": "Acme/widget", "private": false, "visibility": "public",
          "owner": {"login": "Acme"}, "html_url": "https://github.com/Acme/widget",
-         "description": "Widgets", "language": "Rust", "stargazers_count": 1200,
+         "description": "Widgets", "language": "Rust", "topics": ["widgets", "rust"],
+         "stargazers_count": 1200,
          "forks_count": 30, "open_issues_count": 12, "fork": false, "archived": false,
          "pushed_at": "2026-10-20T08:00:00Z", "created_at": "2015-03-01T10:00:00Z"},
         {"name": "gadget", "full_name": "Acme/gadget", "private": false, "visibility": "public",
@@ -643,7 +696,8 @@ mod tests {
          "open_issues_count": 0, "fork": false, "archived": true},
         {"name": "docs", "full_name": "Acme/docs", "private": false, "visibility": "public",
          "language": null, "stargazers_count": 5, "forks_count": 1, "open_issues_count": 2},
-        {"name": "odd", "full_name": "Acme/odd", "stargazers_count": "many"},
+        {"name": "odd", "full_name": "Acme/odd", "stargazers_count": "many",
+         "topics": ["ok", 7, null]},
         "odd"
     ]"#;
 
@@ -679,6 +733,18 @@ mod tests {
                 "/orgs/unlisted" => answer(200, &[], r#"{"login": "unlisted"}"#),
                 "/orgs/unlisted/repos" => answer(500, &[], r#"{"message": "Server Error"}"#),
                 "/orgs/acme/repos" => answer(200, &[], REPOSITORIES),
+                "/repos/acme/widget/stats/commit_activity" => answer(
+                    200,
+                    &[],
+                    r#"[{"week": 1761436800, "total": 3, "days": [3, 0, 0, 0, 0, 0, 0]},
+                        {"week": 1760832000, "total": 1, "days": [1, 0, 0, 0, 0, 0, 0]}]"#,
+                ),
+                "/repos/acme/gadget/stats/commit_activity" => answer(202, &[], "{}"),
+                "/repos/acme/docs/stats/commit_activity" => answer(204, &[], ""),
+                "/repos/acme/sprocket/stats/commit_activity" => answer(200, &[], r#"["odd"]"#),
+                "/repos/acme/broken/stats/commit_activity" => {
+                    answer(500, &[], r#"{"message": "Server Error"}"#)
+                }
                 "/orgs/bare/repos" | "/orgs/bare/public_members" => answer(200, &[], "[]"),
                 "/orgs/acme/public_members" => answer(200, &[], ACME_MEMBERS),
                 "/orgs/unlisted/public_members" => {
@@ -732,6 +798,17 @@ mod tests {
     /// `visitor_fetches` dashboard loads an hour, and reads up to `org_repositories` of an
     /// organization's repositories.
     async fn cache(stub: &Arc<Stub>, visitor_fetches: u32, org_repositories: u32) -> Arc<Cache> {
+        let ttl = Duration::from_secs(15 * 60);
+        cache_for(stub, visitor_fetches, org_repositories, ttl).await
+    }
+
+    /// As [`cache`], keeping data fresh for `ttl`.
+    async fn cache_for(
+        stub: &Arc<Stub>,
+        visitor_fetches: u32,
+        org_repositories: u32,
+        ttl: Duration,
+    ) -> Arc<Cache> {
         let cluster = cluster();
         let database = cluster.create_database();
         let db = db::connect(&DatabaseConfig {
@@ -745,7 +822,7 @@ mod tests {
             db,
             Arc::new(client(stub)),
             &CacheConfig {
-                ttl: Duration::from_secs(15 * 60),
+                ttl,
                 retention: Duration::from_secs(30 * 24 * 60 * 60),
             },
             &LimitsConfig {
@@ -836,6 +913,7 @@ mod tests {
                 StatusCode::OK,
                 json!({
                     "name": "Acme",
+                    "stale": null,
                     "avatar_url": "https://avatars.githubusercontent.com/u/1?v=4",
                     "display_name": "Acme Corporation",
                     "description": "Widgets for everyone",
@@ -852,6 +930,7 @@ mod tests {
                 StatusCode::OK,
                 json!({
                     "name": "bare",
+                    "stale": null,
                     "avatar_url": null,
                     "display_name": null,
                     "description": null,
@@ -865,6 +944,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_header_says_why_its_data_is_no_newer() {
+        let down = Arc::new(AtomicBool::new(false));
+        let stub = Stub::new({
+            let down = down.clone();
+            move |_| match down.load(Ordering::Relaxed) {
+                true => Err(github::Error::Unreachable("timed out".to_owned())),
+                false => answer(200, &[], ACME),
+            }
+        });
+        // Nothing is fresh, and visitors may fetch nothing.
+        let cache = cache_for(&stub, 0, 1000, Duration::ZERO).await;
+        let signed_in = Viewer::SignedIn {
+            user_id: 1,
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let ask = async |viewer: &Viewer| {
+            let response = summary(
+                State(cache.clone()),
+                viewer.clone(),
+                Path("acme".to_owned()),
+            )
+            .await;
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            (status, body["stale"].clone(), body["fetched_at"].clone())
+        };
+
+        let (status, stale, fetched_at) = ask(&signed_in).await;
+        assert_eq!((status, stale), (StatusCode::OK, Value::Null));
+        assert_eq!(
+            ask(&visitor).await,
+            (StatusCode::OK, json!("held"), fetched_at.clone())
+        );
+        down.store(true, Ordering::Relaxed);
+        assert_eq!(
+            ask(&signed_in).await,
+            (StatusCode::OK, json!("github"), fetched_at)
+        );
+    }
+
+    #[tokio::test]
     async fn what_the_header_cannot_show_safely_is_left_out() {
         let stub = github();
         let cache = cache(&stub, 30, 1000).await;
@@ -874,6 +1001,7 @@ mod tests {
                 StatusCode::OK,
                 json!({
                     "name": "odd",
+                    "stale": null,
                     // Only from https URLs.
                     "avatar_url": null,
                     "display_name": null,
@@ -1060,6 +1188,7 @@ mod tests {
                 "name": name,
                 "description": null,
                 "language": language,
+                "topics": [],
                 "stars": figures[0],
                 "forks": figures[1],
                 "open_issues_and_pull_requests": figures[2],
@@ -1071,11 +1200,14 @@ mod tests {
         };
         let mut widget = expected("widget", Some("Rust"), [1200, 30, 12]);
         widget["description"] = json!("Widgets");
+        widget["topics"] = json!(["widgets", "rust"]);
         widget["pushed_at"] = json!("2026-10-20T08:00:00Z");
         let mut gadget = expected("gadget", Some("TypeScript"), [300, 12, 5]);
         gadget["fork"] = json!(true);
         let mut sprocket = expected("sprocket", Some("Rust"), [45, 3, 0]);
         sprocket["archived"] = json!(true);
+        let mut odd = expected("odd", None, [0, 0, 0]);
+        odd["topics"] = json!(["ok"]);
         assert_eq!(
             ask(&cache, Api::Repositories, "acme").await,
             (
@@ -1087,8 +1219,9 @@ mod tests {
                         gadget,
                         sprocket,
                         expected("docs", None, [5, 1, 2]),
-                        // What GitHub does not say is 0, as the stat cards count it.
-                        expected("odd", None, [0, 0, 0]),
+                        // What GitHub does not say is 0, as the stat cards count it, and
+                        // topics are only text.
+                        odd,
                     ],
                 })
             )
@@ -1451,6 +1584,172 @@ mod tests {
                 "{api:?}"
             );
         }
+    }
+
+    /// The status and body of `viewer`'s request for the commit activity of the
+    /// repository `org/repo`, as the repository table asks for it, `null` if there is none.
+    async fn activity(
+        cache: &Arc<Cache>,
+        viewer: &Viewer,
+        org: &str,
+        repo: &str,
+    ) -> (StatusCode, Value) {
+        let names = Path((org.to_owned(), repo.to_owned()));
+        let response = commit_activity(State(cache.clone()), viewer.clone(), names).await;
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
+
+    fn visitor() -> Viewer {
+        Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn each_row_has_its_repositorys_commit_activity() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        assert_eq!(
+            activity(&cache, &visitor(), "Acme", "widget").await,
+            (
+                StatusCode::OK,
+                json!({"weeks": [
+                    {"week": "2025-10-19", "commits": 1},
+                    {"week": "2025-10-26", "commits": 3},
+                ]})
+            )
+        );
+        // As an empty repository has none.
+        assert_eq!(
+            activity(&cache, &visitor(), "Acme", "docs").await,
+            (StatusCode::OK, json!({"weeks": []}))
+        );
+        // Read directly, by the names as given, without reading the repository first, and
+        // then cached.
+        assert_eq!(
+            activity(&cache, &visitor(), "Acme", "widget").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://api.github.com/repos/Acme/widget/stats/commit_activity",
+                "https://api.github.com/repos/Acme/docs/stats/commit_activity",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn rows_share_their_commit_activity_with_the_repositorys_dashboard() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        assert_eq!(
+            activity(&cache, &visitor(), "Acme", "widget").await.0,
+            StatusCode::OK
+        );
+        // The repository's own dashboard reads the same, by the names GitHub gave.
+        let path =
+            github::Path::new(["repos", "Acme", "widget", "stats", "commit_activity"]).unwrap();
+        let read = cache.get(&visitor(), "/Acme/widget", &path).await;
+        assert!(matches!(read, Ok(Outcome::Data(_))), "{read:?}");
+        assert_eq!(stub.urls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn commit_activity_github_is_still_computing_is_asked_for_again() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        for _ in 0..2 {
+            assert_eq!(
+                activity(&cache, &visitor(), "Acme", "gadget").await,
+                (StatusCode::ACCEPTED, Value::Null)
+            );
+        }
+        assert_eq!(stub.urls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_visitors_whole_table_of_commit_activity_is_one_load() {
+        let stub = github();
+        // One load an hour.
+        let cache = cache(&stub, 1, 1000).await;
+        assert_eq!(
+            ask(&cache, Api::Repositories, "acme").await.0,
+            StatusCode::OK
+        );
+        for repo in ["widget", "gadget", "sprocket", "docs", "odd"] {
+            assert_ne!(
+                activity(&cache, &visitor(), "acme", repo).await.0,
+                StatusCode::TOO_MANY_REQUESTS,
+                "{repo}"
+            );
+        }
+        // Another dashboard is another load.
+        assert_eq!(
+            activity(&cache, &visitor(), "other", "widget").await,
+            (StatusCode::TOO_MANY_REQUESTS, Value::Null)
+        );
+        assert_eq!(stub.urls().len(), 7);
+    }
+
+    #[tokio::test]
+    async fn commit_activity_github_cannot_tell_is_not_an_answer() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        for (repo, status) in [
+            ("missing", StatusCode::NOT_FOUND),
+            ("broken", StatusCode::BAD_GATEWAY),
+            // Weeks that BuhTig cannot read.
+            ("sprocket", StatusCode::BAD_GATEWAY),
+        ] {
+            assert_eq!(
+                activity(&cache, &visitor(), "acme", repo).await,
+                (status, Value::Null),
+                "{repo}"
+            );
+        }
+        // Whoever asks, as GitHub answers their own credential.
+        let token_user = Viewer::TokenUser {
+            user_id: 1,
+            credential_id: 1,
+            pat: Secret::new("pat".to_owned()),
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        assert_eq!(
+            activity(&cache, &token_user, "acme", "missing").await,
+            (StatusCode::NOT_FOUND, Value::Null)
+        );
+    }
+
+    #[tokio::test]
+    async fn names_of_rows_that_cannot_be_repositories_are_not_asked_for() {
+        let stub = github();
+        let cache = cache(&stub, 30, 1000).await;
+        let longest = "a".repeat(101);
+        for (org, repo) in [
+            ("-acme", "widget"),
+            ("acme.com", "widget"),
+            ("", "widget"),
+            ("acme", ""),
+            ("acme", "."),
+            ("acme", ".."),
+            ("acme", "wid get"),
+            ("acme", "widget/x"),
+            ("acme", &longest),
+        ] {
+            assert_eq!(
+                activity(&cache, &visitor(), org, repo).await,
+                (StatusCode::BAD_REQUEST, Value::Null),
+                "{org}/{repo}"
+            );
+        }
+        assert_eq!(stub.urls(), Vec::<String>::new());
     }
 
     #[tokio::test]

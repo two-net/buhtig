@@ -1,0 +1,62 @@
+@let known = summary();
+<app-dashboard-styles />
+<app-tip />
+<app-header [crumbs]="crumbs()" [prefill]="'github.com/' + name()">
+  @if (shown()) {
+    <app-tabs [tabs]="tabs()" />
+  }
+</app-header>
+<main
+  id="main"
+  class="page"
+  tabindex="-1"
+  [class.view-enter]="glidingFrom"
+  [class.refreshing]="refreshing()"
+  [attr.aria-busy]="known === undefined || refreshing()"
+>
+  @if (known?.invalid) {
+    <app-not-found-or-private [name]="owner() + '/' + repo()" kind="repository" [invalid]="true" />
+  } @else if (known?.notFound) {
+    <app-not-found-or-private [name]="owner() + '/' + repo()" kind="repository" />
+  } @else if (known?.failure; as failure) {
+    <app-failure [failure]="failure" (retry)="retry()" />
+  } @else {
+    <div class="container">
+      <app-notices [stale]="known?.stale" [fetchedAt]="known?.fetchedAt" [denied]="known?.denied" />
+      @if (repository(); as repository) {
+        <app-repository-head
+          [repository]="repository"
+          [fetchedAt]="known?.fetchedAt"
+          (refreshed)="refreshing.set(true)"
+        />
+      } @else if (!known?.denied) {
+        <div class="repohead" aria-hidden="true">
+          <span class="skel av-skel"></span>
+          <span class="skel line lg head-skel"></span>
+        </div>
+      }
+      @if (!known?.denied) {
+        @switch (tab()) {
+          @case ('activity') {
+            <app-repository-activity-tab />
+          }
+          @case ('issues') {
+            <app-repository-issues-tab kind="issue" />
+          }
+          @case ('pulls') {
+            <app-repository-issues-tab kind="pull_request" />
+          }
+          @case ('contributors') {
+            <app-repository-contributors-tab />
+          }
+          @case ('releases') {
+            <app-repository-releases-tab />
+          }
+          @default {
+            <app-repository-overview />
+          }
+        }
+      }
+    </div>
+  }
+</main>

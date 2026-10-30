@@ -1,0 +1,152 @@
+<div class="layout">
+  <div class="stack-v">
+    @if (truncated(); as truncated) {
+      <div class="notice" role="status">
+        <app-icon name="info" />
+        <div class="grow">{{ truncated }}</div>
+      </div>
+    }
+    <app-organization-pulse />
+    @if (popular().length > 0) {
+      <section aria-labelledby="popular-heading">
+        <h2 id="popular-heading" class="sec-title">{{ POPULAR }}</h2>
+        <div class="cards">
+          @for (repository of popular(); track repository.name) {
+            <app-repository-card [repository]="repository" />
+          }
+        </div>
+      </section>
+    }
+    <app-widget
+      heading="Most-starred repositories"
+      [empty]="NO_STARRED"
+      emptyIcon="star"
+      skeleton="bars"
+      [summary]="topSummary()"
+      [table]="topTable()"
+    >
+      <ng-template [appLoaded]="topRepositories">
+        <app-bar-chart [bars]="topBars()" unit="stars" [summary]="topSummary()" />
+      </ng-template>
+    </app-widget>
+    <div class="grid-2">
+      <app-widget
+        heading="Last push"
+        [empty]="NO_REPOSITORIES"
+        emptyIcon="clock"
+        skeleton="bars"
+        [summary]="LAST_PUSH_SUMMARY"
+        [table]="pushTable()"
+      >
+        <ng-template [appLoaded]="lastPush">
+          <app-bar-chart [bars]="pushBars()" unit="repositories" [summary]="LAST_PUSH_SUMMARY" />
+        </ng-template>
+      </app-widget>
+      <app-widget
+        heading="Repositories created per year"
+        [empty]="NO_REPOSITORIES"
+        emptyIcon="calendar"
+        [summary]="yearSummary()"
+        [table]="yearTable()"
+      >
+        <ng-template [appLoaded]="createdPerYear">
+          <app-column-chart
+            [columns]="yearColumns()"
+            [ticks]="yearTicks()"
+            unit="repositories"
+            [summary]="yearSummary()"
+            [height]="150"
+            [caps]="true"
+          />
+        </ng-template>
+      </app-widget>
+    </div>
+    <section class="Box" aria-labelledby="recent-heading">
+      <div class="Box-header">
+        <h2 class="Box-title" id="recent-heading">{{ RECENTLY_PUSHED }}</h2>
+        <a [routerLink]="allRepositories()">{{ VIEW_ALL_REPOSITORIES }}</a>
+      </div>
+      @switch (repositories.state().status) {
+        @case ('ready') {
+          <ul class="rows boxed-repos">
+            @for (repository of recent(); track repository.name) {
+              <li><app-repository-row [repository]="repository" /></li>
+            }
+          </ul>
+        }
+        @case ('empty') {
+          <p class="pad muted">{{ NO_REPOSITORIES }}</p>
+        }
+        @case ('error') {}
+        @default {
+          <div class="pad" aria-hidden="true">
+            <span class="skel line lg"></span>
+            <span class="skel line"></span>
+            <span class="skel line"></span>
+          </div>
+        }
+      }
+    </section>
+  </div>
+
+  <aside aria-label="About this organization">
+    <section class="side-sec" aria-labelledby="people-heading">
+      <h2 id="people-heading">
+        <a [routerLink]="allPeople()">People</a>
+        @if (members(); as members) {
+          <span class="counter"><app-compact-number [value]="members.count" [plain]="true" /></span>
+        }
+      </h2>
+      @if (members(); as members) {
+        <ul class="people">
+          @for (member of members.members.slice(0, 18); track member.login) {
+            <li>
+              <a
+                [href]="member.url ?? 'https://github.com/' + member.login"
+                [title]="'@' + member.login"
+                [attr.aria-label]="'@' + member.login"
+              >
+                <app-avatar
+                  [name]="member.login"
+                  [src]="member.avatarUrl"
+                  [size]="32"
+                  [round]="true"
+                />
+              </a>
+            </li>
+          }
+        </ul>
+        <a class="small-link" [routerLink]="allPeople()">{{ VIEW_ALL }}</a>
+      }
+    </section>
+    <section
+      class="side-sec"
+      aria-labelledby="languages-heading"
+      appEnter="Organization languages"
+      [appEnterReady]="languageBars().length > 0"
+    >
+      <h2 id="languages-heading">Top languages</h2>
+      @if (languages()) {
+        @if (languageBars().length > 0) {
+          <app-bar-chart
+            [bars]="languageBars()"
+            unit="repositories"
+            [summary]="languagesSummary()"
+          />
+        } @else {
+          <p class="muted">{{ NO_LANGUAGES }}</p>
+        }
+      }
+    </section>
+    @if (topics().length > 0) {
+      <section class="side-sec" aria-labelledby="topics-heading">
+        <h2 id="topics-heading">Most used topics</h2>
+        <ul class="topics">
+          @for (topic of topics(); track topic) {
+            <li class="topic-tag">{{ topic }}</li>
+          }
+        </ul>
+      </section>
+    }
+  </aside>
+</div>

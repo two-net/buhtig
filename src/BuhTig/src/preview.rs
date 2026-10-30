@@ -1,6 +1,7 @@
 //! Link previews of dashboards (FR-NAV-06): the title and short description that chat
-//! tools show for a link to `/{owner}/{repo}` or `/{org}`. They read the page without
-//! running its script, so BuhTig writes them into the page it serves.
+//! tools show for a link to `/{owner}/{repo}` or `/{org}`, or to one of their tabs, such as
+//! `/{owner}/{repo}/issues`, which is previewed as its dashboard is. They read the page
+//! without running its script, so BuhTig writes them into the page it serves.
 //!
 //! A preview tells only what the shared cache holds while it is fresh. That is public
 //! (FR-DATA-04), and no older than what a visitor's dashboard shows (FR-ACC-07), so a
@@ -39,7 +40,7 @@ pub struct Preview {
     /// The resource's name as GitHub spells it, such as `owner/repo` or `org`.
     title: String,
     description: String,
-    /// The dashboard's URL, with the names as GitHub spells them (FR-NAV-04).
+    /// The URL of the dashboard's tab, with the names as GitHub spells them (FR-NAV-04).
     url: Url,
 }
 
@@ -48,15 +49,18 @@ impl Previews {
         Previews { cache, public_url }
     }
 
-    /// The preview of the dashboard at `path`, or `None` if `path` is no dashboard's own, or
-    /// if the shared cache holds nothing fresh about its resource.
+    /// The preview of the dashboard's tab at `path`, or `None` if `path` is no tab's own,
+    /// or if the shared cache holds nothing fresh about its dashboard's resource. Each of a
+    /// dashboard's tabs is previewed as the dashboard is, but for its URL.
     ///
     /// The names are GitHub's, from what it returned, so a repository that was renamed or
     /// transferred is previewed under its new name (FR-NAV-05).
     pub async fn of(&self, path: &str) -> Option<Preview> {
-        let (name, description, undescribed) = match navigation::dashboard_at(path)? {
+        let (dashboard, tab) = navigation::dashboard_at(path)?;
+        let own = dashboard.path();
+        let (name, description, undescribed) = match dashboard {
             Dashboard::Repository { owner, repo } => {
-                let data = self.read(path, ["repos", owner, repo]).await?;
+                let data = self.read(&own, ["repos", owner, repo]).await?;
                 let name = data
                     .get("full_name")
                     .and_then(Value::as_str)
@@ -70,10 +74,10 @@ impl Previews {
             Dashboard::Organization { org } => {
                 // What the dashboard reads, or else what the search box read before it
                 // opened the dashboard (FR-SRCH-06).
-                let (data, about) = match self.read(path, ["orgs", org]).await {
+                let (data, about) = match self.read(&own, ["orgs", org]).await {
                     Some(data) => (data, "description"),
                     None => {
-                        let data = self.read(path, ["users", org]).await?;
+                        let data = self.read(&own, ["users", org]).await?;
                         // Users have no dashboards (FR-SRCH-06).
                         if data.get("type").and_then(Value::as_str) != Some("Organization") {
                             return None;
@@ -89,7 +93,7 @@ impl Previews {
                 (login.to_owned(), text(&data, about), ORGANIZATION)
             }
         };
-        let url = self.public_url.join(&format!("/{name}")).ok()?;
+        let url = self.public_url.join(&tab.path(&format!("/{name}"))).ok()?;
         Some(Preview {
             description: description.unwrap_or_else(|| format!("{undescribed} {name}.")),
             title: name,
@@ -364,6 +368,39 @@ mod tests {
             preview("Acme", "We make widgets.")
         );
         assert_eq!(previews.of("/octocat").await, None);
+    }
+
+    #[tokio::test]
+    async fn tabs_are_previewed_as_their_dashboards_at_their_own_urls() {
+        let stub = github();
+        let (previews, cache) = previews(&stub, Duration::from_secs(15 * 60)).await;
+        view(&cache, "/acme/gadget", &["repos", "acme", "gadget"]).await;
+        view(&cache, "/acme", &["orgs", "acme"]).await;
+        let read = stub.urls();
+        let widget = "<b>\"Widgets\" & 'more'</b> for all";
+        for (path, url) in [
+            ("/acme/gadget/issues", "/Acme/Widget/issues"),
+            (
+                "/acme/gadget/graphs/contributors",
+                "/Acme/Widget/graphs/contributors",
+            ),
+        ] {
+            let mut expected = preview("Acme/Widget", widget).unwrap();
+            expected.url = Url::parse(&format!("https://buhtig.example.com{url}")).unwrap();
+            assert_eq!(previews.of(path).await, Some(expected), "{path}");
+        }
+        let mut people = preview("Acme", "We make widgets, and more.").unwrap();
+        people.url = Url::parse("https://buhtig.example.com/orgs/Acme/people").unwrap();
+        assert_eq!(previews.of("/orgs/acme/people").await, Some(people));
+        // Only a tab's own path is previewed: others lead there first.
+        for path in [
+            "/acme/gadget/pull/1",
+            "/acme/gadget/Issues",
+            "/orgs/acme/teams",
+        ] {
+            assert_eq!(previews.of(path).await, None, "{path}");
+        }
+        assert_eq!(stub.urls(), read);
     }
 
     #[tokio::test]

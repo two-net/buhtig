@@ -1,32 +1,58 @@
-/*
- * As tall as the capitals and descenders of text in the `font-size` around it, and at the top
- * of its line, so that it takes no more room than that text would.
- */
 :host {
-  display: inline-block;
-  vertical-align: top;
-}
-
-svg {
   display: block;
-  height: 0.95em;
-  fill: none;
-  stroke-width: 16;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  font-family: var(--display);
+  font-size: clamp(64px, 12vw, 104px);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 0.92;
+  user-select: none;
 }
 
-.ink {
-  stroke: currentColor;
+.letters {
+  display: block;
+  perspective: 700px;
 }
 
-.accent {
-  stroke: var(--accent);
+.ch {
+  display: inline-block;
+  transform-origin: 50% 58%;
 }
 
-/* In forced colors, all of it in the one color that the system gives the text. */
-@media (forced-colors: active) {
-  .accent {
-    stroke: currentColor;
+/* The reflection: the word upside down, fading out away from it. */
+.mirror-wrap {
+  display: block;
+  height: 0.4em;
+  margin-top: -0.1em;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.mirror {
+  display: block;
+  transform: scaleY(-1);
+  opacity: 0.2;
+  mask-image: linear-gradient(to top, #000 0, transparent 52%);
+}
+
+:host(.play) .ch {
+  animation: flip-in 0.5s var(--ease) both;
+  animation-delay: calc(var(--i) * 55ms);
+}
+
+:host(.play) .mirror {
+  animation: fade 0.4s 0.38s both;
+}
+
+@keyframes flip-in {
+  0% {
+    transform: rotateY(180deg);
+    opacity: 0;
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    transform: none;
+    opacity: 1;
   }
 }

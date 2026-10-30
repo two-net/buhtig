@@ -13,6 +13,7 @@ mod housekeeping;
 mod navigation;
 mod organizations;
 mod preview;
+mod recent;
 mod repositories;
 mod security;
 mod session;

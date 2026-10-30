@@ -4,7 +4,7 @@
 export const LOADING = 'Loading…';
 
 /** FR-REPO-10: a widget whose data GitHub is still computing, which it asks for again. */
-export const COMPUTING = 'Calculating on GitHub…';
+export const COMPUTING = 'Calculating on GitHub… This retries automatically.';
 
 /** FR-REPO-09: a widget whose data failed to load from GitHub, shown beside "Try again". */
 export const FAILED = "BuhTig couldn't load this from GitHub. Try again in a moment.";

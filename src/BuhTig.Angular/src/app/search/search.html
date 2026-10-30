@@ -1,30 +1,61 @@
-<form role="search" novalidate (submit)="search($event)">
-  <input
-    #box
-    type="search"
-    name="q"
-    aria-label="GitHub repository or organization URL"
-    placeholder="Enter a GitHub repository or organization URL"
-    autocomplete="off"
-    autocapitalize="off"
-    spellcheck="false"
-    enterkeyhint="go"
-    [value]="query()"
-    [attr.aria-invalid]="message() ? 'true' : null"
-    [attr.aria-describedby]="message() ? 'search-message' : null"
-    (input)="edit(box.value)"
-    (keydown.escape)="edit('')"
-  />
-  <!-- The status is always there, so that assistive technology announces its changes. -->
-  <div class="feedback">
-    <p id="search-hint" role="status">{{ message() ? '' : hint() }}</p>
+<form class="search-form" role="search" novalidate (submit)="search($event)">
+  <ng-template #field>
+    <div #box class="search">
+      <app-icon name="search" />
+      <input
+        #input
+        type="search"
+        name="q"
+        inputmode="url"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        enterkeyhint="go"
+        [attr.aria-label]="label"
+        [placeholder]="placeholder()"
+        [value]="query()"
+        [attr.aria-invalid]="message() ? 'true' : null"
+        [attr.aria-describedby]="id"
+        (input)="edit(input.value)"
+        (keydown.escape)="edit('')"
+      />
+      @if (query()) {
+        <button type="button" class="iconbtn" aria-label="Clear" (click)="clear()">
+          <app-icon name="x" />
+        </button>
+      }
+      @if (header()) {
+        <kbd aria-hidden="true">/</kbd>
+      }
+    </div>
+  </ng-template>
+  @if (header()) {
+    <ng-container [ngTemplateOutlet]="field" />
+  } @else {
+    <div class="row">
+      <ng-container [ngTemplateOutlet]="field" />
+      <button class="btn primary lg" type="submit">{{ button }}</button>
+    </div>
+  }
+  <!-- Always there, so that assistive technology announces what it says. -->
+  @let said = hint();
+  <div
+    class="search-msg"
+    [class.err]="message() || (said && 'problem' in said)"
+    [class.blank]="!message() && !said"
+    [id]="id"
+  >
     @if (message(); as message) {
-      <p id="search-message" role="alert">{{ message }}</p>
+      <app-icon name="alert" /><span role="alert">{{ message }}</span>
+    } @else {
+      <span class="hint" role="status">
+        @if (said && 'problem' in said) {
+          <app-icon name="alert" /><span>{{ said.problem }}</span>
+        } @else if (said) {
+          <app-icon [name]="said.icon" /><span>{{ said.kind }}</span
+          ><strong>{{ said.name }}</strong>
+        }
+      </span>
     }
   </div>
-  @if (!compact()) {
-    <button type="submit">Show dashboard</button>
-  }
-  <!-- What the page adds beside it, such as the home page's "Surprise me" (UI-02). -->
-  <ng-content />
 </form>

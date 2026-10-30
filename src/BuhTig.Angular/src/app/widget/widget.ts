@@ -1,23 +1,22 @@
 import { NgTemplateOutlet } from '@angular/common';
 import {
   Component,
-  DestroyRef,
   Directive,
   ElementRef,
   TemplateRef,
-  afterNextRender,
   computed,
   contentChild,
-  effect,
   inject,
   input,
+  linkedSignal,
   signal,
-  untracked,
   viewChild,
 } from '@angular/core';
 import { Router } from '@angular/router';
-import { ENTRANCE_MS, Entrance, Entrances } from '../motion/entrance';
-import { Motion } from '../motion/motion';
+import { DataTable, ChartTable } from '../chart/table';
+import { SHOW_CHART, SHOW_TABLE } from '../chart/messages';
+import { Icon, IconName } from '../icon/icon';
+import { Entrance, enterInView } from '../motion/entrance';
 import { signInUrl } from '../session/session';
 import { Failure, Loader } from './load';
 import { COMPUTING, FAILED, HELD, LOADED, LOADING, UNAVAILABLE } from './messages';
@@ -36,50 +35,52 @@ export class Loaded<T> {
   }
 }
 
+/** The shape of a widget's placeholder, after its content's. */
+export type Skeleton = 'list' | 'bars' | 'stack' | 'chart';
+
 let count = 0;
 
 /**
- * One of a dashboard's widgets, in its grid (UI-05): a heading, then its content, or a
- * placeholder while it loads, a message when there is nothing to show, or a message and "Try
- * again" when loading failed (FR-REPO-09). While GitHub is still computing its data, it says so
- * over the placeholder (FR-REPO-10).
+ * One of a dashboard's widgets: a heading, then its content, or a placeholder while it loads, a
+ * message when there is nothing to show, or a message and "Try again" when loading failed
+ * (FR-REPO-09). While GitHub is still computing its data, it says so (FR-REPO-10). Once its
+ * content shows, a sentence below the heading may say what it shows, and "Show table" shows its
+ * data as a table in place of its chart (NFR-UX-04). What is marked `footer`, such as a link to
+ * see more, goes below it then.
  *
  * The message of a failure says why, and what the user can do (NFR-UX-06): try again, or sign in
  * once the server asks GitHub for no more for visitors (FR-DATA-10). "Try again" goes as it is
  * pressed, so focus goes to the widget, which then announces what it came to (NFR-UX-03).
  *
  * The placeholder shimmers (FR-ANIM-04). The content makes its entrance as it is first shown in
- * view on the page, while the widget has the class `entering`, for what it shows to enter by
- * (FR-ANIM-07). The entrance ends at once if motion turns off on its way (FR-ANIM-10).
+ * view on the page, while the widget has the class `entering` (FR-ANIM-07).
  */
 @Component({
   selector: 'app-widget',
-  imports: [NgTemplateOutlet],
+  imports: [DataTable, Icon, NgTemplateOutlet],
   templateUrl: './widget.html',
-  styleUrl: './widget.css',
+  styles: ':host { display: block; min-width: 0; }',
   providers: [Entrance],
-  host: { '[class.wide]': 'wide()', '[class.entering]': 'entrance.playing()' },
+  host: { '[class.entering]': 'entrance.playing()' },
 })
 export class Widget {
   readonly heading = input.required<string>();
   /** What the widget says when there is nothing to show, such as "No releases yet." */
   readonly empty = input.required<string>();
-  /** Whether it spans the grid's columns, as a row of stat cards does. */
-  readonly wide = input(false);
-  /**
-   * Whether its heading is for assistive technology alone, as for a row of stat cards, whose
-   * labels say what they are.
-   */
-  readonly hideHeading = input(false);
+  readonly emptyIcon = input<IconName>('info');
+  readonly skeleton = input<Skeleton>('chart');
+  /** What the content shows, in a sentence, once it shows, if it needs saying. */
+  readonly summary = input<string | undefined>(undefined);
+  /** The content's data as a table, if it is a chart's. */
+  readonly table = input<ChartTable | undefined>(undefined);
+  /** Whether the content goes up to the widget's edges, as a list of rows does. */
+  readonly flush = input(false);
 
-  private readonly entrances = inject(Entrances);
-  private readonly motion = inject(Motion);
   protected readonly entrance = inject(Entrance);
-  /** Whether the widget is in view, as far as the browser tells. */
-  private readonly inView = signal(false);
 
   protected readonly content = contentChild.required(Loaded);
   protected readonly state = computed(() => this.content().loader().state());
+  protected readonly ready = computed(() => this.state().status === 'ready');
   protected readonly busy = computed(() => {
     const status = this.state().status;
     return status === 'loading' || status === 'computing';
@@ -91,6 +92,10 @@ export class Widget {
   protected readonly id = `widget-${count++}`;
   protected readonly loading = LOADING;
   protected readonly computing = COMPUTING;
+
+  /** Whether the table shows in place of the chart, until the data changes. */
+  protected readonly tabled = linkedSignal({ source: this.table, computation: () => false });
+  protected readonly toggle = computed(() => (this.tabled() ? SHOW_CHART : SHOW_TABLE));
 
   private readonly failure = computed(() => {
     const state = this.state();
@@ -121,45 +126,18 @@ export class Widget {
     }
   });
 
+  /** The widths of the placeholder's lines, after a list's rows or a chart's bars. */
+  protected readonly rows = [72, 55, 82, 64, 48];
+  protected readonly bars = [88, 71, 60, 47, 36, 28];
+  protected readonly legend = [62, 44, 54, 38];
+
   constructor() {
-    const host = inject<ElementRef<HTMLElement>>(ElementRef).nativeElement;
-    const destroyRef = inject(DestroyRef);
-    // Not every environment can tell what is in view; the tests' jsdom cannot. There, nothing
-    // makes an entrance.
-    afterNextRender(() => {
-      if (typeof IntersectionObserver !== 'function') {
-        return;
-      }
-      const observer = new IntersectionObserver((entries) =>
-        this.inView.set(entries[entries.length - 1].isIntersecting),
-      );
-      observer.observe(host);
-      destroyRef.onDestroy(() => observer.disconnect());
-    });
-
-    // Content shown out of view enters once it scrolls into view.
-    let ending: ReturnType<typeof setTimeout> | undefined;
-    effect(() => {
-      if (this.state().status !== 'ready' || !this.inView()) {
-        return;
-      }
-      untracked(() => {
-        if (this.entrances.claim(this.heading())) {
-          this.entrance.playing.set(true);
-          // Then what it shows anew, such as another page of a table, comes in at once.
-          ending = setTimeout(() => this.entrance.playing.set(false), ENTRANCE_MS);
-        }
-      });
-    });
-    destroyRef.onDestroy(() => clearTimeout(ending));
-
-    // The browser may ask for reduced motion while the page is open, even as the content enters.
-    // Then what it shows is there at once, with its figures at their values (FR-ANIM-10).
-    effect(() => {
-      if (!this.motion.full()) {
-        this.entrance.playing.set(false);
-      }
-    });
+    enterInView(
+      inject<ElementRef<HTMLElement>>(ElementRef).nativeElement,
+      this.heading,
+      this.ready,
+      this.entrance,
+    );
   }
 
   /** Where signing in starts, to come back to the dashboard (FR-AUTH-05). */

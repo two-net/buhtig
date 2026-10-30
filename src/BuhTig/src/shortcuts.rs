@@ -22,6 +22,7 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
+use sea_orm::sea_query::prelude::chrono::SecondsFormat;
 use sea_orm::sea_query::{Expr, ExprTrait, Func, IntoColumnRef, OnConflict};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
@@ -296,8 +297,10 @@ async fn lock(txn: &DatabaseTransaction, user_id: i64) -> Result<(), DbErr> {
 
 /// `GET /-/api/shortcuts`: `{"pins": […], "recent": […]}` for a signed-in user, and 401 for a
 /// visitor, who has none (FR-ACC-02). Each item is `{"kind": "repository" | "organization",
-/// "name": "owner/repo" | "org"}`. Pins are in the user's order, and recent dashboards newest
-/// first, pinned or not. The UI picks the shortcuts from them (FR-SRCH-08).
+/// "name": "owner/repo" | "org"}`, and each recent one also has `"viewed_at"`, when the user
+/// last viewed it, as the UI is told times, such as `2026-10-22T12:00:00.123Z`. Pins are in
+/// the user's order, and recent dashboards newest first, pinned or not. The UI picks the
+/// shortcuts from them (FR-SRCH-08).
 pub async fn list(State(shortcuts): State<Arc<Shortcuts>>, viewer: Viewer) -> Response {
     let Some(user_id) = viewer.user_id() else {
         return status(StatusCode::UNAUTHORIZED);
@@ -311,10 +314,7 @@ pub async fn list(State(shortcuts): State<Arc<Shortcuts>>, viewer: Viewer) -> Re
             StatusCode::OK,
             json!({
                 "pins": listed(&pins),
-                "recent": recent
-                    .iter()
-                    .map(|entry| item(entry.resource_kind, &entry.resource_name))
-                    .collect::<Vec<_>>(),
+                "recent": recent.iter().map(viewed).collect::<Vec<_>>(),
             }),
         ),
         Err(error) => unavailable("read the history", error),
@@ -442,6 +442,17 @@ fn item(kind: ResourceKind, name: &str) -> Value {
         ResourceKind::Organization => "organization",
     };
     json!({ "kind": kind, "name": name })
+}
+
+/// A dashboard the user viewed, as the UI is told of it, with when they last did, as
+/// [`Cached::fetched_at_iso`](crate::cache::Cached::fetched_at_iso) tells times.
+fn viewed(entry: &history_entry::Model) -> Value {
+    let mut item = item(entry.resource_kind, &entry.resource_name);
+    item["viewed_at"] = entry
+        .last_viewed_at
+        .to_rfc3339_opts(SecondsFormat::Millis, true)
+        .into();
+    item
 }
 
 /// The response to a request that the database failed, as it did to `doing` with `error`.
@@ -954,11 +965,22 @@ mod tests {
         );
         let (status, body) = parts(list(state(), signed_in(mona)).await).await;
         assert_eq!(status, StatusCode::OK);
+        let viewed: Vec<String> = shortcuts
+            .recent(mona)
+            .await
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                entry
+                    .last_viewed_at
+                    .to_rfc3339_opts(SecondsFormat::Millis, true)
+            })
+            .collect();
         assert_eq!(
             body["recent"],
             json!([
-                { "kind": "organization", "name": "acme" },
-                { "kind": "repository", "name": "Owner/repo" },
+                { "kind": "organization", "name": "acme", "viewed_at": viewed[0] },
+                { "kind": "repository", "name": "Owner/repo", "viewed_at": viewed[1] },
             ])
         );
         assert_eq!(
@@ -975,6 +997,43 @@ mod tests {
         assert_eq!(
             parts(list(state(), signed_in(mona)).await).await.1["recent"],
             json!([])
+        );
+    }
+
+    #[tokio::test]
+    async fn the_ui_is_told_when_each_recent_dashboard_was_viewed() {
+        let (shortcuts, mona, _) = setup().await;
+        shortcuts
+            .record_at(mona, &repository("owner/repo"), at(3))
+            .await
+            .unwrap();
+        shortcuts
+            .record_at(mona, &organization("acme"), at(5))
+            .await
+            .unwrap();
+        shortcuts.pin(mona, &organization("acme")).await.unwrap();
+        assert_eq!(
+            parts(list(State(Arc::new(shortcuts)), signed_in(mona)).await).await,
+            (
+                StatusCode::OK,
+                json!({
+                    // Pins do not tell it.
+                    "pins": [{ "kind": "organization", "name": "acme" }],
+                    // As the UI is told times.
+                    "recent": [
+                        {
+                            "kind": "organization",
+                            "name": "acme",
+                            "viewed_at": "2026-10-20T12:05:00.000Z",
+                        },
+                        {
+                            "kind": "repository",
+                            "name": "owner/repo",
+                            "viewed_at": "2026-10-20T12:03:00.000Z",
+                        },
+                    ],
+                })
+            )
         );
     }
 

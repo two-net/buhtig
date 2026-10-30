@@ -9,6 +9,8 @@ export interface User {
   /** The display name, which GitHub users may leave empty. */
   name: string | null;
   avatar_url: string;
+  /** When the user signed in on this browser, as the server tells it. */
+  signed_in_at?: string | null;
 }
 
 /**
@@ -89,11 +91,6 @@ export class Session {
    */
   readonly token = this.currentToken.asReadonly();
 
-  private readonly tokenNoteDismissed = signal(false);
-
-  /** Whether the user has put away the note about their token for the rest of this visit. */
-  readonly tokenNoted = this.tokenNoteDismissed.asReadonly();
-
   /** Takes note that the server no longer takes the user's session. */
   end(): void {
     this.endedNow.set(true);
@@ -102,11 +99,6 @@ export class Session {
   /** Takes note that the user saved `token`, or removed theirs. */
   setToken(token: Token | null): void {
     this.currentToken.set(token);
-  }
-
-  /** Takes note that the user has put away the note about their token. */
-  dismissTokenNote(): void {
-    this.tokenNoteDismissed.set(true);
   }
 
   /**

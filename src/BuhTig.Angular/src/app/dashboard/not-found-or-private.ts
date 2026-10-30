@@ -1,18 +1,19 @@
 import { Component, computed, inject, input } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
+import { Center } from '../center/center';
 import { Session, signInUrl } from '../session/session';
 import {
   ADD_TOKEN,
-  ADD_TOKEN_TO_SEE,
-  GO_HOME,
   NOT_FOUND_OR_PRIVATE,
   NO_SUCH_NAME,
   REPLACE_TOKEN,
-  SIGN_IN,
-  SIGN_IN_TO_SEE,
-  TOKEN_INVALID_TO_SEE,
+  SEARCH_AGAIN,
+  SIGN_IN_WITH_GITHUB,
+  TOKEN_SETTINGS,
   invalidName,
-  notFound,
+  notFoundForSignedIn,
+  notFoundForVisitor,
+  notFoundWithInvalidToken,
   notFoundWithToken,
 } from './messages';
 
@@ -28,61 +29,49 @@ import {
  */
 @Component({
   selector: 'app-not-found-or-private',
-  imports: [RouterLink],
+  imports: [Center, RouterLink],
   template: `
     @if (invalid()) {
-      <h1>{{ NO_SUCH_NAME }}</h1>
-      <p>{{ invalidName(name()) }}</p>
-      <p>
-        <a routerLink="/">{{ GO_HOME }}</a>
-      </p>
+      <app-center icon="question" [heading]="NO_SUCH_NAME" [text]="invalidName(name())">
+        <div class="row">
+          <a class="btn" routerLink="/">{{ SEARCH_AGAIN }}</a>
+        </div>
+      </app-center>
     } @else {
-      <h1>{{ NOT_FOUND_OR_PRIVATE }}</h1>
-    }
-    @switch (invalid() ? undefined : viewer()) {
-      @case ('visitor') {
-        <p>{{ notFound(name()) }} {{ SIGN_IN_TO_SEE }}</p>
-        <p>
-          <a class="action" [href]="signIn">{{ SIGN_IN }}</a>
-        </p>
+      @switch (viewer()) {
+        @case ('visitor') {
+          <app-center icon="lock" [heading]="NOT_FOUND" [text]="visitorText()">
+            <div class="row">
+              <a class="btn primary" [href]="signIn">{{ SIGN_IN_WITH_GITHUB }}</a>
+              <a class="btn" routerLink="/">{{ SEARCH_AGAIN }}</a>
+            </div>
+          </app-center>
+        }
+        @case ('signed-in') {
+          <app-center icon="key" [heading]="NOT_FOUND" [text]="signedInText()">
+            <div class="row">
+              <a class="btn primary" routerLink="/-/settings">{{ ADD_TOKEN }}</a>
+              <a class="btn" routerLink="/">{{ SEARCH_AGAIN }}</a>
+            </div>
+          </app-center>
+        }
+        @case ('token-invalid') {
+          <app-center icon="key" [heading]="NOT_FOUND" [text]="invalidTokenText()">
+            <div class="row">
+              <a class="btn primary" routerLink="/-/settings">{{ REPLACE_TOKEN }}</a>
+              <a class="btn" routerLink="/">{{ SEARCH_AGAIN }}</a>
+            </div>
+          </app-center>
+        }
+        @case ('token-user') {
+          <app-center icon="lock" [heading]="NOT_FOUND" [text]="notFoundWithToken(name())">
+            <div class="row">
+              <a class="btn" routerLink="/-/settings">{{ TOKEN_SETTINGS }}</a>
+              <a class="btn" routerLink="/">{{ SEARCH_AGAIN }}</a>
+            </div>
+          </app-center>
+        }
       }
-      @case ('signed-in') {
-        <p>{{ notFound(name()) }} {{ ADD_TOKEN_TO_SEE }}</p>
-        <p>
-          <a class="action" routerLink="/-/settings">{{ ADD_TOKEN }}</a>
-        </p>
-      }
-      @case ('token-invalid') {
-        <p>{{ notFound(name()) }} {{ TOKEN_INVALID_TO_SEE }}</p>
-        <p>
-          <a class="action" routerLink="/-/settings">{{ REPLACE_TOKEN }}</a>
-        </p>
-      }
-      @case ('token-user') {
-        <p>{{ notFoundWithToken(name()) }}</p>
-        <p>
-          <a routerLink="/">{{ GO_HOME }}</a>
-        </p>
-      }
-    }
-  `,
-  styles: `
-    :host {
-      display: block;
-      max-width: 40rem;
-    }
-
-    .action {
-      display: inline-block;
-      padding: 0.5rem 1.25rem;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      color: var(--text);
-      text-decoration: none;
-    }
-
-    .action:hover {
-      background: var(--raised);
     }
   `,
 })
@@ -91,6 +80,8 @@ export class NotFoundOrPrivate {
 
   /** The resource's name, as the URL has it. */
   readonly name = input.required<string>();
+  /** What the resource is, such as "repository". */
+  readonly kind = input.required<string>();
   /** Whether the name cannot be a resource's, as the server says without asking GitHub. */
   readonly invalid = input(false);
 
@@ -110,19 +101,22 @@ export class NotFoundOrPrivate {
     return token.status === 'valid' ? 'token-user' : 'token-invalid';
   });
 
+  protected readonly visitorText = computed(() => notFoundForVisitor(this.kind(), this.name()));
+  protected readonly signedInText = computed(() => notFoundForSignedIn(this.kind(), this.name()));
+  protected readonly invalidTokenText = computed(() =>
+    notFoundWithInvalidToken(this.kind(), this.name()),
+  );
+
   /** Signing in returns to this page (FR-AUTH-05). */
   protected readonly signIn = signInUrl(inject(Router).url);
 
   protected readonly invalidName = invalidName;
-  protected readonly NO_SUCH_NAME = NO_SUCH_NAME;
-  protected readonly notFound = notFound;
   protected readonly notFoundWithToken = notFoundWithToken;
-  protected readonly NOT_FOUND_OR_PRIVATE = NOT_FOUND_OR_PRIVATE;
-  protected readonly SIGN_IN_TO_SEE = SIGN_IN_TO_SEE;
-  protected readonly SIGN_IN = SIGN_IN;
-  protected readonly ADD_TOKEN_TO_SEE = ADD_TOKEN_TO_SEE;
+  protected readonly NO_SUCH_NAME = NO_SUCH_NAME;
+  protected readonly NOT_FOUND = NOT_FOUND_OR_PRIVATE;
+  protected readonly SIGN_IN_WITH_GITHUB = SIGN_IN_WITH_GITHUB;
   protected readonly ADD_TOKEN = ADD_TOKEN;
-  protected readonly TOKEN_INVALID_TO_SEE = TOKEN_INVALID_TO_SEE;
   protected readonly REPLACE_TOKEN = REPLACE_TOKEN;
-  protected readonly GO_HOME = GO_HOME;
+  protected readonly TOKEN_SETTINGS = TOKEN_SETTINGS;
+  protected readonly SEARCH_AGAIN = SEARCH_AGAIN;
 }

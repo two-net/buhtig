@@ -1,0 +1,67 @@
+@let known = summary();
+<app-dashboard-styles />
+<app-tip />
+<app-header [crumbs]="crumbs()" [prefill]="'github.com/' + login()">
+  @if (shown()) {
+    <app-tabs [tabs]="tabs()" />
+  }
+</app-header>
+<main
+  id="main"
+  class="page"
+  tabindex="-1"
+  [class.view-enter]="glidingFrom"
+  [class.refreshing]="refreshing()"
+  [attr.aria-busy]="known === undefined || refreshing()"
+>
+  @if (known?.invalid) {
+    <app-not-found-or-private [name]="org()" kind="organization" [invalid]="true" />
+  } @else if (known?.notFound) {
+    @switch (user()) {
+      @case ('user') {
+        <app-user-account [login]="org()" />
+      }
+      @case (undefined) {
+        <span class="sr">Loading…</span>
+      }
+      @default {
+        <app-not-found-or-private [name]="org()" kind="organization" />
+      }
+    }
+  } @else if (known?.failure; as failure) {
+    <app-failure [failure]="failure" (retry)="retry()" />
+  } @else {
+    <div class="container">
+      <app-notices [stale]="known?.stale" [fetchedAt]="known?.fetchedAt" [denied]="known?.denied" />
+      @if (organization(); as organization) {
+        <app-organization-head
+          [organization]="organization"
+          [fetchedAt]="known?.fetchedAt"
+          (refreshed)="refreshing.set(true)"
+        />
+      } @else if (!known?.denied) {
+        <div class="orghead" aria-hidden="true">
+          <span class="skel block org-av"></span>
+          <div class="oh-main">
+            <span class="skel line xl head-skel"></span>
+            <span class="skel line"></span>
+            <span class="skel line"></span>
+          </div>
+        </div>
+      }
+      @if (!known?.denied) {
+        @switch (tab()) {
+          @case ('repositories') {
+            <app-organization-repositories-tab />
+          }
+          @case ('people') {
+            <app-organization-people />
+          }
+          @default {
+            <app-organization-overview />
+          }
+        }
+      }
+    </div>
+  }
+</main>

@@ -1,7 +1,7 @@
 import { Component, inject } from '@angular/core';
-import { RouterLink } from '@angular/router';
 import { Shortcut } from '../search/shortcut';
-import { Wordmark } from '../wordmark/wordmark';
+import { Header } from '../header/header';
+import { PageStyles } from '../styles/styles';
 
 /**
  * What BuhTig is, and that it is not GitHub's (§1.2, UI-08). It names the keys that BuhTig
@@ -10,9 +10,8 @@ import { Wordmark } from '../wordmark/wordmark';
  */
 @Component({
   selector: 'app-about',
-  imports: [RouterLink, Wordmark],
+  imports: [Header, PageStyles],
   templateUrl: './about.html',
-  styleUrl: './about.css',
 })
 export class About {
   private readonly shortcut = inject(Shortcut);

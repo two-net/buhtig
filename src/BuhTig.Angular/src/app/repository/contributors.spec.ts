@@ -1,138 +1,130 @@
-import { provideHttpClient } from '@angular/common/http';
-import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { Component, signal } from '@angular/core';
+import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { compactNumber, exactNumber } from '../format/format';
+import { provideRouter } from '@angular/router';
+import { RepositoryData } from '../dashboard/data';
+import { Contributors, Repository } from '../dashboard/resources';
+import { compactNumber } from '../format/format';
+import { Load } from '../widget/load';
 import { FAILED } from '../widget/messages';
-import { RepositoryContributors } from './contributors';
-import { TOO_MANY_CONTRIBUTORS } from './messages';
+import { RepositoryContributorsTab } from './contributors';
+import {
+  CONTRIBUTORS_HEADERS,
+  NO_CONTRIBUTORS,
+  TOO_MANY_CONTRIBUTORS,
+  contributorsDescription,
+} from './messages';
 
-@Component({
-  imports: [RepositoryContributors],
-  template: `<app-repository-contributors [owner]="owner()" [repo]="repo()" />`,
-})
-class Host {
-  readonly owner = signal('acme');
-  readonly repo = signal('widget');
-}
-
-/** The top contributors of `acme/widget`, as the server gives them. */
-const WIDGET = {
+/** The top contributors of `acme/widget`. */
+const CONTRIBUTORS: Contributors = {
   contributors: [
     {
       login: 'alice',
-      avatar_url: 'https://avatars.githubusercontent.com/u/2?v=4',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/2?v=4',
       url: 'https://github.com/alice',
       commits: 12_345,
     },
-    {
-      login: 'dependabot[bot]',
-      avatar_url: 'https://avatars.githubusercontent.com/in/29110?v=4',
-      url: 'https://github.com/apps/dependabot',
-      commits: 1,
-    },
+    { login: 'dependabot[bot]', avatarUrl: undefined, url: undefined, commits: 1 },
   ],
-  too_large: false,
+  tooLarge: false,
+  count: 345,
 };
 
-describe('RepositoryContributors', () => {
-  let fixture: ComponentFixture<Host>;
-  let http: HttpTestingController;
+describe('RepositoryContributorsTab', () => {
+  const contributors = signal<Load<Contributors>>({ status: 'loading' });
+  const repository = signal<Partial<Repository> | undefined>(undefined);
+  const retry = vi.fn();
+  let fixture: ComponentFixture<RepositoryContributorsTab>;
 
   beforeEach(async () => {
+    contributors.set({ status: 'loading' });
+    repository.set(undefined);
+    retry.mockClear();
     TestBed.configureTestingModule({
-      providers: [provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideRouter([]),
+        {
+          provide: RepositoryData,
+          useValue: { repository, contributors: () => ({ state: contributors, retry }) },
+        },
+      ],
     });
-    http = TestBed.inject(HttpTestingController);
-    fixture = TestBed.createComponent(Host);
+    fixture = TestBed.createComponent(RepositoryContributorsTab);
     await fixture.whenStable();
-  });
-
-  afterEach(() => {
-    http.verify();
   });
 
   const element = () => fixture.nativeElement as HTMLElement;
-  const rows = () => [...element().querySelectorAll('ol > li')];
-  const message = () => element().querySelector('.message')?.textContent?.trim();
+  const bars = () => [...element().querySelectorAll('.hbar')];
+  const summary = () => element().querySelector('.w-sub')?.textContent?.trim();
+  const message = () => element().querySelector('.w-state span')?.textContent;
 
-  /** The text that `element` shows, without the tooltips that hover and focus show. */
-  function shown(element: Element): string | undefined {
-    const copy = element.cloneNode(true) as Element;
-    copy.querySelectorAll('[role="tooltip"]').forEach((tooltip) => tooltip.remove());
-    return copy.textContent?.replace(/\s+/g, ' ').trim();
-  }
-
-  async function answer(body: object): Promise<void> {
-    http.expectOne('/-/api/repositories/acme/widget/contributors').flush(body);
+  async function answer(data: Contributors): Promise<void> {
+    contributors.set({ status: 'ready', data });
     await fixture.whenStable();
   }
 
-  it('lists the top contributors with their avatars and commits (FR-REPO-05)', async () => {
-    await answer(WIDGET);
-    expect(element().querySelector('h2')?.textContent?.trim()).toBe('Top contributors');
+  it('charts the top contributors by commits, most first (FR-REPO-05)', async () => {
+    expect(element().querySelector('h2')?.textContent?.trim()).toBe('Contributors');
+    expect(element().querySelector('.skel.bar')).not.toBeNull();
+    await answer(CONTRIBUTORS);
     expect(
-      rows().map((row) => [
-        row.querySelector('.login')?.textContent,
-        shown(row.querySelector('.commits')!),
+      bars().map((bar) => [
+        bar.querySelector('.lab')?.textContent?.trim(),
+        bar.querySelector('b')?.textContent,
       ]),
     ).toEqual([
-      ['alice', `${compactNumber(12_345)} commits`],
-      ['dependabot[bot]', '1 commit'],
+      ['alice', compactNumber(12_345)],
+      ['dependabot[bot]', '1'],
     ]);
-    const avatar = rows()[0].querySelector('img')!;
-    expect(avatar.getAttribute('src')).toBe(WIDGET.contributors[0].avatar_url);
-    // The login beside it says who it is.
-    expect(avatar.getAttribute('alt')).toBe('');
-    expect(rows()[0].querySelector('[role="tooltip"]')?.textContent).toBe(exactNumber(12_345));
   });
 
-  it("links each login to the contributor's page on GitHub (FR-REPO-12)", async () => {
-    await answer(WIDGET);
-    expect(rows().map((row) => row.querySelector('a.login')?.getAttribute('href'))).toEqual([
+  it('links each to their profile on GitHub, with their avatar (FR-REPO-12)', async () => {
+    await answer(CONTRIBUTORS);
+    expect(bars().map((bar) => bar.getAttribute('href'))).toEqual([
       'https://github.com/alice',
-      'https://github.com/apps/dependabot',
+      null,
     ]);
+    expect(bars()[0].querySelector('img')?.getAttribute('src')).toBe(
+      CONTRIBUTORS.contributors[0].avatarUrl,
+    );
+    expect(bars()[1].querySelector('svg.av')).not.toBeNull();
   });
 
-  it('links only to web pages, and shows avatars only from https URLs', async () => {
-    await answer({
-      contributors: [
-        {
-          login: 'mallory',
-          avatar_url: 'http://avatars.example/u/3',
-          url: 'javascript:alert(1)',
-          commits: 7,
-        },
-      ],
-      too_large: false,
-    });
-    expect(rows()).toHaveLength(1);
-    expect(rows()[0].querySelector('a, img')).toBeNull();
-    expect(rows()[0].querySelector('.login')?.textContent).toBe('mallory');
+  it('says what it shows, to the default branch, and lists it as a table (NFR-UX-04)', async () => {
+    await answer(CONTRIBUTORS);
+    expect(summary()).toBe(contributorsDescription(2, undefined));
+    repository.set({ defaultBranch: 'main' });
+    await fixture.whenStable();
+    expect(summary()).toBe(contributorsDescription(2, 'main'));
+    expect(element().querySelector('.hbars')?.getAttribute('aria-label')).toBe(summary());
+
+    element().querySelector<HTMLButtonElement>('.w-head button')!.click();
+    await fixture.whenStable();
+    expect(
+      [...element().querySelectorAll('tr')].map((row) =>
+        [...row.children].map((cell) => cell.textContent?.trim()),
+      ),
+    ).toEqual([[...CONTRIBUTORS_HEADERS], ['@alice', '12,345'], ['@dependabot[bot]', '1']]);
   });
 
-  it('says when GitHub does not list the contributors, without "Try again"', async () => {
-    await answer({ contributors: [], too_large: true });
-    expect(message()).toBe(TOO_MANY_CONTRIBUTORS);
-    expect(element().querySelector('ol, button')).toBeNull();
+  it("says GitHub doesn't list the contributors of repositories this large", async () => {
+    await answer({ contributors: [], tooLarge: true, count: undefined });
+    expect(element().querySelector('.w-body p.w-state')?.textContent?.trim()).toBe(
+      TOO_MANY_CONTRIBUTORS,
+    );
+    expect(element().querySelector('.hbars, .w-sub, .w-head button')).toBeNull();
   });
 
-  it('says when there are no contributors (FR-REPO-11)', async () => {
-    await answer({ contributors: [], too_large: false });
-    expect(message()).toBe('No contributors yet.');
-    expect(element().querySelector('ol, button')).toBeNull();
+  it('says when there are none (FR-REPO-11)', async () => {
+    await answer({ contributors: [], tooLarge: false, count: 0 });
+    expect(message()).toBe(NO_CONTRIBUTORS);
+    expect(element().querySelector('.hbars, button')).toBeNull();
   });
 
   it('says when they failed to load, and tries again (FR-REPO-09)', async () => {
-    http
-      .expectOne('/-/api/repositories/acme/widget/contributors')
-      .flush(null, { status: 502, statusText: 'Bad Gateway' });
+    contributors.set({ status: 'error', failure: 'github' });
     await fixture.whenStable();
     expect(message()).toBe(FAILED);
     element().querySelector('button')!.click();
-    await fixture.whenStable();
-    await answer(WIDGET);
-    expect(rows()).toHaveLength(2);
+    expect(retry).toHaveBeenCalledOnce();
   });
 });

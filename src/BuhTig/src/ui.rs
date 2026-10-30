@@ -158,12 +158,13 @@ fn weight<'a>(parameters: impl Iterator<Item = &'a str>) -> Option<u16> {
 
 /// What a dashboard's page adds to its `<head>`, so that the browser fetches the dashboard's
 /// code along with the app's, rather than once the app has started and found that it needs
-/// it (NFR-PERF-03): the chunk that the build names `dashboard-Ds_EGg7j.js` or the like, and
-/// the chunks that it imports, which browsers would only fetch once they have it. `None` if
-/// the build has no such chunk.
-pub fn dashboard_preload<A: RustEmbed>() -> Option<String> {
+/// it (NFR-PERF-03): the chunk that the build names after the `dashboard`, such as
+/// `repository-Ds_EGg7j.js` for `"repository"`, and the chunks that it imports, which browsers
+/// would only fetch once they have it. `None` if the build has no such chunk.
+pub fn dashboard_preload<A: RustEmbed>(dashboard: &str) -> Option<String> {
+    let prefix = format!("{dashboard}-");
     let name = A::iter()
-        .find(|name| name.starts_with("dashboard-") && name.ends_with(".js") && is_hashed(name))?;
+        .find(|name| name.starts_with(&prefix) && name.ends_with(".js") && is_hashed(name))?;
     let code = A::get(&name)?.data;
     let mut chunks = vec![name.to_string()];
     for import in imports(&String::from_utf8_lossy(&code)) {
@@ -455,14 +456,22 @@ mod tests {
     #[test]
     fn dashboards_preload_their_code_and_what_it_imports() {
         assert_eq!(
-            dashboard_preload::<Built>().as_deref(),
+            dashboard_preload::<Built>("repository").as_deref(),
             Some(
-                "<link rel=\"modulepreload\" href=\"/dashboard-Ds_EGg7j.js\">\n\
+                "<link rel=\"modulepreload\" href=\"/repository-Ds_EGg7j.js\">\n\
                  <link rel=\"modulepreload\" href=\"/chunk-Dkfirl0_.js\">\n\
                  <link rel=\"modulepreload\" href=\"/main-ABCDEFGH.js\">\n"
             )
         );
-        assert_eq!(dashboard_preload::<NotBuilt>(), None);
+        assert_eq!(
+            dashboard_preload::<Built>("organization").as_deref(),
+            Some(
+                "<link rel=\"modulepreload\" href=\"/organization-Bq3_Xy9z.js\">\n\
+                 <link rel=\"modulepreload\" href=\"/chunk-Dkfirl0_.js\">\n"
+            )
+        );
+        assert_eq!(dashboard_preload::<Built>("settings"), None);
+        assert_eq!(dashboard_preload::<NotBuilt>("repository"), None);
     }
 
     #[tokio::test]

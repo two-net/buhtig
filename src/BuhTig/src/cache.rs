@@ -25,7 +25,7 @@
 //! (FR-DATA-08). Those fetches, and the marks that limit refreshes (FR-DATA-07), are held
 //! in memory alone, which a restart may lose (NFR-REL-02).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -44,7 +44,7 @@ use crate::config::{CacheConfig, LimitsConfig, Secret};
 use crate::entity::cache_entry::{self, Scope};
 use crate::github::{self, Credential, List, Path, Reply};
 use crate::visitors::{Held, Visitor, Visitors};
-use crate::{session, tokens};
+use crate::{repositories, session, tokens};
 
 /// FR-DATA-07: a dashboard may be refreshed at most once a minute.
 const REFRESH_INTERVAL: TimeDelta = TimeDelta::minutes(1);
@@ -514,6 +514,58 @@ impl Cache {
             .into_tuple()
             .one(&self.db)
             .await
+    }
+
+    /// Up to `limit` of the repositories that the shared cache holds, which are only public
+    /// ones (FR-DATA-04), those that GitHub gave or confirmed last first, however old, each
+    /// as GitHub gave it. Nothing is fetched, so no visitor's load counts, and `stale` is
+    /// `None`.
+    ///
+    /// Only repositories read whole count, as [`Cache::random_repository`] picks them, and
+    /// each once, whatever case its path was asked for in, or whichever name it was asked for
+    /// by, if it was renamed: by its `full_name`, which must be a repository's. As a
+    /// safeguard, one that GitHub marks private or internal is never among them, nor is one
+    /// whose `visibility` is anything but public.
+    pub async fn recent_repositories(&self, limit: usize) -> Result<Vec<Cached<Value>>, DbErr> {
+        use cache_entry::Column;
+
+        // More than `limit` at a time, since a few may be the same repository. Each is told
+        // apart here, not in the query, so that only the data of those read is.
+        let batch = u64::try_from(limit.max(1).saturating_mul(4)).unwrap_or(u64::MAX);
+        let mut recent = Vec::new();
+        let mut names = HashSet::new();
+        let mut offset = 0;
+        while recent.len() < limit {
+            let entries = cache_entry::Entity::find()
+                .filter(Column::Scope.eq(Scope::Shared.key()))
+                // `/repos/{owner}/{repo}`, and not what is under it, such as its languages.
+                .filter(Column::ResourceKey.like("/repos/%/%"))
+                .filter(Column::ResourceKey.not_like("/repos/%/%/%"))
+                .order_by_desc(Column::FetchedAt)
+                .order_by_desc(Column::Id)
+                .offset(offset)
+                .limit(batch)
+                .all(&self.db)
+                .await?;
+            let last = u64::try_from(entries.len()).unwrap_or(u64::MAX) < batch;
+            for entry in entries {
+                let name = entry.data.get("full_name").and_then(Value::as_str);
+                let Some(name) = name.filter(|name| repositories::names(name).is_some()) else {
+                    continue;
+                };
+                if is_public_repository(&entry.data)
+                    && names.insert(name.to_ascii_lowercase())
+                    && recent.len() < limit
+                {
+                    recent.push(cached(entry, None));
+                }
+            }
+            if last {
+                break;
+            }
+            offset = offset.saturating_add(batch);
+        }
+        Ok(recent)
     }
 
     /// One resource, for a dashboard, as the shared cache holds it while it is fresh,
@@ -1126,6 +1178,16 @@ fn marks_private(data: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `data` is a public repository's: GitHub marks nothing in it private or internal,
+/// and its `visibility`, if it tells one, is public.
+fn is_public_repository(data: &Value) -> bool {
+    !marks_private(data)
+        && data
+            .get("visibility")
+            .and_then(Value::as_str)
+            .is_none_or(|visibility| visibility.eq_ignore_ascii_case("public"))
 }
 
 /// Removes every `permissions` member, which GitHub fills in for the viewer, such as

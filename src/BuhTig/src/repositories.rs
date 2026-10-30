@@ -19,8 +19,8 @@ use tracing::error;
 use url::Url;
 
 use crate::accounts::is_account_name;
-use crate::cache::{self, Cache, Cached, Outcome, Refused, Viewer};
-use crate::github;
+use crate::cache::{self, Cache, Cached, Outcome, Refused, Stale, Viewer};
+use crate::github::{self, List};
 
 /// The longest repository name GitHub allows.
 const MAX_LENGTH: usize = 100;
@@ -34,8 +34,9 @@ const LANGUAGES: usize = 8;
 /// FR-REPO-05: the contributors the widget lists.
 const CONTRIBUTORS: usize = 10;
 
-/// FR-REPO-06: the issues and pull requests the widget lists.
-const RECENT: usize = 10;
+/// FR-REPO-06: the issues and pull requests the widget lists, and the issues and pull
+/// requests tabs too.
+const RECENT: usize = 20;
 
 /// FR-REPO-07: the commits the widget lists.
 const COMMITS: usize = 10;
@@ -50,21 +51,21 @@ const OPEN_PULLS: &str = "is:pr is:open";
 /// `/-/api/repositories/{owner}/{repo}`: what the dashboard's header shows (FR-REPO-01),
 ///
 /// ```json
-/// {"name": "owner/repo", "fetched_at": …, "owner_avatar_url": …, "description": …,
-///  "visibility": "public" | "private" | "internal", "archived": …, "template": …,
-///  "fork": …, "parent": "owner/repo", "topics": […], "license": …,
-///  "default_branch": …, "homepage": …, "created_at": …, "pushed_at": …}
+/// {"name": "owner/repo", "fetched_at": …, "stale": null | "held" | "github",
+///  "owner_avatar_url": …, "description": …, "visibility": "public" | "private" | "internal",
+///  "archived": …, "template": …, "fork": …, "parent": "owner/repo", "topics": […],
+///  "license": …, "default_branch": …, "homepage": …, "created_at": …, "pushed_at": …}
 /// ```
 ///
 /// The name is the repository's as GitHub spells it, whatever case it was asked for in
 /// (FR-NAV-04), and its new name if it was renamed or transferred, since the client follows
 /// GitHub's redirects (FR-NAV-05). `fetched_at` is when GitHub gave what BuhTig knows of the
-/// repository, which the dashboard shows (FR-DATA-06). `parent` is the name of the
-/// repository a fork was forked from. What GitHub does not say, or says in a form BuhTig
-/// does not show, is `null`: links are only to `http` and `https` URLs, and avatars only
-/// from `https` ones (NFR-SEC-03). 404 if there is no such repository, or if it is private
-/// (FR-ACC-05). 403 when GitHub keeps it from the viewer's credential, with why, as
-/// [`denied`] tells it (FR-PAT-08).
+/// repository, which the dashboard shows (FR-DATA-06), and `stale` why it is no newer, as
+/// [`stale`] tells it. `parent` is the name of the repository a fork was forked from. What
+/// GitHub does not say, or says in a form BuhTig does not show, is `null`: links are only to
+/// `http` and `https` URLs, and avatars only from `https` ones (NFR-SEC-03). 404 if there is
+/// no such repository, or if it is private (FR-ACC-05). 403 when GitHub keeps it from the
+/// viewer's credential, with why, as [`denied`] tells it (FR-PAT-08).
 ///
 /// Names that cannot be a repository's are 400, without asking GitHub (FR-SRCH-04). Any
 /// other status means that BuhTig cannot tell now. The dashboard then keeps its URL.
@@ -91,14 +92,10 @@ pub async fn summary(
     let Some(name) = data.get("full_name").and_then(Value::as_str) else {
         return status(StatusCode::BAD_GATEWAY);
     };
-    let topics: Vec<&str> = data
-        .get("topics")
-        .and_then(Value::as_array)
-        .map(|topics| topics.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
     respond(json!({
         "name": name,
         "fetched_at": cached.fetched_at_iso(),
+        "stale": stale(&cached),
         "owner_avatar_url": link(data.pointer("/owner/avatar_url"), &["https"]),
         "description": text(data, "description"),
         "visibility": visibility(data),
@@ -109,7 +106,7 @@ pub async fn summary(
             .pointer("/parent/full_name")
             .and_then(Value::as_str)
             .filter(|parent| names(parent).is_some()),
-        "topics": topics,
+        "topics": topics(data),
         "license": data.pointer("/license/name").and_then(Value::as_str),
         "default_branch": text(data, "default_branch"),
         "homepage": link(data.get("homepage"), &["http", "https"]),
@@ -229,19 +226,23 @@ pub async fn languages(
 }
 
 /// `/-/api/repositories/{owner}/{repo}/contributors`: up to 10 of the GitHub accounts with
-/// the most commits on the repository's default branch (FR-REPO-05), most first,
+/// the most commits on the repository's default branch (FR-REPO-05), most first, and how
+/// many there are,
 ///
 /// ```json
 /// {"contributors": [{"login": …, "avatar_url": …, "url": …, "commits": …}, …],
-///  "too_large": false}
+///  "count": 42 | null, "too_large": false}
 /// ```
 ///
 /// `url` is the account's page on GitHub (FR-REPO-12). Bots count too, as on GitHub. What
-/// BuhTig does not show or link to is `null` (NFR-SEC-03). GitHub does not list the
-/// contributors of its largest repositories: `too_large` then says so, and there are none.
-/// An empty repository has none either (FR-REPO-11).
+/// BuhTig does not show or link to is `null` (NFR-SEC-03). `count` is how many accounts
+/// GitHub lists, those without a login too. GitHub tells no count, so it is asked for apart
+/// when there are more than 10. GitHub does not list the contributors of its largest
+/// repositories: `too_large` then says so, there are none, and `count` is `null`, as it is
+/// when GitHub lists them but will not count them. An empty repository has none (FR-REPO-11).
 ///
-/// Its statuses are those of [`commit_activity`].
+/// Its statuses are those of [`commit_activity`]. A failure to count the contributors is
+/// 502.
 pub async fn contributors(
     State(cache): State<Arc<Cache>>,
     viewer: Viewer,
@@ -261,32 +262,56 @@ pub async fn contributors(
         )
         .await;
     let list = match list {
-        // The viewer may see the repository, so GitHub refuses the list itself, as it does
-        // when the history is too large to count. A rate limit is not a refusal.
-        Err(cache::Error::GitHub(github::Error::Forbidden { .. })) => {
-            return respond(json!({ "contributors": [], "too_large": true }));
+        Err(error) if too_large(&error) => {
+            return respond(json!({ "contributors": [], "count": null, "too_large": true }));
         }
         list => match data(list) {
             Ok(list) => list.data,
             Err(code) => return status(code),
         },
     };
+    let count = if list.truncated {
+        let count = cache
+            .get_count(&repository.viewer, &repository.dashboard, &path)
+            .await;
+        match count {
+            Err(error) if too_large(&error) => None,
+            count => match data(count) {
+                Ok(count) => Some(count.data.max(listed(&list))),
+                Err(code) => return status(code),
+            },
+        }
+    } else {
+        Some(listed(&list))
+    };
     let mut contributors: Vec<(u64, Value)> = list.items.iter().filter_map(contributor).collect();
     contributors.sort_by(|(one, _), (other, _)| other.cmp(one));
     contributors.truncate(CONTRIBUTORS);
     let contributors: Vec<Value> = contributors.into_iter().map(|(_, data)| data).collect();
-    respond(json!({ "contributors": contributors, "too_large": false }))
+    respond(json!({ "contributors": contributors, "count": count, "too_large": false }))
+}
+
+/// Whether GitHub refused to list or count a repository's contributors, as it does when the
+/// history is too large to. The viewer may see the repository, so GitHub refuses the list
+/// itself. A rate limit is not a refusal.
+fn too_large(error: &cache::Error) -> bool {
+    matches!(error, cache::Error::GitHub(github::Error::Forbidden { .. }))
+}
+
+/// How many items GitHub gave of a list, which it has at least.
+fn listed(list: &List) -> u64 {
+    u64::try_from(list.items.len()).unwrap_or(u64::MAX)
 }
 
 /// `/-/api/repositories/{owner}/{repo}/issues`: how many issues and pull requests the
-/// repository has in each state, and the 10 updated last (FR-REPO-06), latest first,
+/// repository has in each state, and the 20 updated last (FR-REPO-06), latest first,
 ///
 /// ```json
 /// {"issues": {"open": …, "closed": …} | null,
 ///  "pull_requests": {"open": …, "merged": …, "closed": …} | null,
 ///  "recent": [{"number": …, "title": …, "kind": "issue" | "pull_request",
 ///              "state": "open" | "closed" | "merged", "author": …, "created_at": …,
-///              "url": …}, …]}
+///              "updated_at": …, "url": …}, …]}
 /// ```
 ///
 /// Closed pull requests are those closed without being merged. Open issues are counted as
@@ -315,14 +340,16 @@ pub async fn issues(
 /// default branch (FR-REPO-07), latest first,
 ///
 /// ```json
-/// {"commits": [{"sha": …, "message": …, "author": …, "committed_at": …, "url": …}, …]}
+/// {"commits": [{"sha": …, "message": …, "author": …, "author_avatar_url": …,
+///               "committed_at": …, "url": …}, …]}
 /// ```
 ///
 /// `message` is the first line of the commit's message. `author` is the GitHub login of its
-/// author, or else the name the commit gives. `committed_at` is when it was committed, which
-/// for a commit merged from elsewhere is when it landed. `url` is its page on GitHub
-/// (FR-REPO-12). What BuhTig does not show or link to is `null` (NFR-SEC-03). An empty
-/// repository has none (FR-REPO-11).
+/// author, or else the name the commit gives, and `author_avatar_url` the avatar of that
+/// GitHub account, if it has one. `committed_at` is when it was committed, which for a
+/// commit merged from elsewhere is when it landed. `url` is its page on GitHub
+/// (FR-REPO-12). What BuhTig does not show or link to is `null`: avatars only from `https`
+/// URLs (NFR-SEC-03). An empty repository has none (FR-REPO-11).
 ///
 /// Its statuses are those of [`commit_activity`].
 pub async fn commits(
@@ -354,18 +381,22 @@ pub async fn commits(
 }
 
 /// `/-/api/repositories/{owner}/{repo}/releases`: the repository's 5 latest releases
-/// (FR-REPO-08), latest first,
+/// (FR-REPO-08), latest first, and how many it has,
 ///
 /// ```json
-/// {"releases": [{"tag": …, "name": …, "published_at": …, "prerelease": false, "url": …},
-///               …]}
+/// {"releases": [{"tag": …, "name": …, "published_at": …, "prerelease": false,
+///                "target": "main" | null, "url": …}, …],
+///  "count": 12}
 /// ```
 ///
 /// Drafts are left out, as from the stat cards' latest release, and so are releases without
-/// a tag. `name` is `null` when it only repeats the tag. `url` is the release's page on
-/// GitHub (FR-REPO-12). A repository without releases has none.
+/// a tag. `name` is `null` when it only repeats the tag. `target` is the branch or commit
+/// that the tag was made from, if GitHub tells it. `url` is the release's page on GitHub
+/// (FR-REPO-12). A repository without releases has none. `count` is how many releases GitHub
+/// lists to the viewer, drafts among them for one who may see them, as GitHub counts them.
+/// GitHub tells no count, so it is asked for apart when there are more than 5.
 ///
-/// Its statuses are those of [`commit_activity`].
+/// Its statuses are those of [`commit_activity`]. A failure to count the releases is 502.
 pub async fn releases(
     State(cache): State<Arc<Cache>>,
     viewer: Viewer,
@@ -383,8 +414,21 @@ pub async fn releases(
         Ok(list) => list.data,
         Err(code) => return status(code),
     };
+    let count = if list.truncated {
+        // The count is cached apart from the list, so it may be older. It is never fewer
+        // than the list shows.
+        let count = cache
+            .get_count(&repository.viewer, &repository.dashboard, &path)
+            .await;
+        match data(count) {
+            Ok(count) => count.data.max(listed(&list)),
+            Err(code) => return status(code),
+        }
+    } else {
+        listed(&list)
+    };
     let releases: Vec<Value> = list.items.iter().filter_map(listed_release).collect();
-    respond(json!({ "releases": releases }))
+    respond(json!({ "releases": releases, "count": count }))
 }
 
 /// `POST /-/api/repositories/{owner}/{repo}/refresh`: makes the next requests for the
@@ -544,6 +588,18 @@ pub(crate) fn denied<T>(
     )
 }
 
+/// Why the cache had no newer data than `cached`, as a dashboard's header tells it beside
+/// its age (FR-DATA-05): `"held"` when the visitor may not fetch from GitHub now, so that the
+/// dashboard can ask them to sign in (FR-DATA-10, FR-DATA-11), `"github"` when GitHub
+/// failed, or was not reachable, and `None` when the data is fresh, or was just fetched.
+pub(crate) fn stale<T>(cached: &Cached<T>) -> Option<&'static str> {
+    match cached.stale {
+        None => None,
+        Some(Stale::Held(_)) => Some("held"),
+        Some(Stale::GitHub(_)) => Some("github"),
+    }
+}
+
 /// The data the cache had, or the status that says why it had none: 202 while GitHub is
 /// still computing it, for the dashboard to ask again (FR-REPO-10), and 401 when GitHub
 /// rejected the credential of the signed-in user, who has been signed out (FR-AUTH-09).
@@ -681,7 +737,7 @@ fn release(release: &Value) -> Option<Value> {
 /// The weeks of commit activity that GitHub gave, as the chart shows them: the last 52,
 /// oldest first. `None` if a week lacks its start or its count. GitHub has no content, or
 /// `{}` or `[]`, for an empty repository.
-fn weeks(activity: &Value) -> Option<Vec<Value>> {
+pub(crate) fn weeks(activity: &Value) -> Option<Vec<Value>> {
     let weeks = match activity {
         Value::Array(weeks) => weeks.as_slice(),
         Value::Null => &[],
@@ -768,6 +824,7 @@ fn recent_item(item: &Value) -> Option<Value> {
         "state": state,
         "author": first_text(item, &["/user/login"]),
         "created_at": text(item, "created_at"),
+        "updated_at": text(item, "updated_at"),
         "url": page(item.get("html_url")),
     }))
 }
@@ -782,6 +839,7 @@ fn commit(commit: &Value) -> Option<Value> {
         "sha": text(commit, "sha")?,
         "message": message,
         "author": first_text(commit, &["/author/login", "/commit/author/name"]),
+        "author_avatar_url": link(commit.pointer("/author/avatar_url"), &["https"]),
         "committed_at": first_text(commit, &["/commit/committer/date", "/commit/author/date"]),
         "url": page(commit.get("html_url")),
     }))
@@ -796,6 +854,7 @@ fn listed_release(data: &Value) -> Option<Value> {
     let tag = text(data, "tag_name")?;
     listed["name"] = text(data, "name").filter(|name| *name != tag).into();
     listed["prerelease"] = (data.get("prerelease") == Some(&Value::Bool(true))).into();
+    listed["target"] = text(data, "target_commitish").into();
     Some(listed)
 }
 
@@ -828,6 +887,14 @@ fn first_text<'a>(data: &'a Value, pointers: &[&str]) -> Option<&'a str> {
     })
 }
 
+/// The repository's topics, as GitHub gives them, but for any that are not text.
+pub(crate) fn topics(data: &Value) -> Vec<&str> {
+    data.get("topics")
+        .and_then(Value::as_array)
+        .map(|topics| topics.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
+}
+
 /// GitHub's visibility of the repository, from `private` if it gives no other.
 pub(crate) fn visibility(data: &Value) -> &'static str {
     let visibility = data.get("visibility").and_then(Value::as_str);
@@ -858,6 +925,7 @@ pub(crate) fn status(status: StatusCode) -> Response {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use axum::http::HeaderMap;
@@ -962,17 +1030,20 @@ mod tests {
     const ISSUES: &str = r#"[
         {"number": 50, "title": "Widgets wobble", "state": "open",
          "user": {"login": "alice"}, "created_at": "2026-10-20T08:00:00Z",
+         "updated_at": "2026-10-22T09:00:00Z",
          "html_url": "https://github.com/Acme/Widget/issues/50"},
         {"number": 49, "title": "Steady the widgets", "state": "closed", "draft": false,
          "user": {"login": "bob"}, "created_at": "2026-10-19T08:00:00Z",
+         "updated_at": "2026-10-21T08:00:00Z",
          "html_url": "https://github.com/Acme/Widget/pull/49",
          "pull_request": {"merged_at": "2026-10-21T08:00:00Z"}},
         {"number": 48, "title": "Paint the widgets", "state": "closed",
          "user": {"login": "carol"}, "created_at": "2026-10-18T08:00:00Z",
+         "updated_at": "2026-10-20T08:00:00Z",
          "html_url": "https://github.com/Acme/Widget/pull/48",
          "pull_request": {"merged_at": null}},
         {"number": 47, "title": "Widgets are too blue", "state": "closed", "user": null,
-         "html_url": "javascript:alert(1)"},
+         "updated_at": "", "html_url": "javascript:alert(1)"},
         {"number": 46, "title": "Square widgets", "state": "open", "draft": true,
          "user": {"login": "dave"}, "html_url": "https://evil.example/46",
          "pull_request": {"merged_at": null}},
@@ -985,7 +1056,8 @@ mod tests {
     /// not show as they are.
     const COMMITS: &str = r#"[
         {"sha": "a1b2c3d", "html_url": "https://github.com/Acme/Widget/commit/a1b2c3d",
-         "author": {"login": "alice"},
+         "author": {"login": "alice",
+                    "avatar_url": "https://avatars.githubusercontent.com/u/2?v=4"},
          "commit": {"message": "Steady the widgets (#49)\n\nThey wobbled.",
                     "author": {"name": "Alice Example", "date": "2026-10-19T08:00:00Z"},
                     "committer": {"name": "GitHub", "date": "2026-10-21T08:00:00Z"}}},
@@ -993,6 +1065,7 @@ mod tests {
          "commit": {"message": "  Fix a typo  \r\nin the widgets",
                     "author": {"name": "Bob Example", "date": "2026-10-18T08:00:00Z"}}},
         {"sha": "c3d4e5f", "html_url": "https://evil.example/c3d4e5f",
+         "author": {"login": "", "avatar_url": "http://avatars.example/u/3"},
          "commit": {"message": "", "author": {"name": ""}}},
         {"html_url": "https://github.com/Acme/Widget/commit/0", "commit": {"message": "Shaless"}}
     ]"#;
@@ -1002,12 +1075,14 @@ mod tests {
     const RELEASES: &str = r#"[
         {"tag_name": "v3.0.0", "name": "Widget 3", "draft": true, "prerelease": false},
         {"tag_name": "v3.0.0-rc.1", "name": "v3.0.0-rc.1", "draft": false, "prerelease": true,
+         "target_commitish": "next",
          "created_at": "2026-10-10T12:00:00Z", "published_at": "2026-10-11T12:00:00Z",
          "html_url": "https://github.com/Acme/Widget/releases/tag/v3.0.0-rc.1"},
         {"tag_name": "v2.1.0", "name": "Widget 2.1", "draft": false, "prerelease": false,
+         "target_commitish": "main",
          "created_at": "2026-09-30T12:00:00Z", "published_at": "2026-10-01T12:00:00Z",
          "html_url": "https://github.com/Acme/Widget/releases/tag/v2.1.0"},
-        {"tag_name": "v2.0.0", "name": "", "created_at": "2026-06-01T12:00:00Z",
+        {"tag_name": "v2.0.0", "name": "", "target_commitish": "", "created_at": "2026-06-01T12:00:00Z",
          "published_at": null, "html_url": "https://evil.example/v2.0.0"},
         {"tag_name": "", "name": "Tagless"}
     ]"#;
@@ -1120,6 +1195,59 @@ mod tests {
                 | "/repos/acme/odd/issues"
                 | "/repos/acme/odd/commits"
                 | "/repos/acme/odd/releases" => answer(200, &[], r#"{"login": "alice"}"#),
+                // More contributors and releases than one page shows: GitHub counts them
+                // by the number of the last page of one each.
+                "/repos/acme/crowded" | "/repos/acme/uncountable" => {
+                    let name = request.uri().path().trim_start_matches("/repos/");
+                    answer(
+                        200,
+                        &[],
+                        &json!({"full_name": name, "private": false}).to_string(),
+                    )
+                }
+                "/repos/acme/crowded/contributors" | "/repos/acme/crowded/releases"
+                    if query.get("per_page").map(String::as_str) == Some("1") =>
+                {
+                    let path = request.uri().path();
+                    let last = if path.ends_with("/releases") {
+                        37
+                    } else {
+                        1234
+                    };
+                    let link = format!(
+                        r#"<https://api.github.com{path}?per_page=1&page=2>; rel="next", <https://api.github.com{path}?per_page=1&page={last}>; rel="last""#
+                    );
+                    answer(
+                        200,
+                        &[("link", &link)],
+                        r#"[{"login": "first", "tag_name": "v1"}]"#,
+                    )
+                }
+                "/repos/acme/uncountable/contributors"
+                    if query.get("per_page").map(String::as_str) == Some("1") =>
+                {
+                    answer(
+                        403,
+                        &[],
+                        r#"{"message": "The history or contributor list is too large to list contributors for this repository via the API."}"#,
+                    )
+                }
+                "/repos/acme/crowded/contributors"
+                | "/repos/acme/crowded/releases"
+                | "/repos/acme/uncountable/contributors" => {
+                    let path = request.uri().path();
+                    let per_page: usize = query["per_page"].parse().unwrap();
+                    let items: Vec<Value> = (0..per_page)
+                        .map(|n| {
+                            json!({"login": format!("c{n}"), "contributions": 100 - n,
+                                        "tag_name": format!("v{n}")})
+                        })
+                        .collect();
+                    let next = format!(
+                        r#"<https://api.github.com{path}?per_page={per_page}&page=2>; rel="next""#
+                    );
+                    answer(200, &[("link", &next)], &Value::from(items).to_string())
+                }
                 "/repos/acme/nameless" => answer(200, &[], r#"{"private": false}"#),
                 "/repos/acme/broken" => answer(500, &[], r#"{"message": "Server Error"}"#),
                 "/repos/acme/widget/releases/latest" => answer(
@@ -1165,6 +1293,11 @@ mod tests {
     /// A cache on a database of its own, in front of `stub`, that lets each visitor make
     /// `visitor_fetches` dashboard loads an hour.
     async fn cache(stub: &Arc<Stub>, visitor_fetches: u32) -> Arc<Cache> {
+        cache_for(stub, visitor_fetches, Duration::from_secs(15 * 60)).await
+    }
+
+    /// As [`cache`], keeping data fresh for `ttl`.
+    async fn cache_for(stub: &Arc<Stub>, visitor_fetches: u32, ttl: Duration) -> Arc<Cache> {
         let cluster = cluster();
         let database = cluster.create_database();
         let db = db::connect(&DatabaseConfig {
@@ -1178,7 +1311,7 @@ mod tests {
             db,
             Arc::new(client(stub)),
             &CacheConfig {
-                ttl: Duration::from_secs(15 * 60),
+                ttl,
                 retention: Duration::from_secs(30 * 24 * 60 * 60),
             },
             &LimitsConfig {
@@ -1322,6 +1455,7 @@ mod tests {
                 StatusCode::OK,
                 json!({
                     "name": "Acme/Widget",
+                    "stale": null,
                     "owner_avatar_url": "https://avatars.githubusercontent.com/u/1?v=4",
                     "description": "Widgets for everyone",
                     "visibility": "public",
@@ -1344,6 +1478,7 @@ mod tests {
                 StatusCode::OK,
                 json!({
                     "name": "acme/bare",
+                    "stale": null,
                     "owner_avatar_url": null,
                     "description": null,
                     "visibility": "public",
@@ -1372,6 +1507,7 @@ mod tests {
                 StatusCode::OK,
                 json!({
                     "name": "acme/odd",
+                    "stale": null,
                     // Only from https URLs.
                     "owner_avatar_url": null,
                     "description": null,
@@ -1392,6 +1528,55 @@ mod tests {
                 })
             )
         );
+    }
+
+    #[tokio::test]
+    async fn the_header_says_why_its_data_is_no_newer() {
+        let down = Arc::new(AtomicBool::new(false));
+        let stub = Stub::new({
+            let down = down.clone();
+            move |_| match down.load(Ordering::Relaxed) {
+                true => answer(502, &[], r#"{"message": "Server Error"}"#),
+                false => answer(200, &[], WIDGET),
+            }
+        });
+        // Nothing is fresh, and visitors may fetch nothing.
+        let cache = cache_for(&stub, 0, Duration::ZERO).await;
+        let signed_in = Viewer::SignedIn {
+            user_id: 1,
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let ask = async |viewer: &Viewer| {
+            let names = Path(("acme".to_owned(), "widget".to_owned()));
+            let response = summary(State(cache.clone()), viewer.clone(), names).await;
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            (status, body["stale"].clone(), fetched_at(&body))
+        };
+
+        // Just fetched: as fresh as can be.
+        let (status, stale, fetched) = ask(&signed_in).await;
+        assert_eq!((status, stale), (StatusCode::OK, Value::Null));
+        // A visitor who may not fetch from GitHub now is served what is cached, and told
+        // why it is no newer, so that the dashboard can ask them to sign in.
+        assert_eq!(
+            ask(&visitor).await,
+            (StatusCode::OK, json!("held"), fetched)
+        );
+        // GitHub fails: what is cached is served, with why it is no newer.
+        down.store(true, Ordering::Relaxed);
+        assert_eq!(
+            ask(&signed_in).await,
+            (StatusCode::OK, json!("github"), fetched)
+        );
+        assert_eq!(stub.urls().len(), 2);
     }
 
     #[test]
@@ -1650,6 +1835,9 @@ mod tests {
                         // Avatars only from https URLs, and links only to GitHub's pages.
                         {"login": "mallory", "avatar_url": null, "url": null, "commits": 7},
                     ],
+                    // As GitHub lists them, those it gave no login or count too. They fit
+                    // on one page, so they are not counted apart.
+                    "count": 6,
                     "too_large": false,
                 })
             )
@@ -1664,6 +1852,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn contributors_and_releases_past_a_page_are_counted_apart() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let (status, contributors) = ask(&cache, Api::Contributors, "acme", "crowded").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            (
+                contributors["contributors"].as_array().unwrap().len(),
+                &contributors["count"],
+                &contributors["too_large"]
+            ),
+            (10, &json!(1234), &json!(false))
+        );
+        let (status, releases) = ask(&cache, Api::Releases, "acme", "crowded").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            (
+                releases["releases"].as_array().unwrap().len(),
+                &releases["count"]
+            ),
+            (5, &json!(37))
+        );
+        // Both are then cached.
+        assert_eq!(
+            ask(&cache, Api::Releases, "acme", "crowded").await,
+            (status, releases)
+        );
+        let mut urls = stub.urls();
+        urls.sort();
+        assert_eq!(
+            urls,
+            [
+                "https://api.github.com/repos/acme/crowded",
+                "https://api.github.com/repos/acme/crowded/contributors?per_page=1",
+                "https://api.github.com/repos/acme/crowded/contributors?per_page=10",
+                "https://api.github.com/repos/acme/crowded/releases?per_page=1",
+                "https://api.github.com/repos/acme/crowded/releases?per_page=5",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn contributors_github_lists_but_will_not_count_have_no_count() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let (status, body) = ask(&cache, Api::Contributors, "acme", "uncountable").await;
+        assert_eq!(
+            (
+                status,
+                body["contributors"].as_array().unwrap().len(),
+                &body["count"],
+                &body["too_large"]
+            ),
+            (StatusCode::OK, 10, &Value::Null, &json!(false))
+        );
+    }
+
+    #[tokio::test]
     async fn contributors_github_does_not_list_are_said_to_be_too_many() {
         let stub = github();
         let cache = cache(&stub, 30).await;
@@ -1671,7 +1917,7 @@ mod tests {
             ask(&cache, Api::Contributors, "acme", "huge").await,
             (
                 StatusCode::OK,
-                json!({"contributors": [], "too_large": true})
+                json!({"contributors": [], "count": null, "too_large": true})
             )
         );
     }
@@ -1697,6 +1943,7 @@ mod tests {
                             "state": "open",
                             "author": "alice",
                             "created_at": "2026-10-20T08:00:00Z",
+                            "updated_at": "2026-10-22T09:00:00Z",
                             "url": "https://github.com/Acme/Widget/issues/50",
                         },
                         {
@@ -1706,6 +1953,7 @@ mod tests {
                             "state": "merged",
                             "author": "bob",
                             "created_at": "2026-10-19T08:00:00Z",
+                            "updated_at": "2026-10-21T08:00:00Z",
                             "url": "https://github.com/Acme/Widget/pull/49",
                         },
                         {
@@ -1715,6 +1963,7 @@ mod tests {
                             "state": "closed",
                             "author": "carol",
                             "created_at": "2026-10-18T08:00:00Z",
+                            "updated_at": "2026-10-20T08:00:00Z",
                             "url": "https://github.com/Acme/Widget/pull/48",
                         },
                         // Links only to GitHub's pages.
@@ -1725,6 +1974,7 @@ mod tests {
                             "state": "closed",
                             "author": null,
                             "created_at": null,
+                            "updated_at": null,
                             "url": null,
                         },
                         // A draft is open, as the counts have it.
@@ -1735,6 +1985,7 @@ mod tests {
                             "state": "open",
                             "author": "dave",
                             "created_at": null,
+                            "updated_at": null,
                             "url": null,
                         },
                     ],
@@ -1743,7 +1994,7 @@ mod tests {
         );
         assert!(
             stub.urls().contains(
-                &"https://api.github.com/repos/Acme/Widget/issues?state=all&sort=updated&direction=desc&per_page=10"
+                &"https://api.github.com/repos/Acme/Widget/issues?state=all&sort=updated&direction=desc&per_page=20"
                     .to_owned()
             ),
             "{:?}",
@@ -1791,6 +2042,7 @@ mod tests {
                         "state": "open",
                         "author": "erin",
                         "created_at": "2026-10-22T08:00:00Z",
+                        "updated_at": null,
                         "url": "https://github.com/acme/mirror/pull/3",
                     }],
                 })
@@ -1836,6 +2088,7 @@ mod tests {
                             "sha": "a1b2c3d",
                             "message": "Steady the widgets (#49)",
                             "author": "alice",
+                            "author_avatar_url": "https://avatars.githubusercontent.com/u/2?v=4",
                             "committed_at": "2026-10-21T08:00:00Z",
                             "url": "https://github.com/Acme/Widget/commit/a1b2c3d",
                         },
@@ -1844,13 +2097,16 @@ mod tests {
                             "sha": "b2c3d4e",
                             "message": "Fix a typo",
                             "author": "Bob Example",
+                            "author_avatar_url": null,
                             "committed_at": "2026-10-18T08:00:00Z",
                             "url": null,
                         },
+                        // Avatars only from https URLs.
                         {
                             "sha": "c3d4e5f",
                             "message": null,
                             "author": null,
+                            "author_avatar_url": null,
                             "committed_at": null,
                             "url": null,
                         },
@@ -1884,6 +2140,7 @@ mod tests {
                             "name": null,
                             "published_at": "2026-10-11T12:00:00Z",
                             "prerelease": true,
+                            "target": "next",
                             "url": "https://github.com/Acme/Widget/releases/tag/v3.0.0-rc.1",
                         },
                         {
@@ -1891,6 +2148,7 @@ mod tests {
                             "name": "Widget 2.1",
                             "published_at": "2026-10-01T12:00:00Z",
                             "prerelease": false,
+                            "target": "main",
                             "url": "https://github.com/Acme/Widget/releases/tag/v2.1.0",
                         },
                         {
@@ -1898,9 +2156,13 @@ mod tests {
                             "name": null,
                             "published_at": "2026-06-01T12:00:00Z",
                             "prerelease": false,
+                            "target": null,
                             "url": null,
                         },
                     ],
+                    // As GitHub lists them, the draft and the release without a tag too.
+                    // They fit on one page, so they are not counted apart.
+                    "count": 5,
                 })
             )
         );
@@ -1929,7 +2191,7 @@ mod tests {
             ask(&cache, Api::Contributors, "acme", "bare").await,
             (
                 StatusCode::OK,
-                json!({"contributors": [], "too_large": false})
+                json!({"contributors": [], "count": 0, "too_large": false})
             )
         );
         assert_eq!(
@@ -1949,7 +2211,7 @@ mod tests {
         );
         assert_eq!(
             ask(&cache, Api::Releases, "acme", "bare").await,
-            (StatusCode::OK, json!({"releases": []}))
+            (StatusCode::OK, json!({"releases": [], "count": 0}))
         );
     }
 
