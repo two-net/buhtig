@@ -7,7 +7,7 @@
     "build": "ng build && node scripts/compress.mjs",
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
-    "test:scripts": "node --test scripts/compress.test.mjs"
+    "test:scripts": "node --test scripts/compress.test.mjs scripts/palette.test.mjs"
   },
   "private": true,
   "packageManager": "npm@10.9.8",

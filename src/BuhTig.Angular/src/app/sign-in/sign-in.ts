@@ -1,6 +1,7 @@
 import { Component, computed, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { signInUrl } from '../session/session';
+import { Wordmark } from '../wordmark/wordmark';
 
 /**
  * Where a visitor is sent to sign in, from the page they opened, when this instance of BuhTig is
@@ -9,7 +10,7 @@ import { signInUrl } from '../session/session';
  */
 @Component({
   selector: 'app-sign-in',
-  imports: [RouterLink],
+  imports: [RouterLink, Wordmark],
   templateUrl: './sign-in.html',
   styles: `
     .sign-in {

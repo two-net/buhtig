@@ -1,12 +1,12 @@
 /*
- * The widget within is the grid's item (UI-05). Each language's color is at least 3:1 against
- * the background (NFR-UX-02), and "Other" is gray.
+ * The widget within is the grid's item (UI-05). The first language is in the accent, and each
+ * language's color is at least 3:1 against the background (NFR-UX-02), and "Other" is gray.
  */
 :host {
   display: contents;
   /* As tall as what it shows once loaded, so that nothing moves then (NFR-PERF-05). */
   --widget-skeleton: 14rem;
-  --language-1: #5b3fc4;
+  --language-1: var(--accent);
   --language-2: #0369a1;
   --language-3: #c2410c;
   --language-4: #047857;
@@ -37,7 +37,6 @@
 
 @media (prefers-color-scheme: dark) {
   :host {
-    --language-1: #b2a3ff;
     --language-2: #7cc4fa;
     --language-3: #fb923c;
     --language-4: #34d399;

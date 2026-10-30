@@ -1,11 +1,12 @@
 import { Component, computed, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { signInUrl } from '../session/session';
+import { Wordmark } from '../wordmark/wordmark';
 
 /** Where a sign-in ends that did not succeed, to try again from. */
 @Component({
   selector: 'app-sign-in-failed',
-  imports: [RouterLink],
+  imports: [RouterLink, Wordmark],
   templateUrl: './failed.html',
 })
 export class SignInFailed {

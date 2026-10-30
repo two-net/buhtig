@@ -1,0 +1,32 @@
+/*
+ * As tall as the capitals and descenders of text in the `font-size` around it, and at the top
+ * of its line, so that it takes no more room than that text would.
+ */
+:host {
+  display: inline-block;
+  vertical-align: top;
+}
+
+svg {
+  display: block;
+  height: 0.95em;
+  fill: none;
+  stroke-width: 16;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ink {
+  stroke: currentColor;
+}
+
+.accent {
+  stroke: var(--accent);
+}
+
+/* In forced colors, all of it in the one color that the system gives the text. */
+@media (forced-colors: active) {
+  .accent {
+    stroke: currentColor;
+  }
+}

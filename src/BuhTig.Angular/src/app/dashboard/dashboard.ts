@@ -37,6 +37,7 @@ import { Resource, dashboardPath } from '../search/parse';
 import { Session } from '../session/session';
 import { Personal } from '../shortcuts/personal';
 import { shortcutOf } from '../shortcuts/pick';
+import { Wordmark } from '../wordmark/wordmark';
 import { Resources, Summary } from './resources';
 
 /**
@@ -88,6 +89,7 @@ import { Resources, Summary } from './resources';
     RepositoryStats,
     RouterLink,
     Search,
+    Wordmark,
   ],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',

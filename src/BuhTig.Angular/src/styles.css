@@ -1,8 +1,9 @@
 /*
- * BuhTig's palette: neutrals and one accent, in light and dark themes that follow the
- * operating system (UI-01, UI-07). Text is at least 4.5:1 against the backgrounds it sits
- * on, and lines that mark controls at least 3:1 (NFR-UX-02). Provisional until the visual
- * identity is designed (#34).
+ * BuhTig's palette (CON-10): neutrals tinged with violet, and one violet accent, which is
+ * also the "Tig" of the wordmark and the circle of the favicon (public/favicon.svg). Its
+ * light and dark themes follow the operating system (UI-01, UI-07). Text is at least 4.5:1
+ * against the backgrounds it sits on, and lines that mark controls at least 3:1 (NFR-UX-02),
+ * as scripts/palette.test.mjs checks.
  */
 :root {
   color-scheme: light dark;
@@ -81,15 +82,15 @@ a {
   }
 }
 
-/* The slim header of BuhTig's own pages, with the wordmark leading home. */
+/* The slim header of BuhTig's own pages, with the wordmark leading home, as on a dashboard. */
 .page-header {
   padding: 1rem;
 }
 
-.page-header a {
+.page-header .wordmark {
+  display: inline-flex;
   color: var(--text);
-  font-weight: 700;
-  text-decoration: none;
+  font-size: 1.375rem;
 }
 
 /* The text of BuhTig's own pages, such as About and Privacy. */

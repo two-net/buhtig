@@ -39,6 +39,7 @@ import {
 } from './messages';
 import { ShortcutSettings } from './shortcuts';
 import { SaveProblem, Tokens } from './tokens';
+import { Wordmark } from '../wordmark/wordmark';
 
 /**
  * The signed-in user's settings, at `/-/settings`: their personal access token, which they may
@@ -53,7 +54,7 @@ import { SaveProblem, Tokens } from './tokens';
  */
 @Component({
   selector: 'app-settings',
-  imports: [Account, DataDeletion, RelativeTime, RouterLink, ShortcutSettings],
+  imports: [Account, DataDeletion, RelativeTime, RouterLink, ShortcutSettings, Wordmark],
   templateUrl: './settings.html',
   styleUrl: './settings.css',
 })

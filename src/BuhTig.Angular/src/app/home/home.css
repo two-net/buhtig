@@ -24,8 +24,6 @@ main {
 .wordmark {
   margin: 0 0 2rem;
   font-size: clamp(3rem, 14vw, 4.5rem);
-  font-weight: 800;
-  letter-spacing: -0.03em;
   line-height: 1;
 }
 

@@ -8,6 +8,7 @@ import { Motion } from '../motion/motion';
 import { Search } from '../search/search';
 import { Shortcuts } from '../shortcuts/shortcuts';
 import { Surprise } from '../surprise/surprise';
+import { Wordmark } from '../wordmark/wordmark';
 
 /**
  * The home page, after a search engine's (§3.1): the wordmark, the search box with "Surprise
@@ -20,7 +21,7 @@ import { Surprise } from '../surprise/surprise';
  */
 @Component({
   selector: 'app-home',
-  imports: [Account, RouterLink, Search, Shortcuts, Surprise],
+  imports: [Account, RouterLink, Search, Shortcuts, Surprise, Wordmark],
   templateUrl: './home.html',
   styleUrl: './home.css',
 })
