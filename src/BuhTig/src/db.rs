@@ -1,5 +1,5 @@
-//! The one PostgreSQL database that holds all persistent state (CON-02, FR-DB-01), and
-//! its automatic migration at startup (SRS §4.12).
+//! The one PostgreSQL database that holds all persistent state (CON-02, FR-DB-01), its
+//! creation if it does not exist yet, and its automatic migration at startup (SRS §4.12).
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use sea_orm::entity::prelude::ChronoUtc;
 use sea_orm::sea_query::{Func, Query};
-use sea_orm::sqlx::Connection;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgConnection, PgPoolOptions};
+use sea_orm::sqlx::{AssertSqlSafe, Connection, raw_sql};
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
     IsolationLevel, Set, SqlxPostgresConnector, TransactionTrait,
@@ -36,12 +36,29 @@ pub(crate) const HOUSEKEEPING_LOCK: i64 = 0x42_7568_5469_6748;
 /// unreachable, requests thus fail within seconds rather than sqlx's default 30 (FR-DB-09).
 pub const ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The database that BuhTig connects to in order to create its own, as `createdb` does.
+const MAINTENANCE_DATABASE: &str = "postgres";
+
+/// PostgreSQL's error codes (SQLSTATE) for a database that does not exist, for one that
+/// does, and for a duplicate key, which is how a database that another process has just
+/// created may show up.
+const INVALID_CATALOG_NAME: &str = "3D000";
+const DUPLICATE_DATABASE: &str = "42P04";
+const UNIQUE_VIOLATION: &str = "23505";
+
 /// Why BuhTig cannot use the database. No message contains the connection string.
 #[derive(Debug)]
 pub enum Error {
     Connect(sea_orm::sqlx::Error),
+    Create {
+        database: String,
+        error: sea_orm::sqlx::Error,
+    },
     UnsupportedServer(Option<u32>),
-    NewerSchema { database: Version, app: Version },
+    NewerSchema {
+        database: Version,
+        app: Version,
+    },
     UnknownSchemaVersion(String),
     Migrate(DbErr),
 }
@@ -52,6 +69,11 @@ impl fmt::Display for Error {
             Error::Connect(error) => {
                 write!(f, "cannot connect to the database (database.url): {error}")
             }
+            Error::Create { database, error } => write!(
+                f,
+                "the database {database:?} does not exist, and BuhTig cannot create it: \
+                 {error}; create it, or grant the role in database.url CREATEDB"
+            ),
             Error::UnsupportedServer(Some(version)) => write!(
                 f,
                 "PostgreSQL {} is not supported; BuhTig needs PostgreSQL 15 or newer",
@@ -108,7 +130,8 @@ impl fmt::Display for Migration {
     }
 }
 
-/// Connects to the database in `database.url`, which must run PostgreSQL 15 or newer.
+/// Connects to the database in `database.url`, which must run PostgreSQL 15 or newer,
+/// and creates that database first if it does not exist (FR-DB-10).
 ///
 /// The config file has already normalized the URL, so that it says everything sqlx
 /// needs: TLS for a remote database, and a password, empty if need be.
@@ -121,9 +144,14 @@ pub async fn connect(config: &DatabaseConfig) -> Result<DatabaseConnection, Erro
 
     // One plain connection first. The pool would retry a refused connection until it
     // times out, and then report only the timeout rather than why.
-    let connection = PgConnection::connect_with(&options)
-        .await
-        .map_err(Error::Connect)?;
+    let connection = match PgConnection::connect_with(&options).await {
+        Err(error) if has_code(&error, INVALID_CATALOG_NAME) => {
+            create(&options).await?;
+            PgConnection::connect_with(&options).await
+        }
+        connected => connected,
+    }
+    .map_err(Error::Connect)?;
     let version = connection.server_version_num();
     connection.close().await.map_err(Error::Connect)?;
     check_server_version(version)?;
@@ -138,6 +166,52 @@ pub async fn connect(config: &DatabaseConfig) -> Result<DatabaseConnection, Erro
         .await
         .map_err(Error::Connect)?;
     Ok(SqlxPostgresConnector::from_sqlx_postgres_pool(pool))
+}
+
+/// Creates the database that `options` name, which does not exist, through a connection
+/// to the `postgres` database (FR-DB-10). The role in `database.url` needs the CREATEDB
+/// privilege, and owns the new database. If another BuhTig process creates it first,
+/// that does just as well.
+///
+/// CON-03 exception: the ORM has no statement that creates a database, so this one is
+/// written as SQL, with the name quoted as an identifier.
+async fn create(options: &PgConnectOptions) -> Result<(), Error> {
+    // Without a database in the URL, PostgreSQL uses the one named after the role.
+    let name = options
+        .get_database()
+        .unwrap_or(options.get_username())
+        .to_owned();
+    let cannot_create = |error| Error::Create {
+        database: name.clone(),
+        error,
+    };
+
+    let maintenance = options.clone().database(MAINTENANCE_DATABASE);
+    let mut connection = PgConnection::connect_with(&maintenance)
+        .await
+        .map_err(cannot_create)?;
+    let sql = format!("CREATE DATABASE {}", identifier(&name));
+    match raw_sql(AssertSqlSafe(sql)).execute(&mut connection).await {
+        Ok(_) => info!("created the database {name:?}"),
+        Err(error)
+            if has_code(&error, DUPLICATE_DATABASE) || has_code(&error, UNIQUE_VIOLATION) => {}
+        Err(error) => return Err(cannot_create(error)),
+    }
+    connection.close().await.map_err(Error::Connect)
+}
+
+/// Quotes `name` as a PostgreSQL identifier, so that it is taken exactly as it is, case
+/// and all, as it is when connecting.
+fn identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Whether PostgreSQL refused with the error `code`, a SQLSTATE.
+fn has_code(error: &sea_orm::sqlx::Error, code: &str) -> bool {
+    error
+        .as_database_error()
+        .and_then(|error| error.code())
+        .is_some_and(|actual| actual == code)
 }
 
 /// Brings the schema in line with the entities (FR-DB-02). It runs in one transaction,
@@ -343,6 +417,12 @@ mod tests {
             "PostgreSQL 14.19 is not supported; BuhTig needs PostgreSQL 15 or newer"
         );
         assert!(check_server_version(None).is_err());
+    }
+
+    #[test]
+    fn database_names_are_quoted_as_they_are() {
+        assert_eq!(identifier("buhtig"), r#""buhtig""#);
+        assert_eq!(identifier(r#"Buh"Tig; DROP"#), r#""Buh""Tig; DROP""#);
     }
 
     #[test]

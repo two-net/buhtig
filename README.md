@@ -45,10 +45,11 @@ transfer more than its 300 KB budget.
 
 ## Run locally
 
-You need PostgreSQL 15 or newer with an empty database, and a config file:
+You need PostgreSQL 15 or newer and a config file. BuhTig creates its database on first
+start if it does not exist yet, which needs a role allowed to create databases
+(`CREATEDB`); otherwise, create an empty one yourself with `createdb buhtig`.
 
 ```sh
-createdb buhtig
 cd src/BuhTig
 cp config.example.toml config.toml && chmod 600 config.toml
 ```

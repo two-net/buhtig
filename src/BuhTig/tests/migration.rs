@@ -94,6 +94,97 @@ fn first_start_creates_the_schema_and_a_restart_changes_nothing() {
     assert_eq!(db.psql("SELECT version FROM schema_versions"), VERSION);
 }
 
+/// FR-DB-10: a database that does not exist is created, under the name in the URL, which
+/// is taken as it is, case, quotes and all.
+#[test]
+fn a_missing_database_is_created() {
+    let cluster = cluster();
+    let database = r#"Missing "BuhTig" db"#.to_owned();
+    let url = cluster.url("Missing%20%22BuhTig%22%20db");
+    let db = setup_with(cluster, database.clone(), &url);
+
+    let (running, log) = start(&db.config);
+    assert_logged(&log, r#"created the database "Missing \"BuhTig\" db""#);
+    assert_logged(
+        &log,
+        &format!("created the database schema for BuhTig {VERSION}"),
+    );
+    let home = running.get("/");
+    assert!(home.starts_with("HTTP/1.1 200 "), "{home}");
+    drop(running);
+    assert_eq!(db.psql("SELECT version FROM schema_versions"), VERSION);
+
+    let (_running, log) = start(&db.config);
+    assert!(
+        !log.iter().any(|line| line.contains("created the database")),
+        "{log:#?}"
+    );
+}
+
+/// FR-DB-06, FR-DB-10: processes that start at once against a missing database create
+/// it once between them, and all start.
+#[test]
+fn concurrent_starts_create_a_missing_database_once() {
+    let cluster = cluster();
+    let database = "missing_concurrent".to_owned();
+    let db = setup_with(cluster, database.clone(), &cluster.url(&database));
+
+    let started: Vec<_> = std::thread::scope(|scope| {
+        let starting: Vec<_> = (0..4).map(|_| scope.spawn(|| start(&db.config))).collect();
+        starting
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect()
+    });
+
+    let count = |message: &str| {
+        started
+            .iter()
+            .filter(|(_, log)| log.iter().any(|line| line.contains(message)))
+            .count()
+    };
+    assert_eq!(count(r#"created the database "missing_concurrent""#), 1);
+    assert_eq!(count("created the database schema"), 1);
+    assert_eq!(db.psql("SELECT version FROM schema_versions"), VERSION);
+}
+
+/// FR-DB-10, A-05: creating a missing database needs a role allowed to create databases.
+#[test]
+fn a_role_that_cannot_create_the_database_stops_startup() {
+    let cluster = cluster();
+    let role = "cannot_create";
+    cluster.psql(
+        "postgres",
+        &format!("CREATE ROLE {role} LOGIN PASSWORD '{}'", support::PASSWORD),
+    );
+    let database = "missing_without_createdb".to_owned();
+    let db = setup_with(
+        cluster,
+        database.clone(),
+        &cluster.url_as(&database, role, support::PASSWORD),
+    );
+
+    let output = run_to_exit(&db.config);
+    assert_eq!(output.status.code(), Some(1));
+    let log = stdout(&output);
+    assert!(
+        log.contains(
+            r#"the database "missing_without_createdb" does not exist, and BuhTig cannot create it: "#
+        ) && log.contains("permission denied to create database")
+            && log.contains("grant the role in database.url CREATEDB"),
+        "{log}"
+    );
+    assert!(!log.contains(support::PASSWORD), "{log}");
+    assert!(!log.contains("listening on"), "{log}");
+    assert_eq!(
+        cluster.psql(
+            "postgres",
+            &format!("SELECT count(*) FROM pg_database WHERE datname = '{database}'")
+        ),
+        "0"
+    );
+}
+
 /// DR-06: every timestamp is stored in UTC.
 #[test]
 fn timestamps_carry_their_time_zone() {

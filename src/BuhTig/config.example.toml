@@ -22,8 +22,9 @@ public_url = "https://buhtig.example.com"
 
 [database]
 # PostgreSQL connection string, including the password. BuhTig needs
-# PostgreSQL 15 or newer, and an existing database it may create tables in; it
-# creates and updates its tables itself each time it starts. Don't add unique
+# PostgreSQL 15 or newer, and a database it may create tables in; it creates
+# and updates its tables itself each time it starts. If the database does not
+# exist, BuhTig creates it, which needs a role with CREATEDB. Don't add unique
 # indexes or constraints of your own to its tables: BuhTig removes them, or
 # fails to start.
 #

@@ -153,7 +153,7 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 | A-02 | "Private and public" means: (a) public data can be viewed without signing in; (b) personal features and private data require sign-in; and (c) an operator can switch the whole instance to private mode, where every page requires sign-in (OI-03). |
 | A-03 | Signing in only identifies the user and gives them their own GitHub rate limit. Access to private data comes only from the user's optional PAT, so BuhTig never asks for broad permissions at sign-in (OI-07). |
 | A-04 | The operator registers BuhTig with GitHub as an OAuth application with the callback URL `{server.public_url}/-/auth/callback`. The operator copies its client ID and client secret into the config file. |
-| A-05 | The operator provides an existing, empty PostgreSQL database and a role allowed to create and alter tables in it. BuhTig does not create the database itself. |
+| A-05 | The operator provides a PostgreSQL server and a role allowed to create and alter tables in BuhTig's database. That database is either empty or does not exist yet, in which case BuhTig creates it (FR-DB-10) and the role must also be allowed to create databases (`CREATEDB`). |
 | A-06 | TLS is terminated by the hosting environment (a reverse proxy, platform, or load balancer). BuhTig may listen on plain HTTP behind it. |
 | A-07 | One application instance serves all users. Running a second instance against the same database is not a goal, but it must not corrupt data (FR-DB-06). |
 | A-08 | BuhTig depends on GitHub's API and sign-in being available. GitHub's rate limits are far lower for unauthenticated requests than for authenticated ones, and they bound how many uncached dashboards visitors can load (§4.9). |
@@ -461,13 +461,14 @@ Motion is part of BuhTig's character, but it must feel fast and stay out of the 
 | FR-DB-07 | BuhTig shall refuse to start, with a clear message, if its version is older than the schema in the database. Downgrades are not supported. | Should |
 | FR-DB-08 | In-app housekeeping shall run at least hourly. It shall delete expired sessions, cache entries past retention (FR-DATA-12), and history beyond 20 entries per user. | Must |
 | FR-DB-09 | If the database becomes unreachable while BuhTig is running, BuhTig shall show a friendly error page and report itself unhealthy (FR-OPS-01). It shall recover automatically, without a restart, when the database returns. | Must |
+| FR-DB-10 | If the database given in the config file does not exist, BuhTig shall create it at startup, before migrating, owned by the configured role. If several BuhTig processes start at once, they shall create it once between them, and all shall start. If BuhTig cannot create it, it shall log why, exit with a non-zero status, and serve no requests. | Should |
 
 ### 4.13 Operations
 
 | ID | Requirement | Priority |
 |---|---|---|
 | FR-OPS-01 | `/-/health` shall return HTTP 200 when BuhTig is running and the database is reachable, and HTTP 503 otherwise. It shall reveal no configuration or internal details. | Must |
-| FR-OPS-02 | Given an empty database and a valid config file, BuhTig shall start and be fully usable with no further setup. | Must |
+| FR-OPS-02 | Given an empty or not yet created database (FR-DB-10) and a valid config file, BuhTig shall start and be fully usable with no further setup. | Must |
 | FR-OPS-03 | Upgrading shall require only replacing the application and restarting it; the schema migrates automatically. | Must |
 | FR-OPS-04 | At the level set by `log.level`, BuhTig shall log startup (version, access mode, migration result), errors, and one line per request (method, path, status, duration). Logs shall never contain credentials, session identifiers, or OAuth codes. | Must |
 | FR-OPS-05 | On shutdown, BuhTig shall stop accepting requests and let in-flight ones finish, waiting up to 10 seconds. | Should |
