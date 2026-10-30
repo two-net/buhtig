@@ -1158,7 +1158,7 @@ mod tests {
         ];
         for (key, value) in cases {
             let text = LoadError::Invalid(
-                "BuhTig.toml".into(),
+                "config.toml".into(),
                 parse(set(minimal(), key, value.clone())).unwrap_err(),
             )
             .to_string();
@@ -1208,7 +1208,7 @@ mod tests {
     /// FR-CFG-08: the example lists every key, and its commented-out values are the defaults.
     #[test]
     fn example_file_lists_every_key_with_its_default() {
-        let example = include_str!("../BuhTig.example.toml").replace(
+        let example = include_str!("../config.example.toml").replace(
             r#"encryption_key = "CHANGE-ME""#,
             &format!("encryption_key = {KEY:?}"),
         );
@@ -1255,7 +1255,7 @@ mod tests {
 
     #[test]
     fn example_file_refuses_to_start_until_a_key_is_set() {
-        let issues = Config::parse(include_str!("../BuhTig.example.toml")).unwrap_err();
+        let issues = Config::parse(include_str!("../config.example.toml")).unwrap_err();
         let at: Vec<&str> = issues.iter().map(|issue| issue.at.as_str()).collect();
         assert_eq!(at, ["security.encryption_key"]);
     }
@@ -1276,7 +1276,7 @@ mod tests {
     #[test]
     fn load_names_the_file_and_each_issue() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("BuhTig.toml");
+        let path = dir.path().join("config.toml");
         std::fs::write(&path, remove(minimal(), "database.url").to_string()).unwrap();
         assert_eq!(
             Config::load(&path).unwrap_err().to_string(),

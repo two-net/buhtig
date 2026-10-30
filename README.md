@@ -27,10 +27,10 @@ You need PostgreSQL 15 or newer with an empty database, and a config file:
 ```sh
 createdb buhtig
 cd src/BuhTig
-cp BuhTig.example.toml BuhTig.toml && chmod 600 BuhTig.toml
+cp config.example.toml config.toml && chmod 600 config.toml
 ```
 
-In `BuhTig.toml`, set:
+In `config.toml`, set:
 
 - `server.public_url = "http://localhost:8080"`
 - `database.url` for your database
@@ -63,8 +63,8 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
 
 ## Operate
 
-- **Config:** BuhTig reads only its config file, `./BuhTig.toml` or the path given with
-  `--config`. Restart it after changing the file. `BuhTig.example.toml` lists every key and
+- **Config:** BuhTig reads only its config file, `./config.toml` or the path given with
+  `--config`. Restart it after changing the file. `config.example.toml` lists every key and
   its default.
 - **TLS:** terminate HTTPS in front of BuhTig, for example in a reverse proxy. BuhTig
   itself listens on plain HTTP at `server.listen`.

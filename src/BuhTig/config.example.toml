@@ -4,10 +4,10 @@
 # nowhere else: not from environment variables, .env files or secret stores.
 # Restart BuhTig after changing the file.
 #
-# Copy this file to BuhTig.toml in the directory BuhTig runs from, or pass its
+# Copy this file to config.toml in the directory BuhTig runs from, or pass its
 # path with --config. It holds the database password, the GitHub client secret
 # and the encryption key, so make it readable only by the account that runs
-# BuhTig:  chmod 600 BuhTig.toml
+# BuhTig:  chmod 600 config.toml
 #
 # The five required keys are set below. Every other key is commented out and
 # shows its default. Durations are a whole number followed by s (seconds),

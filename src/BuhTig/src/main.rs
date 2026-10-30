@@ -60,7 +60,7 @@ use crate::shortcuts::Shortcuts;
 use crate::tokens::Tokens;
 
 /// Where the config file is read from unless `--config` says otherwise (FR-CFG-01).
-const DEFAULT_CONFIG_PATH: &str = "BuhTig.toml";
+const DEFAULT_CONFIG_PATH: &str = "config.toml";
 
 /// How long requests in flight may take to finish once BuhTig is asked to stop
 /// (FR-OPS-05).
@@ -70,7 +70,7 @@ const USAGE: &str = "\
 Usage: BuhTig [--config <path>]
 
 Options:
-  -c, --config <path>  Read settings from <path> instead of ./BuhTig.toml
+  -c, --config <path>  Read settings from <path> instead of ./config.toml
   -h, --help           Print this help
   -V, --version        Print the version";
 
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn config_path_defaults_to_the_working_directory() {
-        assert_eq!(parse(&[]), run("BuhTig.toml"));
+        assert_eq!(parse(&[]), run("config.toml"));
     }
 
     #[test]
@@ -369,8 +369,8 @@ mod tests {
             Err("unknown argument --client-secret".into())
         );
         assert_eq!(
-            parse(&["BuhTig.toml"]),
-            Err("unknown argument BuhTig.toml".into())
+            parse(&["config.toml"]),
+            Err("unknown argument config.toml".into())
         );
     }
 

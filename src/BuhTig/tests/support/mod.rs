@@ -90,7 +90,7 @@ encryption_key = "E9kO4wdc96sDx81yxStONaEoRd/p1+5zlz2JSlcH8Xc="
 }
 
 pub fn write_config(dir: &TempDir, contents: &str, mode: u32) -> PathBuf {
-    let path = dir.path().join("BuhTig.toml");
+    let path = dir.path().join("config.toml");
     std::fs::write(&path, contents).unwrap();
     #[cfg(unix)]
     {
