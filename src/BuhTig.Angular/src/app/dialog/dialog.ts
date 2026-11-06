@@ -4,6 +4,7 @@ import {
   DestroyRef,
   ElementRef,
   afterNextRender,
+  computed,
   inject,
   input,
   output,
@@ -20,20 +21,24 @@ const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), selec
  * goes to its first control and stays within it, Esc or a click beside it closes it, and focus
  * then goes back to what had it before. Its content goes in its body, and its buttons, marked
  * `actions`, below.
+ *
+ * The command palette (FR-SRCH-12) is one too, near the top of the page, whose heading names it
+ * for assistive technology alone, as its input says what it is for.
  */
 @Component({
   selector: 'app-dialog',
   template: `
-    <div class="backdrop" (mousedown)="closeIfBeside($event)">
+    <div class="backdrop" [class.palette]="palette()" (mousedown)="closeIfBeside($event)">
       <div
         #dialog
         class="dialog"
+        [class.palette]="palette()"
         role="dialog"
         aria-modal="true"
         [attr.aria-labelledby]="id"
         (keydown)="trap($event)"
       >
-        <h2 [id]="id">{{ heading() }}</h2>
+        <h2 [id]="id" [class.sr]="palette()">{{ heading() }}</h2>
         <div class="body"><ng-content /></div>
         <div class="acts"><ng-content select="[actions]" /></div>
       </div>
@@ -42,10 +47,13 @@ const FOCUSABLE = 'button:not([disabled]), a[href], input:not([disabled]), selec
 })
 export class Dialog {
   readonly heading = input.required<string>();
+  /** What the dialog is: a form, such as one that asks to confirm, or the command palette. */
+  readonly kind = input<'form' | 'palette'>('form');
   /** Asked for when the user closes the dialog without choosing, with Esc or beside it. */
   readonly closed = output();
 
   protected readonly id = `dialog-${count++}`;
+  protected readonly palette = computed(() => this.kind() === 'palette');
   private readonly document = inject(DOCUMENT);
   private readonly dialog = viewChild.required<ElementRef<HTMLElement>>('dialog');
 

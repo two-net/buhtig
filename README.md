@@ -2,8 +2,10 @@
 
 BuhTig turns a GitHub repository, organization or user URL into an animated dashboard,
 puts two of them side by side at `/-/compare/{a}...{b}`, and draws a card of each to embed
-at `/-/preview/{name}.svg`. It is one application plus one
-PostgreSQL database, configured by one file. What it must do is in [SRS.md](SRS.md).
+at `/-/preview/{name}.svg`. On any page, `Ctrl+K` (`⌘K` on a Mac) opens a command palette
+that finds dashboards as you type, and `owner/repo pulls` opens a dashboard's tab. It is one
+application plus one PostgreSQL database, configured by one file. What it must do is in
+[SRS.md](SRS.md).
 
 - `src/BuhTig`: the server (Rust). It serves the UI, talks to GitHub and PostgreSQL. It
   draws cards as PNG in Noto Sans, under the SIL Open Font License (`src/BuhTig/fonts/OFL.txt`),

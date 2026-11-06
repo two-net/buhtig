@@ -74,6 +74,15 @@ describe('pick', () => {
     expect(pick(many, recent)).toEqual(many.map((pin) => picked(pin, true)));
   });
 
+  it('shows them all without a limit, as the command palette does (FR-SRCH-12)', () => {
+    const pins = Array.from({ length: 12 }, (_, i) => organization(`pin-${i}`));
+    const recent = Array.from({ length: 20 }, (_, i) => organization(`recent-${i}`));
+    expect(pick(pins, [...recent, organization('PIN-0')], Infinity)).toEqual([
+      ...pins.map((pin) => picked(pin, true)),
+      ...recent.map((viewed) => picked(viewed, false)),
+    ]);
+  });
+
   it('is empty when there is nothing to show', () => {
     expect(pick([], [])).toEqual([]);
   });

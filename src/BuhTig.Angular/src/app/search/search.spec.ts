@@ -149,6 +149,53 @@ describe('Search', () => {
     expect(navigate).toHaveBeenCalledExactlyOnceWith('/owner/repo');
   });
 
+  describe("a dashboard's tab, named after its resource (FR-SRCH-13)", () => {
+    it("opens a repository's tab", async () => {
+      await search('owner/repo pulls');
+      expect(navigate).toHaveBeenLastCalledWith('/owner/repo/pulls');
+      await search('https://github.com/owner/repo rel');
+      expect(navigate).toHaveBeenLastCalledWith('/owner/repo/releases');
+      expect(message()).toBeUndefined();
+    });
+
+    it("opens an organization's tab, and an account's named alone", async () => {
+      await search('org people');
+      expect(navigate).toHaveBeenLastCalledWith('/orgs/org/people');
+      await search('users/mona repos');
+      expect(navigate).toHaveBeenLastCalledWith('/mona?tab=repositories');
+    });
+
+    it('shows the tab with the resource as the user types', async () => {
+      type('owner/repo pulls');
+      await fixture.whenStable();
+      expect(hint()).toBe('Repository · owner/repo · Pull requests');
+      expect(icons()).toEqual(['repo']);
+      type('org people');
+      await fixture.whenStable();
+      expect(hint()).toBe('Account · org · People');
+    });
+
+    it('shows the resource alone while the tab may be more than one', async () => {
+      type('owner/repo co');
+      await fixture.whenStable();
+      expect(hint()).toBe('Repository · owner/repo');
+      expect(said().classList).not.toContain('err');
+    });
+
+    it('says inline what is no tab, without navigating', async () => {
+      type('owner/repo people');
+      await fixture.whenStable();
+      expect(hint()).toContain("“people” is not a tab of a repository's dashboard.");
+      await search('owner/repo people');
+      expect(message()).toContain("“people” is not a tab of a repository's dashboard.");
+      await search('owner/repo co');
+      expect(message()).toBe(
+        "“co” could be activity or contributors. Type more of the tab's name.",
+      );
+      expect(navigate).not.toHaveBeenCalled();
+    });
+  });
+
   describe('as the user types (FR-SRCH-09)', () => {
     it('shows the repository the input names, without opening it', async () => {
       type('https://github.com/owner/repo/tree/main');

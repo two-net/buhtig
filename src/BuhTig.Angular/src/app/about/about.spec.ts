@@ -4,6 +4,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { Shortcut } from '../search/shortcut';
 import { About } from './about';
+import { paletteKeys } from '../palette/keys';
 
 describe('About', () => {
   let fixture: ComponentFixture<About>;
@@ -39,7 +40,20 @@ describe('About', () => {
 
   it('names the keys that BuhTig answers to (NFR-UX-03)', () => {
     const keys = [...element().querySelectorAll('main ul kbd')].map((key) => key.textContent);
-    expect(keys).toEqual(['/', 'Enter', 'Esc', '←', '→', 'Home', 'End']);
+    expect(keys).toEqual([
+      '/',
+      'Enter',
+      'Esc',
+      ...paletteKeys(),
+      '↑',
+      '↓',
+      'Enter',
+      '←',
+      '→',
+      'Home',
+      'End',
+    ]);
+    expect(element().querySelector('main')?.textContent).toContain('as in “owner/repo pulls”');
   });
 
   it('turns / off and on again (WCAG 2.1.4)', async () => {

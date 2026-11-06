@@ -24,3 +24,5 @@ export const TOKEN_TEXTS = {
 } as const;
 
 export const KEYBOARD = 'Keyboard shortcuts';
+/** FR-SRCH-12. */
+export const PALETTE = 'Open the command palette';

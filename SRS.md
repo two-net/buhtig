@@ -165,7 +165,7 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 
 ### 3.1 User interface
 
-BuhTig looks like GitHub, after its open-source Primer design system, so that its users feel at home. A visitor's home page is a hero around the search box. A signed-in user's home page lists their dashboards beside the search box. Every other page has a slim header with the wordmark on the left, then breadcrumbs, the search box and the account. Dashboards have tabs below the header, at the paths of the matching pages on GitHub.
+BuhTig looks like GitHub, after its open-source Primer design system, so that its users feel at home. A visitor's home page is a hero around the search box. A signed-in user's home page lists their dashboards beside the search box. Every other page has a slim header with the wordmark on the left, then breadcrumbs, the search box and the account. Dashboards have tabs below the header, at the paths of the matching pages on GitHub. On every page, a command palette opens over it from the keyboard (FR-SRCH-12).
 
 **Home page for visitors (wireframe)**
 
@@ -263,6 +263,8 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | FR-SRCH-09 | As the user types, the input shall show what it recognizes (e.g., "Repository · owner/repo", "Organization · org", "User · user", or "Account · name" for a name that may be either) or why the input is invalid. | Could |
 | FR-SRCH-10 | A secondary "Surprise me" button shall open the dashboard of a random public repository from the shared cache. The button shall be hidden while that cache is empty. | Could |
 | FR-SRCH-11 | The signed-in home page shall list up to 8 public repositories whose dashboards were opened on the instance lately, from the shared cache only, with their description, language, stars, forks and last push. The visitor's home page shall offer the first 3 to try. Neither shall call GitHub, nor show anything fetched with a PAT (FR-DATA-04). | Could |
+| FR-SRCH-12 | On every page, `Ctrl+K`, or `⌘K` on Apple devices, even in a text field, shall open a command palette, and close it again: a modal dialog with one input that suggests, as the user types, the signed-in user's pins and recent dashboards (§4.8), then the public repositories of FR-SRCH-11, each once, those whose names best match what is typed first, even with letters left out, and the resource that the input names in any form of Table 4-1. That resource shall come first when the input is a repository or a URL, and last otherwise. ↑ and ↓ shall choose a suggestion, Enter or a click open it, and Esc close the palette, returning the focus to where it was. It shall not open over another dialog. It shall not call GitHub, and in private mode shall ask a visitor for nothing (FR-ACC-03). Its code shall not count against the home page's initial load (NFR-PERF-01). | Could |
+| FR-SRCH-13 | After the resource, the search box and the palette shall take the name of one of its dashboard's tabs (FR-NAV-01), and open that tab. Its names are `overview`, `activity` or `commits`, `issues`, `pulls`, `prs` or `pull requests`, `contributors`, and `releases` or `tags` for a repository; `overview`, `repositories` or `repos`, and `people` or `members` for an organization, or an account named alone; and `overview` and `repositories` or `repos` for a user. Any beginning of a name that is one tab's alone shall do, such as `pu`. Any other shall produce an inline message that names the tabs, and no navigation. | Could |
 
 **Table 4-1. Accepted input**
 
@@ -276,6 +278,8 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | `https://github.com/name`, `github.com/name`, `name` | Account `name`: an organization or a user (FR-SRCH-06) |
 | `https://github.com/orgs/org`, `…/orgs/org/repositories` | Organization `org` |
 | `https://github.com/users/user`, `…/users/user/projects/1` | User `user` |
+| `owner/repo pulls`, `github.com/owner/repo releases`, `owner/repo con` | Repository `owner/repo`, at its Pull requests, Releases or Contributors tab (FR-SRCH-13) |
+| `org people`, `github.com/orgs/org repos`, `users/user repositories` | Account `org` at an organization's People tab; organization `org` at its Repositories tab; user `user` at their Repositories tab (FR-SRCH-13) |
 
 ### 4.2 Navigation and URLs
 
@@ -546,7 +550,7 @@ The design targets one instance with up to 10,000 users, up to 100,000 cache ent
 | NFR-PERF-03 | For a dashboard served from fresh cache, the server shall respond within 300 ms at the 95th percentile, and the page shall be fully rendered within 2 s at the 75th percentile. | Must |
 | NFR-PERF-04 | For a dashboard that needs GitHub fetches, skeletons shall be visible within 300 ms of navigation. The first widget shall appear within 3 s and all widgets within 10 s at the 75th percentile for typical repositories, excluding time GitHub spends computing statistics (FR-REPO-10). | Should |
 | NFR-PERF-05 | Animations shall run at 60 frames per second on a mid-range phone from the last three years. They shall not cause layout shift (Cumulative Layout Shift ≤ 0.1). | Should |
-| NFR-PERF-06 | Search-box feedback (FR-SRCH-04, FR-SRCH-09) shall appear within 100 ms of a keystroke. | Should |
+| NFR-PERF-06 | Search-box feedback (FR-SRCH-04, FR-SRCH-09) and the command palette's suggestions (FR-SRCH-12) shall appear within 100 ms of a keystroke. | Should |
 
 ### 6.2 Capacity
 

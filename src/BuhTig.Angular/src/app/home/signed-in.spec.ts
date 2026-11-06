@@ -7,6 +7,7 @@ import { Clock } from '../format/clock';
 import { compactNumber, relativeTime } from '../format/format';
 import { RecentRepository } from '../recent/recent';
 import { Shortcut as SlashShortcut } from '../search/shortcut';
+import { paletteKeys } from '../palette/keys';
 import { MAX_SHORTCUTS } from '../shortcuts/pick';
 import { SignedInHome } from './signed-in';
 import {
@@ -319,10 +320,16 @@ describe('SignedInHome', () => {
       [...card('keyboard-heading').querySelectorAll('li')].map((item) =>
         item.textContent?.replace(/\s+/g, ' ').trim(),
       );
-    expect(keys()).toEqual(['/Jump to search', 'EscClear the search box', '←→Read chart values']);
+    const palette = `${paletteKeys().join('')}Open the command palette`;
+    expect(keys()).toEqual([
+      '/Jump to search',
+      palette,
+      'EscClear the search box',
+      '←→Read chart values',
+    ]);
     TestBed.inject(SlashShortcut).set(false);
     await fixture.whenStable();
-    expect(keys()).toEqual(['EscClear the search box', '←→Read chart values']);
+    expect(keys()).toEqual([palette, 'EscClear the search box', '←→Read chart values']);
     TestBed.inject(SlashShortcut).set(true);
   });
 

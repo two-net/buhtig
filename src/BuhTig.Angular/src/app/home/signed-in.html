@@ -102,6 +102,12 @@
         @if (slashOn()) {
           <li><kbd>/</kbd>Jump to search</li>
         }
+        <li>
+          @for (key of paletteKeys; track key) {
+            <kbd>{{ key }}</kbd>
+          }
+          <span>{{ PALETTE }}</span>
+        </li>
         <li><kbd>Esc</kbd>Clear the search box</li>
         <li><kbd>←</kbd><kbd>→</kbd>Read chart values</li>
       </ul>

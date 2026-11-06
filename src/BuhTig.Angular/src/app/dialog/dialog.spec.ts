@@ -7,7 +7,7 @@ import { Dialog } from './dialog';
   template: `
     <button id="opener">Delete my data</button>
     @if (open()) {
-      <app-dialog heading="Delete all your data?" (closed)="closes = closes + 1">
+      <app-dialog heading="Delete all your data?" [kind]="kind()" (closed)="closes = closes + 1">
         <p>This can't be undone.</p>
         <button actions id="cancel">Cancel</button>
         <button actions id="confirm">Delete</button>
@@ -17,6 +17,7 @@ import { Dialog } from './dialog';
 })
 class Host {
   readonly open = signal(false);
+  readonly kind = signal<'form' | 'palette'>('form');
   closes = 0;
 }
 
@@ -113,6 +114,22 @@ describe('Dialog (NFR-UX-03)', () => {
     await open();
     expect(press('Enter').defaultPrevented).toBe(false);
     expect(fixture.componentInstance.closes).toBe(0);
+  });
+
+  it('is named for assistive technology alone as the command palette (FR-SRCH-12)', async () => {
+    fixture.componentInstance.kind.set('palette');
+    await open();
+    const heading = dialog().querySelector('h2')!;
+    expect(heading.classList).toContain('sr');
+    expect(dialog().getAttribute('aria-labelledby')).toBe(heading.id);
+    expect(dialog().classList).toContain('palette');
+    expect(element().querySelector('.backdrop')!.classList).toContain('palette');
+  });
+
+  it('shows its heading as a form', async () => {
+    await open();
+    expect(dialog().querySelector('h2')!.classList).not.toContain('sr');
+    expect(dialog().classList).not.toContain('palette');
   });
 
   it('gives the focus back to what had it once closed', async () => {

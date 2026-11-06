@@ -12,12 +12,14 @@ import { Search } from '../search/search';
 import { Shortcut as SlashShortcut } from '../search/shortcut';
 import { Session } from '../session/session';
 import { HomeStyles } from '../styles/styles';
+import { paletteKeys } from '../palette/keys';
 import { Personal } from '../shortcuts/personal';
 import { pick } from '../shortcuts/pick';
 import {
   FIND_DASHBOARD,
   KEYBOARD,
   NOTHING_RECENT,
+  PALETTE,
   NO_DASHBOARDS,
   NO_MATCHES,
   PINNED,
@@ -95,6 +97,8 @@ export class SignedInHome {
   });
   protected readonly tokenText = computed(() => TOKEN_TEXTS[this.token()]);
   protected readonly slashOn = this.slash;
+  /** Ctrl+K, or ⌘K on a Mac, an iPhone or an iPad, which opens the command palette. */
+  protected readonly paletteKeys = paletteKeys();
 
   protected readonly TOP_DASHBOARDS = TOP_DASHBOARDS;
   protected readonly FIND_DASHBOARD = FIND_DASHBOARD;
@@ -104,4 +108,5 @@ export class SignedInHome {
   protected readonly NOTHING_RECENT = NOTHING_RECENT;
   protected readonly PRIVATE_REPOSITORIES = PRIVATE_REPOSITORIES;
   protected readonly KEYBOARD = KEYBOARD;
+  protected readonly PALETTE = PALETTE;
 }

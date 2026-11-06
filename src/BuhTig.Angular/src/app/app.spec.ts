@@ -1,5 +1,6 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { ApplicationRef } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Title } from '@angular/platform-browser';
 import { Route, Router, provideRouter, withComponentInputBinding } from '@angular/router';
@@ -391,6 +392,85 @@ describe('App', () => {
     session.end();
     await fixture.whenStable();
     expect(toasts()).toHaveLength(1);
+  });
+
+  describe('command palette (FR-SRCH-12)', () => {
+    /** The app, on a page with a search box, attached, so that what is in it takes the focus. */
+    async function shown(): Promise<HTMLElement> {
+      const fixture = TestBed.createComponent(App);
+      const root = fixture.nativeElement as HTMLElement;
+      document.body.append(root);
+      onTestFinished(() => root.remove());
+      await TestBed.inject(Router).navigateByUrl('/-/about');
+      http.expectOne('/-/api/session').flush({ user: null, access: 'public' });
+      await fixture.whenStable();
+      return root;
+    }
+
+    /** Presses `init`'s keys on `target`, and waits for the page to follow. */
+    async function press(
+      init: KeyboardEventInit,
+      target: EventTarget = document.activeElement ?? document.body,
+    ): Promise<KeyboardEvent> {
+      const event = new KeyboardEvent('keydown', {
+        key: 'k',
+        code: 'KeyK',
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      target.dispatchEvent(event);
+      await TestBed.inject(ApplicationRef).whenStable();
+      return event;
+    }
+
+    const palette = (root: HTMLElement) => root.querySelector('app-palette [role="dialog"]');
+
+    it("opens on Ctrl+K on any page, in place of the browser's search, and closes on it", async () => {
+      const root = await shown();
+      expect(palette(root)).toBeNull();
+      expect((await press({ ctrlKey: true })).defaultPrevented).toBe(true);
+      expect(palette(root)).not.toBeNull();
+      expect(document.activeElement?.getAttribute('role')).toBe('combobox');
+      http.expectOne('/-/api/recent').flush({ repositories: [] });
+      expect((await press({ ctrlKey: true })).defaultPrevented).toBe(true);
+      expect(palette(root)).toBeNull();
+    });
+
+    it('opens from a text field too, as a chord types nothing', async () => {
+      const root = await shown();
+      const search = root.querySelector<HTMLInputElement>('app-search input')!;
+      search.focus();
+      await press({ ctrlKey: true }, search);
+      expect(palette(root)).not.toBeNull();
+      http.expectOne('/-/api/recent').flush({ repositories: [] });
+      // Esc closes it, and gives the focus back to the search box.
+      await press({ key: 'Escape', code: 'Escape' });
+      expect(palette(root)).toBeNull();
+      expect(document.activeElement).toBe(search);
+    });
+
+    it('takes no other key', async () => {
+      const root = await shown();
+      for (const init of [{}, { ctrlKey: true, shiftKey: true }, { ctrlKey: true, altKey: true }]) {
+        expect((await press(init)).defaultPrevented).toBe(false);
+      }
+      expect(palette(root)).toBeNull();
+    });
+
+    it("opens over no other dialog, which has the user's attention", async () => {
+      const root = await shown();
+      const other = document.createElement('div');
+      other.setAttribute('role', 'dialog');
+      other.setAttribute('aria-modal', 'true');
+      document.body.append(other);
+      try {
+        expect((await press({ ctrlKey: true })).defaultPrevented).toBe(false);
+        expect(palette(root)).toBeNull();
+      } finally {
+        other.remove();
+      }
+    });
   });
 
   it('tells a visitor of no sign-out', async () => {

@@ -1,0 +1,126 @@
+/* The command palette (FR-SRCH-12), near the top of the page, as wide as a page's column. It moves
+   only as the dialog does, which `.still` keeps from moving (FR-ANIM-10). */
+.backdrop.palette {
+  place-items: start center;
+  padding-top: 12vh;
+}
+.dialog.palette {
+  width: min(640px, 100%);
+}
+.dialog.palette .body {
+  padding: 0;
+}
+.palette-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-muted);
+}
+.palette-field > app-icon {
+  color: var(--fg-muted);
+}
+.palette-field input {
+  flex: 1;
+  min-width: 0;
+  height: 48px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 16px;
+}
+.palette-field input::placeholder {
+  color: var(--fg-muted);
+}
+.palette-list {
+  max-height: 50vh;
+  margin: 0;
+  padding: 8px;
+  overflow-y: auto;
+  list-style: none;
+}
+.palette-list:empty {
+  display: none;
+}
+.palette-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+/* The suggestion that Enter opens: marked by an outline too, not by its color alone (NFR-UX-05). */
+.palette-list li[aria-selected='true'] {
+  background: var(--control-bg-hover);
+  outline: 2px solid var(--accent-emph);
+  outline-offset: -2px;
+}
+.palette-list li > app-icon {
+  color: var(--fg-muted);
+}
+.palette-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-name mark {
+  background: transparent;
+  color: var(--fg-accent);
+  font-weight: 600;
+}
+.palette-tab::before {
+  content: '›';
+  content: '›' / '';
+  margin-right: 6px;
+  color: var(--fg-muted);
+}
+.palette-tab {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.palette-source {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.dialog.palette p.palette-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 16px;
+}
+.dialog.palette p.palette-empty.err {
+  color: var(--fg-danger);
+}
+.dialog.palette p.palette-hint,
+.dialog.palette p.palette-keys {
+  margin: 0;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-muted);
+  font-size: 12px;
+}
+.palette-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.palette-keys kbd + kbd {
+  margin-left: 2px;
+}
+/* A small screen has no room, nor most often a keyboard, for its keys. */
+@media (max-width: 543px) {
+  .backdrop.palette {
+    padding-top: 16px;
+  }
+  .dialog.palette p.palette-keys,
+  .palette-source {
+    display: none;
+  }
+}

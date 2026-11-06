@@ -1,7 +1,8 @@
 // What the search box says, kept apart from its logic so that it can be translated
 // (NFR-UX-07). Each message says what is wrong and what to do instead (NFR-UX-06).
 
-import { Problem, Resource, dashboardPath } from './parse';
+import { BadTab, CommandProblem, tabWord, tabsOf } from './command';
+import { Resource, dashboardPath } from './parse';
 
 /**
  * FR-SRCH-09: what kind of resource the input names, shown as the user types. An account named
@@ -31,7 +32,7 @@ export const PLACEHOLDERS = {
 
 export const SHOW_DASHBOARD = 'Show dashboard';
 
-export function problemMessage(problem: Problem): string {
+export function problemMessage(problem: CommandProblem): string {
   switch (problem.kind) {
     case 'empty':
       return 'Paste a GitHub repository, organization or user URL.';
@@ -43,5 +44,38 @@ export function problemMessage(problem: Problem): string {
       return `“${problem.name}” is not a GitHub account name. Account names are up to 39 letters, digits and hyphens, and do not start with a hyphen.`;
     case 'bad-repository':
       return `“${problem.name}” is not a GitHub repository name. Repository names are up to 100 letters, digits, hyphens, underscores and periods.`;
+    case 'bad-tab':
+      return tabProblemMessage(problem);
   }
+}
+
+/** The dashboards whose tabs a problem with a tab speaks of, by the kind of their resource. */
+const DASHBOARDS: Record<Resource['kind'], string> = {
+  repository: "a repository's dashboard",
+  organization: "an organization's dashboard",
+  user: "a user's dashboard",
+  account: "an organization's or a user's dashboard",
+};
+
+/**
+ * FR-SRCH-13: why the words after a resource name none of its dashboard's tabs, and which they
+ * may name.
+ */
+export function tabProblemMessage({ word, resource, could }: BadTab): string {
+  const kind = resource.kind;
+  if (could.length > 1) {
+    return `“${word}” could be ${list(
+      could.map((tab) => tabWord(kind, tab)),
+      'or',
+    )}. Type more of the tab's name.`;
+  }
+  const tabs = tabsOf(kind).map((tab) => tabWord(kind, tab));
+  return `“${word}” is not a tab of ${DASHBOARDS[kind]}. Its tabs are ${list(tabs, 'and')}.`;
+}
+
+/** `items` in a sentence, such as "a, b and c". */
+function list(items: string[], last: 'and' | 'or'): string {
+  return items.length < 2
+    ? items.join('')
+    : `${items.slice(0, -1).join(', ')} ${last} ${items[items.length - 1]}`;
 }

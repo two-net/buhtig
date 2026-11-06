@@ -39,6 +39,10 @@
   padding: 16px;
   border-top: 1px solid var(--border-muted);
 }
+/* A dialog without buttons, such as the command palette (FR-SRCH-12). */
+.dialog .acts:empty {
+  display: none;
+}
 /* A dialog's form, such as what to compare a dashboard's resource with (FR-CMP-02). */
 .dialog label {
   display: block;

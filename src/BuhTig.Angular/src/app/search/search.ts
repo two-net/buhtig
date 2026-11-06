@@ -20,7 +20,8 @@ import {
   problemMessage,
   resourceName,
 } from './messages';
-import { Resource, dashboardPath, isUnfinished, parse } from './parse';
+import { commandPath, parseCommand, tabLabel } from './command';
+import { Resource, isUnfinished } from './parse';
 import { Shortcut } from './shortcut';
 
 /** Where a search box is: the visitor's home page, the signed-in home page, or a header. */
@@ -40,8 +41,9 @@ let count = 0;
  * The search box: one input that takes a GitHub repository, organization or user URL, says what
  * it recognizes as the user types (FR-SRCH-09), and opens its dashboard on Enter or "Show
  * dashboard" (SRS §4.1). A name alone opens that account's dashboard, an organization's or a
- * user's, as GitHub tells (FR-SRCH-06). `/` focuses it, unless the user has turned that off (WCAG
- * 2.1.4), and Esc or ✕ clears it (FR-SRCH-07).
+ * user's, as GitHub tells (FR-SRCH-06). A tab's name after the resource, as in `owner/repo pulls`,
+ * opens that tab (FR-SRCH-13). `/` focuses it, unless the user has turned that off (WCAG 2.1.4),
+ * and Esc or ✕ clears it (FR-SRCH-07).
  *
  * It lifts as it is hovered or focused (FR-ANIM-02), and shakes as it says why it opens no
  * dashboard (FR-ANIM-09).
@@ -86,26 +88,30 @@ export class Search {
   /**
    * What the input names, or why it names nothing, shown below it as the user types
    * (FR-SRCH-09). Nothing while it is empty or the beginning of a URL, so that typing one shows
-   * no problem, nor while it holds what it was filled in with, which the page shows already. It
-   * is worked out on each keystroke, well within 100 ms (NFR-PERF-06).
+   * no problem, nor while it holds what it was filled in with, which the page shows already. Nor
+   * does the beginning of a tab's name that may be more than one tab's. It is worked out on each
+   * keystroke, well within 100 ms (NFR-PERF-06).
    */
   protected readonly hint = computed((): Hint | undefined => {
     const query = this.query();
     if (query === this.prefill()) {
       return undefined;
     }
-    const parsed = parse(query);
+    const parsed = parseCommand(query);
     if (parsed.ok) {
-      const resource = parsed.resource;
+      const { resource, tab } = parsed;
       return {
-        icon: HINT_ICONS[resource.kind],
-        kind: KINDS[resource.kind],
-        name: resourceName(resource),
+        ...named(resource),
+        tab: tab === undefined ? undefined : tabLabel(resource.kind, tab),
       };
     }
-    return isUnfinished(query) || parsed.problem.kind === 'empty'
+    const problem = parsed.problem;
+    if (problem.kind === 'bad-tab' && problem.could.length > 1) {
+      return named(problem.resource);
+    }
+    return isUnfinished(query) || problem.kind === 'empty'
       ? undefined
-      : { problem: problemMessage(parsed.problem) };
+      : { problem: problemMessage(problem) };
   });
   /**
    * Why the input opens no dashboard, shown in place of the hint once it is searched for, until
@@ -154,7 +160,7 @@ export class Search {
 
   protected async search(event: Event): Promise<void> {
     event.preventDefault();
-    const parsed = parse(this.query());
+    const parsed = parseCommand(this.query());
     if (!parsed.ok) {
       this.message.set(problemMessage(parsed.problem));
       this.animate(SHAKE, { duration: 280, easing: 'ease-in-out' });
@@ -162,7 +168,7 @@ export class Search {
       return;
     }
     this.message.set(undefined);
-    await this.router.navigateByUrl(dashboardPath(parsed.resource));
+    await this.router.navigateByUrl(commandPath(parsed.resource, parsed.tab));
   }
 
   /** Where the box is on the page, for it to glide from on the next page (FR-ANIM-03). */
@@ -206,8 +212,20 @@ export class Search {
   }
 }
 
-/** What the search box says as the user types: what the input names, or why it names nothing. */
-type Hint = { icon: IconName; kind: string; name: string } | { problem: string };
+/**
+ * What the search box says as the user types: what the input names, and the tab of its dashboard,
+ * or why it names nothing.
+ */
+type Hint = { icon: IconName; kind: string; name: string; tab?: string } | { problem: string };
+
+/** What the search box says of `resource`, such as "Repository · owner/repo". */
+function named(resource: Resource): { icon: IconName; kind: string; name: string } {
+  return {
+    icon: HINT_ICONS[resource.kind],
+    kind: KINDS[resource.kind],
+    name: resourceName(resource),
+  };
+}
 
 /** A brief shake from side to side (FR-ANIM-09). */
 const SHAKE: Keyframe[] = [

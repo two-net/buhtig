@@ -54,6 +54,9 @@
         } @else if (said) {
           <app-icon [name]="said.icon" /><span>{{ said.kind }}</span
           ><strong>{{ said.name }}</strong>
+          @if (said.tab; as tab) {
+            <span class="tab">{{ tab }}</span>
+          }
         }
       </span>
     }

@@ -17,16 +17,17 @@ export const MAX_SHORTCUTS = 12;
 
 /**
  * The home page's shortcuts (FR-SRCH-08): the pins first, in the user's order, then the
- * dashboards viewed recently that are not pinned, newest first, up to `MAX_SHORTCUTS`.
+ * dashboards viewed recently that are not pinned, newest first, up to `limit`. The command
+ * palette has all of them (FR-SRCH-12).
  */
-export function pick(pins: Shortcut[], recent: Shortcut[]): Picked[] {
+export function pick(pins: Shortcut[], recent: Shortcut[], limit = MAX_SHORTCUTS): Picked[] {
   const pinned = new Set(pins.map(key));
   return [
     ...pins.map(({ kind, name }) => ({ kind, name, pinned: true })),
     ...recent
       .filter((shortcut) => !pinned.has(key(shortcut)))
       .map(({ kind, name }) => ({ kind, name, pinned: false })),
-  ].slice(0, MAX_SHORTCUTS);
+  ].slice(0, limit);
 }
 
 /** Whether `a` and `b` are the same dashboard, whatever the case of their names. */

@@ -700,6 +700,12 @@ kbd {
   color: var(--fg);
   font-weight: 600;
 }
+/* The tab after the resource, as in "owner/repo › Pull requests" (FR-SRCH-13). */
+.search-msg .tab::before {
+  content: '›';
+  content: '›' / '';
+  margin-right: 6px;
+}
 .search-msg.err {
   color: var(--fg-danger);
 }

@@ -1,0 +1,76 @@
+<app-dialog kind="palette" [heading]="HEADING" (closed)="closed.emit()">
+  <div class="palette-field">
+    <app-icon name="search" />
+    <input
+      #input
+      type="text"
+      role="combobox"
+      aria-autocomplete="list"
+      [attr.aria-label]="LABEL"
+      [attr.aria-expanded]="rows().length > 0"
+      [attr.aria-controls]="id + '-list'"
+      [attr.aria-activedescendant]="rows().length > 0 ? optionId(active()) : null"
+      [attr.aria-describedby]="id + '-hint'"
+      [placeholder]="PLACEHOLDER"
+      autocomplete="off"
+      autocapitalize="off"
+      spellcheck="false"
+      enterkeyhint="go"
+      [value]="query()"
+      (input)="query.set(input.value)"
+      (keydown)="key($event)"
+    />
+  </div>
+  <!-- Always there, for the input to control. -->
+  <ul #list class="palette-list" role="listbox" [id]="id + '-list'" [attr.aria-label]="SUGGESTIONS">
+    @for (row of rows(); track row.item.key; let i = $index) {
+      <li
+        role="option"
+        [id]="optionId(i)"
+        [attr.aria-selected]="i === active()"
+        (mousedown)="$event.preventDefault()"
+        (mousemove)="active.set(i)"
+        (click)="open(row.item)"
+      >
+        @if (row.item.source === 'typed') {
+          <app-icon [name]="ICONS[row.item.resource.kind]" />
+        } @else {
+          <app-avatar
+            [name]="row.item.name.split('/')[0]"
+            [src]="row.item.avatar"
+            [size]="20"
+            [round]="row.item.resource.kind === 'user'"
+          />
+        }
+        <!-- Each part in an element of its own, so that no space comes between them. -->
+        <span class="palette-name">
+          @for (part of row.parts; track $index) {
+            @if (part.hit) {
+              <mark>{{ part.text }}</mark>
+            } @else {
+              <span>{{ part.text }}</span>
+            }
+          }
+        </span>
+        @if (row.item.tabLabel; as tab) {
+          <span class="palette-tab">{{ tab }}</span>
+        }
+        <span class="palette-source">{{ row.source }}</span>
+      </li>
+    }
+  </ul>
+  @if (rows().length === 0 && empty(); as empty) {
+    @if ('problem' in empty) {
+      <p class="palette-empty err"><app-icon name="alert" />{{ empty.problem }}</p>
+    } @else {
+      <p class="palette-empty">{{ empty.text }}</p>
+    }
+  }
+  <p [id]="id + '-hint'" class="palette-hint">{{ HINT }}</p>
+  <p class="sr" role="status">{{ status() }}</p>
+  <p class="palette-keys" aria-hidden="true">
+    <span><kbd>↑</kbd><kbd>↓</kbd> {{ KEYS.move }}</span>
+    <span><kbd>Enter</kbd> {{ KEYS.open }}</span>
+    <span><kbd>Esc</kbd> {{ KEYS.close }}</span>
+  </p>
+</app-dialog>
