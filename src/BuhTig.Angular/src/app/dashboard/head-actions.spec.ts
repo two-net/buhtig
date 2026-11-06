@@ -6,8 +6,9 @@ import { By } from '@angular/platform-browser';
 import { Clock } from '../format/clock';
 import { exactTime, relativeTime } from '../format/format';
 import { HeadActions } from './head-actions';
-import { OPEN_ON_GITHUB, UPDATED } from './messages';
+import { OPEN_ON_GITHUB, SHARE_CARD, UPDATED } from './messages';
 import { Refresh } from './refresh';
+import { ShareCard } from './share-card';
 
 @Component({
   imports: [HeadActions],
@@ -15,11 +16,13 @@ import { Refresh } from './refresh';
     [resource]="{ kind: 'repository', owner: 'Acme', repo: 'Widget' }"
     path="/Acme/Widget"
     [fetchedAt]="fetchedAt()"
+    [shareable]="shareable()"
     (refreshed)="refreshed = refreshed + 1"
   />`,
 })
 class Host {
   readonly fetchedAt = signal<Date | undefined>(undefined);
+  readonly shareable = signal(true);
   refreshed = 0;
 }
 
@@ -73,4 +76,41 @@ describe('HeadActions', () => {
     fixture.debugElement.query(By.directive(Refresh)).componentInstance.refreshed.emit();
     expect(fixture.componentInstance.refreshed).toBe(1);
   });
+
+  const share = () =>
+    [...element().querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === SHARE_CARD,
+    );
+
+  it("offers a public resource's card in public mode (FR-NAV-08)", async () => {
+    http.expectOne('/-/api/session').flush({ user: null, token: null, access: 'public' });
+    await fixture.whenStable();
+    expect(fixture.debugElement.query(By.directive(ShareCard))).toBeNull();
+    share()!.click();
+    await fixture.whenStable();
+    const dialog = fixture.debugElement.query(By.directive(ShareCard));
+    expect(dialog.componentInstance.resource()).toEqual({
+      kind: 'repository',
+      owner: 'Acme',
+      repo: 'Widget',
+    });
+    dialog.componentInstance.closed.emit();
+    await fixture.whenStable();
+    expect(fixture.debugElement.query(By.directive(ShareCard))).toBeNull();
+  });
+
+  it('offers no card of what is not public, as a private or internal repository (FR-NAV-08)', async () => {
+    http.expectOne('/-/api/session').flush({ user: null, token: null, access: 'public' });
+    fixture.componentInstance.shareable.set(false);
+    await fixture.whenStable();
+    expect(share()).toBeUndefined();
+  });
+
+  for (const access of ['private', undefined]) {
+    it(`offers no card where BuhTig serves none, in access mode ${access} (FR-NAV-07)`, async () => {
+      http.expectOne('/-/api/session').flush({ user: null, token: null, access });
+      await fixture.whenStable();
+      expect(share()).toBeUndefined();
+    });
+  }
 });

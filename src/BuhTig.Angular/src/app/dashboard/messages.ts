@@ -169,3 +169,36 @@ export const PIN_LIMIT = 'You can pin up to 12 dashboards. Unpin one in Settings
 export const PIN_FAILED = "BuhTig couldn't change your pins. Try again in a moment.";
 
 export const OPEN_ON_GITHUB = 'Open on GitHub';
+
+/** FR-NAV-08: the button that offers the dashboard's card, to embed elsewhere, as in a README. */
+export const SHARE_CARD = 'Share card';
+
+/** FR-NAV-08: the dialog that offers `name`'s card. */
+export function shareCardHeading(name: string): string {
+  return `Share the card of ${name}`;
+}
+
+/** FR-NAV-07, FR-NAV-08: what a card is, and when it shows the dashboard's figures. */
+export const CARD_ABOUT =
+  'A picture of this dashboard, for READMEs and chats. It shows its figures while someone has ' +
+  'opened the dashboard lately, and its name alone otherwise.';
+
+/** FR-NAV-08: the Markdown that shows the card, linked to the dashboard. */
+export const CARD_MARKDOWN = 'Markdown';
+
+/** FR-NAV-07: what a card shows, for assistive technology, and as the Markdown's. */
+export function cardAlt(name: string): string {
+  return `${name} on BuhTig`;
+}
+
+export const COPY_MARKDOWN = 'Copy Markdown';
+
+/** FR-NAV-08: the card's Markdown, copied. */
+export function copiedCard(name: string): string {
+  return `Copied the card of ${name}`;
+}
+
+/** FR-NAV-08, NFR-UX-06: the browser would not copy, as without the permission to. */
+export const COPY_FAILED = "BuhTig couldn't copy it. Select the Markdown and copy it yourself.";
+
+export const CLOSE = 'Close';

@@ -142,6 +142,8 @@ const VISITOR: Viewer = Viewer(None);
 struct Answer {
     status: u16,
     location: Option<String>,
+    content_type: Option<String>,
+    cache_control: Option<String>,
     body: String,
 }
 
@@ -291,14 +293,24 @@ impl Served {
         }
         let response = request.send().await.unwrap();
         let status = response.status().as_u16();
-        let location = response
-            .headers()
-            .get("location")
-            .map(|location| location.to_str().unwrap().to_owned());
+        let header = |name| {
+            response
+                .headers()
+                .get(name)
+                .map(|value: &axum::http::HeaderValue| value.to_str().unwrap().to_owned())
+        };
+        let (location, content_type, cache_control) = (
+            header("location"),
+            header("content-type"),
+            header("cache-control"),
+        );
         Answer {
             status,
             location,
-            body: response.text().await.unwrap(),
+            content_type,
+            cache_control,
+            // Lossily, as a PNG is not text.
+            body: String::from_utf8_lossy(&response.bytes().await.unwrap()).into_owned(),
         }
     }
 
@@ -482,6 +494,15 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
             "/-/compare/octo...hubot",
             "/-/sign-in?return_to=%2F-%2Fcompare%2Focto...hubot",
         ),
+        // Nor are there cards (FR-NAV-07).
+        (
+            "/-/preview/octo/public.svg",
+            "/-/sign-in?return_to=%2F-%2Fpreview%2Focto%2Fpublic.svg",
+        ),
+        (
+            "/-/preview/octo.png",
+            "/-/sign-in?return_to=%2F-%2Fpreview%2Focto.png",
+        ),
     ] {
         let answer = served.get(&VISITOR, page).await;
         assert_eq!(
@@ -535,6 +556,110 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
         assert_eq!(served.get(&VISITOR, "/favicon.ico").await.status, 200);
     }
     assert_eq!(served.stub.urls(), Vec::<String>::new());
+}
+
+/// FR-NAV-07, AC-14: a card shows what the shared cache holds while it is fresh, and nothing
+/// else: not what Hubot's PAT read, even of a public repository, and nothing that GitHub
+/// would have to be asked for. Without it, a card has the name it was asked for alone. The
+/// page of a dashboard whose card shows its data names the card as its image (FR-NAV-06).
+#[tokio::test(flavor = "multi_thread")]
+async fn cards_show_what_visitors_dashboards_read_alone() {
+    let served = serve("public").await;
+    let hubot = served.hubot().await;
+    for path in [
+        "/-/api/repositories/octo/secret",
+        "/-/api/repositories/octo/public",
+        "/-/api/organizations/octo/repositories",
+    ] {
+        let answer = served.get(&hubot, path).await;
+        assert_eq!(answer.status, 200, "{path}: {answer:?}");
+    }
+    let read = served.stub.urls();
+    let mona = served.mona().await;
+    for viewer in [&VISITOR, &mona, &hubot] {
+        for (path, name) in [
+            ("/-/preview/octo/secret.svg", "octo/secret"),
+            ("/-/preview/octo/inner.svg", "octo/inner"),
+            ("/-/preview/octo/public.svg", "octo/public"),
+            ("/-/preview/octo.svg", "octo"),
+        ] {
+            let card = served.get(viewer, path).await;
+            assert_eq!(
+                (
+                    card.status,
+                    card.content_type.as_deref(),
+                    card.cache_control.as_deref()
+                ),
+                (200, Some("image/svg+xml; charset=utf-8"), Some("no-cache")),
+                "{path}: {card:?}"
+            );
+            let label = format!("aria-label=\"{name} on BuhTig\"");
+            assert!(card.body.contains(&label), "{path}: {card:?}");
+            assert!(card.body.contains(crate::card::SEE_DASHBOARD), "{path}");
+        }
+    }
+    let page = served.get(&VISITOR, "/octo/public").await;
+    assert!(!page.body.contains("og:image"), "{page:?}");
+    assert_eq!(served.stub.urls(), read);
+
+    // A visitor's dashboard reads it into the shared cache.
+    let public = served
+        .get(&VISITOR, "/-/api/repositories/octo/public")
+        .await;
+    assert_eq!(public.status, 200, "{public:?}");
+    let read = served.stub.urls();
+    let card = served.get(&VISITOR, "/-/preview/octo/public.svg").await;
+    assert!(
+        card.body.contains(
+            "aria-label=\"octo/public on BuhTig: A dashboard of the GitHub repository \
+             octo/public.\""
+        ),
+        "{card:?}"
+    );
+    let png = served.get(&VISITOR, "/-/preview/octo/public.png").await;
+    assert_eq!(
+        (png.status, png.content_type.as_deref()),
+        (200, Some("image/png"))
+    );
+    assert!(png.body.starts_with("\u{fffd}PNG"), "{:?}", &png.body[..8]);
+    let page = served.get(&VISITOR, "/octo/public").await;
+    assert!(
+        page.body.contains(
+            "<meta property=\"og:image\" \
+             content=\"https://buhtig.example.com/-/preview/octo/public.png\">"
+        ),
+        "{page:?}"
+    );
+    assert_eq!(served.stub.urls(), read);
+
+    for path in [
+        "/-/preview/octo/public.gif",
+        "/-/preview/octo/public",
+        "/-/preview/-octo.svg",
+        "/-/preview/octo/..svg",
+        "/-/preview/octo.svg.png",
+    ] {
+        let answer = served.get(&VISITOR, path).await;
+        assert_eq!(answer.status, 404, "{path}: {answer:?}");
+    }
+}
+
+/// FR-NAV-07: in private mode, there are no cards, even for those who may sign in. A
+/// visitor is sent to sign in, as for any page.
+#[tokio::test(flavor = "multi_thread")]
+async fn private_mode_has_no_cards() {
+    let served = serve("private").await;
+    let mona = served.mona().await;
+    let public = served.get(&mona, "/-/api/repositories/octo/public").await;
+    assert_eq!(public.status, 200, "{public:?}");
+    for path in ["/-/preview/octo/public.svg", "/-/preview/octo/public.png"] {
+        let answer = served.get(&mona, path).await;
+        assert_eq!(answer.status, 404, "{path}: {answer:?}");
+    }
+    assert_eq!(
+        served.get(&mona, "/-/api/session").await.json()["access"],
+        "private"
+    );
 }
 
 /// Table 4-2, second row: in either mode, signed-in users see public dashboards, read with

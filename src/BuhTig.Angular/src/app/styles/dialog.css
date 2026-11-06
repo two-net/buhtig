@@ -48,6 +48,23 @@
 .dialog .input {
   width: 100%;
 }
+/* A dashboard's card, and the Markdown that shows it (FR-NAV-08). */
+.dialog .card-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-bottom: 16px;
+  border-radius: 6px;
+}
+.dialog textarea.input {
+  height: auto;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+  resize: none;
+}
 .dialog .field-msg {
   margin: 8px 0 0;
   color: var(--fg-danger);

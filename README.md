@@ -1,10 +1,13 @@
 # BuhTig
 
-BuhTig turns a GitHub repository, organization or user URL into an animated dashboard, and
-puts two of them side by side at `/-/compare/{a}...{b}`. It is one application plus one
+BuhTig turns a GitHub repository, organization or user URL into an animated dashboard,
+puts two of them side by side at `/-/compare/{a}...{b}`, and draws a card of each to embed
+at `/-/preview/{name}.svg`. It is one application plus one
 PostgreSQL database, configured by one file. What it must do is in [SRS.md](SRS.md).
 
-- `src/BuhTig`: the server (Rust). It serves the UI, talks to GitHub and PostgreSQL.
+- `src/BuhTig`: the server (Rust). It serves the UI, talks to GitHub and PostgreSQL. It
+  draws cards as PNG in Noto Sans, under the SIL Open Font License (`src/BuhTig/fonts/OFL.txt`),
+  cut to Latin, Greek and Cyrillic.
 - `src/BuhTig.Angular`: the UI (Angular). It is built into the server, not deployed on
   its own. It looks like GitHub, after its open-source Primer design system, and sets its
   wordmark in Bricolage Grotesque, under the SIL Open Font License (`public/fonts/OFL.txt`).
@@ -216,12 +219,24 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   dashboard. A
   dashboard switches to the names as GitHub spells them, and follows a repository that was
   renamed or transferred. BuhTig's own pages are under `/-/`. What is under `/-/api/` serves
-  BuhTig's UI only; it is not a supported API and may change in any release.
+  BuhTig's UI only; it is not a supported API and may change in any release. The cards under
+  `/-/preview/` are there to be embedded, so their URLs stay.
 - **Link previews:** in public mode, a link to a dashboard or one of its tabs unfurls in
   chat tools with the repository's, organization's or user's name and its description, or
-  the user's bio, on GitHub, if
-  someone opened the dashboard within `cache.ttl`. Previews show only public data from the
-  shared cache, and BuhTig never asks GitHub for one. In private mode, links have no preview.
+  the user's bio, on GitHub, and its card as the picture, if someone opened the dashboard
+  within `cache.ttl`. Previews show only public data from the shared cache, and BuhTig never
+  asks GitHub for one. In private mode, links have no preview.
+- **Cards:** in public mode, `/-/preview/{owner}/{repo}.svg` and `/-/preview/{name}.svg` are
+  pictures of a repository's, organization's or user's dashboard: its name, description and
+  figures, and a repository's commits over the last 52 weeks. "Share card" on a public
+  dashboard copies the Markdown that embeds its card in a README, linked to the dashboard.
+  Like link previews, a card shows only what the shared cache holds while it is fresh, so it
+  shows its figures only if someone opened the dashboard within `cache.ttl`, and its name
+  alone otherwise; it never makes BuhTig ask GitHub. Cards are sent with `no-cache`, so
+  GitHub's image proxy asks again each time a README is viewed. Chat tools take no SVG, so the
+  same card is drawn as PNG at `.png`, at most 30 a minute for each client and two at once.
+  Its PNG leaves out letters that are not Latin, Greek or Cyrillic, and emoji, which its SVG
+  shows. In private mode, there are no cards.
 - **Motion:** the UI animates, but keeps still for anyone whose browser asks for reduced
   motion, and for everyone when `ui.animations` is `false`. Animations never hold up typing,
   clicking or navigating. Widgets shimmer while their data is on its way. The first time

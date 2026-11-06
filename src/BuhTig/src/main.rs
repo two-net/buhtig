@@ -2,6 +2,7 @@ mod access;
 mod accounts;
 mod auth;
 mod cache;
+mod card;
 mod config;
 mod cookies;
 mod crypto;
@@ -218,7 +219,8 @@ fn app(config: &Config, db: &DatabaseConnection, github: Arc<github::Client>) ->
         &config.cache,
         &config.limits,
     ));
-    // FR-NAV-06. In private mode, visitors see no dashboard (FR-ACC-03), nor a preview.
+    // FR-NAV-06, FR-NAV-07. In private mode, visitors see no dashboard (FR-ACC-03), nor a
+    // preview, nor a card.
     let previews = (config.access.mode == AccessMode::Public)
         .then(|| Previews::new(cache.clone(), config.server.public_url.clone()));
     // One for sign-in credentials and PATs alike (DR-03).

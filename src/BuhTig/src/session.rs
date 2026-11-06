@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Json;
-use axum::extract::{Extension, FromRequestParts};
+use axum::extract::{Extension, FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -44,7 +44,7 @@ use serde_json::json;
 use tracing::{error, info};
 
 use crate::cache::Viewer;
-use crate::config::Secret;
+use crate::config::{AccessMode, Secret};
 use crate::cookies;
 use crate::crypto::{self, Sealer};
 use crate::entity::credential::{self, Kind, PatStatus};
@@ -458,13 +458,16 @@ impl<S: Send + Sync> FromRequestParts<S> for Viewer {
     }
 }
 
-/// `/-/api/session`: `{"user": null, "token": null}` for a visitor. For a signed-in user,
-/// `{"user": {"login": …, "name": … or null, "avatar_url": …, "signed_in_at": …},
-/// "token": … or null}`: the user as GitHub described them when they last signed in, when
-/// they signed in to the session that the request carries, as the UI is told times, such as
-/// `2026-10-22T12:00:00.123Z`, and what Settings shows of their PAT, as [`tokens::describe`]
-/// gives it, if they have saved one.
+/// `/-/api/session`: `{"user": null, "token": null, "access": …}` for a visitor. For a
+/// signed-in user, `{"user": {"login": …, "name": … or null, "avatar_url": …,
+/// "signed_in_at": …}, "token": … or null, "access": …}`: the user as GitHub described them
+/// when they last signed in, when they signed in to the session that the request carries,
+/// as the UI is told times, such as `2026-10-22T12:00:00.123Z`, and what Settings shows of
+/// their PAT, as [`tokens::describe`] gives it, if they have saved one. `access` is
+/// `access.mode`, `"public"` or `"private"`, which tells the UI whether there are cards to
+/// share (FR-NAV-08).
 pub async fn current(
+    State(mode): State<AccessMode>,
     Extension(sessions): Extension<Arc<Sessions>>,
     headers: HeaderMap,
 ) -> Response {
@@ -486,7 +489,11 @@ pub async fn current(
                 .as_ref()
                 .and_then(|signed_in| signed_in.pat.as_ref())
                 .map(tokens::describe);
-            respond(json!({ "user": user, "token": token }))
+            let access = match mode {
+                AccessMode::Public => "public",
+                AccessMode::Private => "private",
+            };
+            respond(json!({ "user": user, "token": token, "access": access }))
         }
         Err(error) => {
             error!("cannot read the session: {error}");
@@ -551,6 +558,8 @@ mod tests {
     use crate::test_cluster::cluster;
 
     const KEY: &[u8] = b"a secret of at least thirty-two bytes";
+
+    const PUBLIC: AccessMode = AccessMode::Public;
 
     const DAY: i64 = 24 * 60;
 
@@ -983,6 +992,21 @@ mod tests {
         (StatusCode::OK, "no-store".to_owned(), body.to_owned())
     }
 
+    /// FR-NAV-08: so that it offers cards only where they are served (FR-NAV-07).
+    #[tokio::test]
+    async fn the_ui_is_told_the_access_mode() {
+        let db = database().await;
+        let sessions = Arc::new(sessions(&db, KEY, settings(&[])));
+        for (mode, access) in [(PUBLIC, "public"), (AccessMode::Private, "private")] {
+            let (status, _, body) =
+                parts(current(State(mode), Extension(sessions.clone()), HeaderMap::new()).await)
+                    .await;
+            assert_eq!(status, StatusCode::OK);
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(body["access"], access);
+        }
+    }
+
     #[tokio::test]
     async fn the_ui_is_told_who_is_viewing() {
         let db = database().await;
@@ -991,12 +1015,13 @@ mod tests {
             .sign_in(mona(), &token("gho_mona"), &HeaderMap::new())
             .await
             .unwrap();
-        let current =
-            async |headers| parts(current(Extension(sessions.clone()), headers).await).await;
+        let current = async |headers| {
+            parts(current(State(PUBLIC), Extension(sessions.clone()), headers).await).await
+        };
 
         assert_eq!(
             current(HeaderMap::new()).await,
-            ok(r#"{"token":null,"user":null}"#)
+            ok(r#"{"access":"public","token":null,"user":null}"#)
         );
         // When the session began, as the UI is told times.
         let signed_in_at = rows(&db).await[0]
@@ -1006,7 +1031,7 @@ mod tests {
         assert_eq!(
             current(carrying(&cookie)).await,
             ok(&format!(
-                r#"{{"token":null,"user":{{"avatar_url":"https://avatars.githubusercontent.com/u/583231","login":"Mona","name":"Mona Lisa","signed_in_at":"{signed_in_at}"}}}}"#
+                r#"{{"access":"public","token":null,"user":{{"avatar_url":"https://avatars.githubusercontent.com/u/583231","login":"Mona","name":"Mona Lisa","signed_in_at":"{signed_in_at}"}}}}"#
             ))
         );
     }
@@ -1110,7 +1135,8 @@ mod tests {
 
         // The UI is told what Settings shows of it, and never the token.
         let sessions = Arc::new(sessions(&db, KEY, settings(&[])));
-        let (status, _, body) = parts(current(Extension(sessions), carrying(&cookie)).await).await;
+        let (status, _, body) =
+            parts(current(State(PUBLIC), Extension(sessions), carrying(&cookie)).await).await;
         assert_eq!(status, StatusCode::OK);
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(body["token"], tokens::describe(&pat));

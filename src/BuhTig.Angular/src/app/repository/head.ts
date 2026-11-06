@@ -37,6 +37,7 @@ export const VISIBILITY = { public: 'Public', private: 'Private', internal: 'Int
         [resource]="resource()"
         [path]="'/' + shown.name"
         [fetchedAt]="fetchedAt()"
+        [shareable]="shown.visibility === 'public'"
         (refreshed)="refreshed.emit()"
       />
       @if (shown.parent; as parent) {

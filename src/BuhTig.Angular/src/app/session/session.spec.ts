@@ -36,6 +36,23 @@ describe('Session', () => {
     expect(session.ended()).toBe(false);
   });
 
+  it('knows the access mode once the server says, which tells whether there are cards (FR-NAV-08)', () => {
+    expect(session.access()).toBeUndefined();
+    http.expectOne('/-/api/session').flush({ user: null, token: null, access: 'public' });
+    expect(session.access()).toBe('public');
+  });
+
+  for (const answer of [
+    { user: null, access: 'private' },
+    { user: null },
+    { user: null, access: 'open' },
+  ]) {
+    it(`offers nothing of public mode alone when the server says ${JSON.stringify(answer)}`, () => {
+      http.expectOne('/-/api/session').flush(answer);
+      expect(session.access()).toBe(answer.access === 'private' ? 'private' : undefined);
+    });
+  }
+
   it('takes a visitor for one when the server cannot tell (NFR-UX-01)', () => {
     http.expectOne('/-/api/session').flush(null, { status: 503, statusText: 'Unavailable' });
     expect(session.user()).toBeNull();

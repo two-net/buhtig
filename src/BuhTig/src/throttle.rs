@@ -1,5 +1,6 @@
 //! How often each client may try something that would let it guess at a secret, such as
-//! whether a token is valid (NFR-SEC-08).
+//! whether a token is valid (NFR-SEC-08), or ask for something that is costly to make,
+//! such as a card's PNG (FR-NAV-07).
 //!
 //! Clients are told apart as visitors are, by IP address. The counters are held in memory
 //! alone (NFR-REL-02), and they keep hashes rather than addresses (NFR-PRIV-02).

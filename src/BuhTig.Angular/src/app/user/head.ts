@@ -71,6 +71,7 @@ import { COMPANY, FOLLOWING, JOINED, followersLabelOf } from './messages';
         [resource]="resource()"
         [path]="'/' + shown.login"
         [fetchedAt]="fetchedAt()"
+        [shareable]="true"
         (refreshed)="refreshed.emit()"
       />
     </div>

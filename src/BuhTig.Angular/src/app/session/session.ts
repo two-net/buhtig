@@ -48,6 +48,12 @@ export interface TokenAnswer {
   last_validated_at: string | null;
 }
 
+/**
+ * `access.mode`, as the server tells it: in public mode, dashboards of public resources have
+ * cards to share (FR-NAV-08).
+ */
+export type Access = 'public' | 'private';
+
 /** Who is viewing BuhTig. */
 @Injectable({ providedIn: 'root' })
 export class Session {
@@ -55,10 +61,16 @@ export class Session {
 
   /** Who the server said was viewing when the page loaded, and their token. */
   private readonly loaded = toSignal(
-    this.http.get<{ user: User | null; token?: TokenAnswer | null }>('/-/api/session').pipe(
-      map((session) => ({ user: session.user, token: token(session.token) })),
-      catchError(() => of({ user: null, token: null })),
-    ),
+    this.http
+      .get<{ user: User | null; token?: TokenAnswer | null; access?: unknown }>('/-/api/session')
+      .pipe(
+        map((session) => ({
+          user: session.user,
+          token: token(session.token),
+          access: access(session.access),
+        })),
+        catchError(() => of({ user: null, token: null, access: undefined })),
+      ),
   );
 
   private readonly endedNow = signal(false);
@@ -91,6 +103,12 @@ export class Session {
    */
   readonly token = this.currentToken.asReadonly();
 
+  /**
+   * The access mode, or `undefined` until BuhTig knows, or if the server did not say, which offers
+   * nothing that only one mode has.
+   */
+  readonly access = computed(() => this.loaded()?.access);
+
   /** Takes note that the server no longer takes the user's session. */
   end(): void {
     this.endedNow.set(true);
@@ -109,6 +127,11 @@ export class Session {
   deleteUser(): Observable<void> {
     return this.http.delete<void>('/-/api/user').pipe(tap(() => this.deletedNow.set(true)));
   }
+}
+
+/** The access mode that the server tells as `answer`, if it is one. */
+function access(answer: unknown): Access | undefined {
+  return answer === 'public' || answer === 'private' ? answer : undefined;
 }
 
 /** The token that the server describes as `answer`, if any. */

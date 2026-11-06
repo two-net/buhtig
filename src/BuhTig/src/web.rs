@@ -4,7 +4,8 @@
 //!
 //! Every path of BuhTig's own is under `/-/` (FR-NAV-03), and every other path is a
 //! dashboard's (SRS §4.2). What is under `/-/api/` serves BuhTig's UI alone. It is not a
-//! public API, and may change in any release (IF-06).
+//! public API, and may change in any release (IF-06). The cards under `/-/preview/` are
+//! there to be linked to from elsewhere, such as READMEs, so their URLs stay (FR-NAV-07).
 //!
 //! TLS is terminated in front of BuhTig (A-06), so it serves plain HTTP.
 
@@ -35,7 +36,7 @@ use crate::config::AccessMode;
 use crate::health::{self, Health};
 use crate::navigation::{self, Dashboard};
 use crate::organizations;
-use crate::preview::Previews;
+use crate::preview::{self, Cards, Previews};
 use crate::recent;
 use crate::repositories;
 use crate::security::{self, Security};
@@ -80,9 +81,11 @@ pub fn router(
     shortcuts: Arc<Shortcuts>,
     animations: bool,
 ) -> Router {
+    let previews = previews.map(Arc::new);
+    let cards = Cards::new(previews.clone());
     let pages = Pages {
         health: health.clone(),
-        previews: previews.map(Arc::new),
+        previews,
         animations,
     };
     let router = Router::new()
@@ -263,7 +266,7 @@ pub fn router(
                 .delete(shortcuts::unpin)
                 .with_state(shortcuts.clone()),
         )
-        .route("/-/api/session", get(session::current))
+        .route("/-/api/session", get(session::current).with_state(mode))
         .route("/-/api/user", delete(session::delete))
         .route(
             "/-/api/shortcuts",
@@ -283,6 +286,15 @@ pub fn router(
             get(surprise::pick).with_state(cache.clone()),
         )
         .route("/-/api/recent", get(recent::list).with_state(cache))
+        // `{name}.svg` and `{repo}.png` alike, since a route cannot end in a suffix.
+        .route(
+            "/-/preview/{file}",
+            get(preview::account_card).with_state(cards.clone()),
+        )
+        .route(
+            "/-/preview/{owner}/{file}",
+            get(preview::repository_card).with_state(cards),
+        )
         .fallback(get(page).with_state(pages))
         .with_state(health);
     let router = match mode {

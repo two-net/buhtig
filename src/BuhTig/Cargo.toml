@@ -9,6 +9,9 @@ base64 = "0.22.1"
 # The client for GitHub's API. Its TLS is the rustls and ring that sqlx already uses,
 # configured in `github::https`, so neither aws-lc-rs nor the host's CA files are needed.
 reqwest = { version = "0.13.5", default-features = false, features = ["gzip", "rustls-no-provider"] }
+# Draws a preview card's PNG from its SVG, for chat tools' link previews (FR-NAV-07), with
+# the fonts in fonts/ alone: BuhTig's image has no system fonts.
+resvg = { version = "0.49.0", default-features = false, features = ["text"] }
 # Random session IDs, their hashes, and the encryption of stored credentials. TLS already
 # brings it in.
 ring = "0.17.14"

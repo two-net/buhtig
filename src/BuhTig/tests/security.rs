@@ -54,6 +54,8 @@ fn every_response_is_guarded() {
         running.get("/favicon.ico"),
         running.get("/-/health"),
         running.get("/-/api/session"),
+        // A card, with nothing in the cache to show: the name alone (FR-NAV-07).
+        running.get("/-/preview/owner/repo.svg"),
         send(&running, "DELETE /-/api/history", "", ""),
         send(&running, "DELETE /", "", ""),
     ] {

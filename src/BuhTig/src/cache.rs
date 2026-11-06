@@ -614,13 +614,43 @@ impl Cache {
         self.shared(dashboard, path, &ChronoUtc::now).await
     }
 
+    /// Up to `limit` items of a list, with the members `fields` of each, for a dashboard, as
+    /// the shared cache holds it while it is fresh, as [`Cache::fresh_shared`] reads one
+    /// resource: as [`Cache::get_list_of`] stores it, without asking GitHub, as in a preview
+    /// card (FR-NAV-07).
+    pub async fn fresh_shared_list(
+        &self,
+        dashboard: &str,
+        path: &Path,
+        limit: usize,
+        fields: &[&str],
+    ) -> Result<Option<List>, Error> {
+        let fetch = Fetch::List {
+            path,
+            limit,
+            fields,
+        };
+        self.shared_fetch(dashboard, fetch, &ChronoUtc::now)
+            .await
+            .map(|data| data.and_then(value_list))
+    }
+
     async fn shared(
         &self,
         dashboard: &str,
         path: &Path,
         clock: &Clock,
     ) -> Result<Option<Value>, Error> {
-        let fetch = Fetch::One(path);
+        self.shared_fetch(dashboard, Fetch::One(path), clock).await
+    }
+
+    /// What the shared cache holds, fresh, of `fetch`.
+    async fn shared_fetch(
+        &self,
+        dashboard: &str,
+        fetch: Fetch<'_>,
+        clock: &Clock,
+    ) -> Result<Option<Value>, Error> {
         let entry = self
             .fresh(Scope::Shared, &fetch.key(), fetch, dashboard, clock)
             .await?;

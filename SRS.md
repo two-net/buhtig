@@ -242,7 +242,7 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 |---|---|---|
 | IF-04 | Browsers shall reach BuhTig over HTTPS. `server.public_url` shall use `https://` unless its host is `localhost`. | Must |
 | IF-05 | All requests to GitHub shall use HTTPS. | Must |
-| IF-06 | BuhTig's HTTP endpoints serve its own UI only. They are not a supported public API in this release. | Must |
+| IF-06 | BuhTig's HTTP endpoints serve its own UI only, but for the cards of FR-NAV-07, whose URLs are stable so that they can be embedded elsewhere. They are not a supported public API in this release. | Must |
 
 ---
 
@@ -286,7 +286,9 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | FR-NAV-03 | BuhTig's own pages shall live under the reserved prefix `/-/` (e.g., `/-/settings`, `/-/about`, `/-/privacy`, `/-/health`). This prefix cannot collide with GitHub account names, which never start with a hyphen. | Must |
 | FR-NAV-04 | Canonical URLs shall use names exactly as GitHub returns them. Other letter cases shall redirect to the canonical form. | Should |
 | FR-NAV-05 | When GitHub reports that a repository was renamed or transferred, BuhTig shall follow the redirect and switch the browser to the new canonical URL. | Should |
-| FR-NAV-06 | Dashboards of public resources shall include link-preview metadata (title and short description) so shared links unfurl in chat tools. Previews shall never contain private data. | Could |
+| FR-NAV-06 | Dashboards of public resources shall include link-preview metadata (title, short description, and the resource's card of FR-NAV-07 as PNG for its image) so shared links unfurl in chat tools. Previews shall never contain private data. | Could |
+| FR-NAV-07 | In public mode, BuhTig shall serve a card of each repository, organization and user at `/-/preview/{owner}/{repo}.svg` and `/-/preview/{account}.svg`, and as PNG for chat tools at `.png`: a picture in BuhTig's colors of the resource's name and description, and of its figures as its dashboard shows them. Of a repository, these are its stars, forks and primary language, and its commits per week over the last 52 weeks (FR-REPO-03); of an organization or a user, its repositories, their stars and forks, and the most-used primary language (FR-ORG-02, FR-USER-02). A card shall show only what the shared cache holds while it is fresh (FR-DATA-03, FR-DATA-04), and shall never call GitHub; otherwise, it shall show the name in its URL alone, and so reveal nothing about the resource (FR-ACC-05). Its response shall be revalidated on each use, so that no copy outlives what it shows (FR-ACC-07). In private mode, there shall be no cards. | Could |
+| FR-NAV-08 | In public mode, the heads of the dashboards of public repositories, organizations and users shall offer "Share card", which shows the resource's card (FR-NAV-07) and the Markdown that embeds it, linked to the dashboard, and copies that Markdown. It shall not be offered for private or internal repositories. | Could |
 
 ### 4.3 Repository dashboard
 
@@ -580,7 +582,7 @@ The design targets one instance with up to 10,000 users, up to 100,000 cache ent
 |---|---|---|
 | NFR-PRIV-01 | BuhTig shall collect only the data in §5.1 and use no analytics or third-party tracking. It shall set only strictly necessary cookies: the session cookie and a short-lived sign-in state cookie. | Must |
 | NFR-PRIV-02 | For visitors, BuhTig shall keep no server-side records other than transient rate-limit counters and standard request logs. | Must |
-| NFR-PRIV-03 | The Privacy page shall state what BuhTig stores, why, for how long, and how to delete it, and that public repositories opened on the instance are listed on its home pages (FR-SRCH-11). | Should |
+| NFR-PRIV-03 | The Privacy page shall state what BuhTig stores, why, for how long, and how to delete it, that public repositories opened on the instance are listed on its home pages (FR-SRCH-11), and that link previews and cards show a dashboard's figures only while it was opened lately (FR-NAV-06, FR-NAV-07). | Should |
 
 ### 6.6 Usability and accessibility
 
@@ -623,6 +625,7 @@ These scenarios are the minimum release checks. Each should be automated where p
 | AC-11 | Alice removes her PAT. | Her private cache is deleted at once. Her private dashboards now show "Not found or private" with an add-token prompt. |
 | AC-12 | Alice saves a PAT and opens her own dashboard, `/alice`. Then Bob, signed in with a PAT of his own, opens `/alice`. | Alice sees her private repositories among her repositories, with Private badges. Bob sees her public repositories only. |
 | AC-13 | Alice saves a PAT that can read `owner/secret-repo` and opens `/-/compare/owner/secret-repo...owner/repo`. Then Bob, signed in without access, opens the same URL. | Alice sees both repositories side by side, with how each figure differs. Bob gets "Not found or private" for `owner/secret-repo` and receives no data from Alice's private cache. |
+| AC-14 | Public mode. Alice saves a PAT that can read `owner/secret-repo` and opens its dashboard. Then a visitor opens `/-/preview/owner/secret-repo.svg`, and `/-/preview/owner/repo.svg` both before and after another visitor opens `/owner/repo`. | The card of `owner/secret-repo` shows its name alone, as does that of `owner/repo` at first. Once a visitor has opened `/owner/repo`, its card shows its description and figures. GitHub is never asked for a card. |
 
 ---
 
@@ -635,7 +638,7 @@ These items are not part of this release; they are candidates for later versions
 - Rendering READMEs or any other Markdown or HTML from GitHub.
 - Data that needs bulk crawling or elevated access, such as star history and traffic (views and clones).
 - Real-time updates through webhooks, notifications, and email.
-- Custom dashboard layouts, comparing more than two resources at once, and exporting data or images.
+- Custom dashboard layouts, comparing more than two resources at once, and exporting data or images, other than the cards of FR-NAV-07.
 - An administration UI, teams, and sharing private dashboards with other users.
 - Native mobile apps and a public API.
 - Horizontal scaling, partitioning, external caches, and queues. These are excluded by design (CON-05, CON-06).

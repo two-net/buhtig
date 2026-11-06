@@ -2,7 +2,9 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Component, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
+import { HeadActions } from '../dashboard/head-actions';
 import { OPEN_ON_GITHUB } from '../dashboard/messages';
 import { Repository } from '../dashboard/resources';
 import { RepositoryHead } from './head';
@@ -78,6 +80,16 @@ describe('RepositoryHead', () => {
     await show({ ownerAvatarUrl: undefined });
     expect(element().querySelector('.title img')).toBeNull();
     expect(element().querySelector('.title svg.av')).not.toBeNull();
+  });
+
+  it('offers its card while it is public alone (FR-NAV-08)', async () => {
+    const shareable = () =>
+      fixture.debugElement.query(By.directive(HeadActions)).componentInstance.shareable();
+    expect(shareable()).toBe(true);
+    for (const visibility of ['private', 'internal'] as const) {
+      await show({ visibility });
+      expect(shareable()).toBe(false);
+    }
   });
 
   it('marks its visibility, and whether it is archived or a template', async () => {

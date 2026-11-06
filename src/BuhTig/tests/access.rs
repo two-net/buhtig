@@ -67,6 +67,11 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
             "/-/compare/owner/repo...other/repo",
             "/-/sign-in?return_to=%2F-%2Fcompare%2Fowner%2Frepo...other%2Frepo",
         ),
+        // In private mode, there are no cards (FR-NAV-07).
+        (
+            "/-/preview/owner/repo.png",
+            "/-/sign-in?return_to=%2F-%2Fpreview%2Fowner%2Frepo.png",
+        ),
     ] {
         let response = running.get(path);
         assert_status(&response, 303);
@@ -125,7 +130,7 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
     assert_status(&session, 200);
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(body(&session)).unwrap(),
-        serde_json::json!({ "user": null, "token": null })
+        serde_json::json!({ "user": null, "token": null, "access": "private" })
     );
 
     let sign_in = running.get("/-/auth/sign-in?return_to=%2Fowner%2Frepo");

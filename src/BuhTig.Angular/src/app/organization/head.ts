@@ -58,6 +58,7 @@ import { ON_GITHUB_SINCE, VERIFIED, membersLabelOf } from './messages';
         [resource]="resource()"
         [path]="'/' + shown.login"
         [fetchedAt]="fetchedAt()"
+        [shareable]="true"
         (refreshed)="refreshed.emit()"
       />
     </div>
