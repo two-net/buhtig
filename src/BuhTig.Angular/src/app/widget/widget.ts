@@ -35,8 +35,8 @@ export class Loaded<T> {
   }
 }
 
-/** The shape of a widget's placeholder, after its content's. */
-export type Skeleton = 'list' | 'bars' | 'stack' | 'chart';
+/** The shape of a widget's placeholder, after its content's, such as a row of `figures`. */
+export type Skeleton = 'list' | 'bars' | 'stack' | 'chart' | 'figures';
 
 let count = 0;
 

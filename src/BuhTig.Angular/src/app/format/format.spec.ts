@@ -1,5 +1,6 @@
 import {
   compactNumber,
+  duration,
   exactDay,
   exactNumber,
   exactTime,
@@ -150,6 +151,28 @@ describe('format', () => {
   it('lists items as the locale does', () => {
     expect(list(['repo', 'read:org', 'gist'], 'en-US')).toBe('repo, read:org, gist');
     expect(list(['repo'], 'en-US')).toBe('repo');
+  });
+
+  it('tells spans of time in the largest unit they fill, to a tenth, for the locale (UI-06)', () => {
+    const day = 24 * 60 * 60;
+    expect(
+      [0, 45, 252, 3_600, 36 * 3_600, 2 * day, 45 * day, 66 * day, 2 * 365.25 * day, -5].map(
+        (seconds) => plain(duration(seconds, 'en-US')),
+      ),
+    ).toEqual([
+      '0 seconds',
+      '45 seconds',
+      '4.2 minutes',
+      '1 hour',
+      '36 hours',
+      '2 days',
+      '45 days',
+      '2.2 months',
+      '2 years',
+      // A span cannot be less than none.
+      '0 seconds',
+    ]);
+    expect(plain(duration(252, 'de-DE'))).toBe('4,2 Minuten');
   });
 
   it('shows shares of a whole in percent, for the locale', () => {

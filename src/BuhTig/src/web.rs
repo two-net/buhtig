@@ -230,6 +230,26 @@ pub fn router(
             get(repositories::releases).with_state(cache.clone()),
         )
         .route(
+            "/-/api/repositories/{owner}/{repo}/merge-velocity",
+            get(repositories::merge_velocity).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/issue-age",
+            get(repositories::issue_age).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/workflow-runs",
+            get(repositories::workflow_runs).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/code-frequency",
+            get(repositories::code_frequency).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/release-cadence",
+            get(repositories::release_cadence).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}/refresh",
             post(repositories::refresh).with_state(cache.clone()),
         )

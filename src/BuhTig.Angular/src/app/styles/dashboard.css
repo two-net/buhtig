@@ -271,6 +271,9 @@ table.tbl {
   height: 28px;
   margin-top: 2px;
 }
+.skel.block.figures-skel {
+  --sh: 60px;
+}
 .skel.block {
   height: var(--sh, 180px);
 }

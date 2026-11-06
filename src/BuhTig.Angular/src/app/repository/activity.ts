@@ -2,7 +2,6 @@ import { Component, computed, inject, input } from '@angular/core';
 import { Column, ColumnChart, Tick } from '../chart/columns';
 import { ChartTable } from '../chart/table';
 import { RepositoryData } from '../dashboard/data';
-import { CommitActivity } from '../dashboard/resources';
 import { exactNumber, monthLabel, weekDate } from '../format/format';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
@@ -63,7 +62,7 @@ export class RepositoryActivity {
     (this.ready()?.weeks ?? []).map((week) => ({ value: week.commits, label: weekOf(week.start) })),
   );
 
-  protected readonly ticks = computed(() => ticks(this.ready()));
+  protected readonly ticks = computed(() => monthTicks(this.ready()?.weeks ?? []));
 
   protected readonly summary = computed(() => {
     const activity = this.ready();
@@ -77,15 +76,17 @@ export class RepositoryActivity {
           headers: ACTIVITY_HEADERS,
           rows: [...activity.weeks]
             .reverse()
-            .map((week) => ({ label: weekDate(week.start), value: exactNumber(week.commits) })),
+            .map((week) => ({ label: weekDate(week.start), values: [exactNumber(week.commits)] })),
         }
       : undefined;
   });
 }
 
-/** The months under the chart, where each starts, all but each quarter's first minor. */
-function ticks(activity: CommitActivity | undefined): Tick[] {
-  const weeks = activity?.weeks ?? [];
+/**
+ * The months under a chart of `weeks`, where each starts, all but each quarter's first minor,
+ * as of commit activity and code frequency.
+ */
+export function monthTicks(weeks: readonly { start: Date }[]): Tick[] {
   return weeks.flatMap((week, index) => {
     const before = weeks[index - 1];
     const month = week.start.getUTCMonth();

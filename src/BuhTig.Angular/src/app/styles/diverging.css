@@ -1,0 +1,39 @@
+/*
+ * Charts of columns that diverge, with the dashboards' code: in each column, a bar up from the
+ * baseline in the middle, such as of lines added, and one down from it, such as of lines
+ * deleted, in GitHub's colors for each. The bar down grows down as the widget makes its
+ * entrance (FR-ANIM-06).
+ */
+.colchart.diverging .col {
+  flex-direction: column;
+  align-items: stretch;
+}
+.colchart .col .half {
+  display: flex;
+  flex: 1 1 0;
+  justify-content: center;
+  min-height: 0;
+}
+.colchart .col .half.up {
+  align-items: flex-end;
+}
+.colchart .col .half.down {
+  align-items: flex-start;
+}
+.colchart .col .half.up i {
+  background: var(--st-open);
+}
+.colchart .col .half.down i {
+  height: var(--d);
+  border-radius: 0 0 4px 4px;
+  background: var(--st-closed);
+}
+.legend .sw.up {
+  background: var(--st-open);
+}
+.legend .sw.down {
+  background: var(--st-closed);
+}
+.entering .colchart .col .half.down i {
+  transform-origin: top;
+}

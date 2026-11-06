@@ -135,7 +135,48 @@ describe('RepositoryDashboard', () => {
       releases: [{ tag: 'v2.1.0', name: null, published_at: null, prerelease: false, url: null }],
       count: 42,
     },
+    'merge-velocity': {
+      sampled: 9,
+      merged: 5,
+      closed: 1,
+      median_time_to_merge: 7_200,
+      truncated: false,
+    },
+    'issue-age': { sampled: 12, median_age: 86_400, truncated: false },
+    'workflow-runs': {
+      branch: 'main',
+      sampled: 2,
+      passed: 1,
+      failed: 1,
+      average_duration: 60,
+      latest: null,
+      hidden: false,
+    },
+    'code-frequency': {
+      weeks: [{ week: '2026-10-18', additions: 10, deletions: 2 }],
+      too_large: false,
+    },
+    'release-cadence': {
+      sampled: 42,
+      stable: 40,
+      prereleases: 2,
+      average_interval: 86_400,
+      assets: 2,
+      downloads: 7,
+      truncated: false,
+    },
   };
+
+  /** The parts that the overview shows. The other tabs ask for more of their own. */
+  const OVERVIEW_PARTS = [
+    'commit-activity',
+    'commits',
+    'contributors',
+    'issues',
+    'languages',
+    'releases',
+    'stats',
+  ];
 
   /** Each part of the repository asked for since last asked, without answering. */
   const asked = () =>
@@ -217,11 +258,13 @@ describe('RepositoryDashboard', () => {
     await open('/acme/widget/activity', '/-/api/repositories/acme/widget', WIDGET);
     expect(tabs().some((tab) => tab.querySelector('.counter'))).toBe(false);
     expect(await answerParts()).toEqual([
+      'code-frequency',
       'commit-activity',
       'commits',
       'contributors',
       'releases',
       'stats',
+      'workflow-runs',
     ]);
     expect(tabs().map(shown)).toEqual([
       'Overview',
@@ -251,11 +294,17 @@ describe('RepositoryDashboard', () => {
         'issues',
         'languages',
       ],
-      '/acme/widget/activity': ['app-repository-activity-tab', 'commit-activity', 'commits'],
-      '/acme/widget/issues': ['app-repository-issues-tab', 'issues'],
-      '/acme/widget/pulls': ['app-repository-issues-tab', 'issues'],
+      '/acme/widget/activity': [
+        'app-repository-activity-tab',
+        'code-frequency',
+        'commit-activity',
+        'commits',
+        'workflow-runs',
+      ],
+      '/acme/widget/issues': ['app-repository-issues-tab', 'issue-age', 'issues'],
+      '/acme/widget/pulls': ['app-repository-issues-tab', 'issues', 'merge-velocity'],
       '/acme/widget/graphs/contributors': ['app-repository-contributors-tab'],
-      '/acme/widget/releases': ['app-repository-releases-tab'],
+      '/acme/widget/releases': ['app-repository-releases-tab', 'release-cadence'],
     };
     for (const [url, [content, ...parts]] of Object.entries(tabsAt)) {
       // Each anew, so that it asks for its parts anew.
@@ -275,20 +324,31 @@ describe('RepositoryDashboard', () => {
   it('shows issues on the Issues tab, and pull requests on the Pull requests tab', async () => {
     await open('/acme/widget/issues', '/-/api/repositories/acme/widget', WIDGET);
     await answerParts();
-    const heading = () => page().querySelector('app-repository-issues-tab h2')?.textContent?.trim();
-    expect(heading()).toBe('Issues');
+    const headings = () =>
+      [...page().querySelectorAll('app-repository-issues-tab h2')].map((heading) =>
+        heading.textContent?.trim(),
+      );
+    expect(headings()).toEqual(['Open issue age', 'Issues']);
     await harness.navigateByUrl('/acme/widget/pulls');
-    expect(heading()).toBe('Pull requests');
+    expect(headings()).toEqual(['Merge velocity', 'Pull requests']);
+    expect(await answerParts()).toEqual(['merge-velocity']);
   });
 
   it('loads each part once, however many tabs show it', async () => {
     await open('/acme/widget', '/-/api/repositories/acme/widget', WIDGET);
-    expect(await answerParts()).toEqual(Object.keys(PARTS).sort());
+    expect(await answerParts()).toEqual(OVERVIEW_PARTS);
 
-    for (const url of ['/acme/widget/activity', '/acme/widget/issues', '/acme/widget']) {
+    // Each tab asks only for what no tab before it did.
+    for (const [url, parts] of [
+      ['/acme/widget/activity', ['code-frequency', 'workflow-runs']],
+      ['/acme/widget/issues', ['issue-age']],
+      ['/acme/widget', []],
+      ['/acme/widget/activity', []],
+      ['/acme/widget/issues', []],
+    ] as const) {
       await harness.navigateByUrl(url);
       await harness.fixture.whenStable();
-      expect(asked(), url).toEqual([]);
+      expect(await answerParts(), url).toEqual(parts);
       http.expectNone('/-/api/repositories/acme/widget');
     }
     await harness.navigateByUrl('/acme/widget/activity');
@@ -492,7 +552,8 @@ describe('RepositoryDashboard', () => {
       .flush(null, { status: 204, statusText: 'No Content' });
     await harness.fixture.whenStable();
     expect(main().getAttribute('aria-busy')).toBe('true');
-    expect(await answerParts()).toEqual(Object.keys(PARTS).sort());
+    // Those it has shown, and no others.
+    expect(await answerParts()).toEqual(OVERVIEW_PARTS);
     http
       .expectOne('/-/api/repositories/acme/widget')
       .flush({ ...WIDGET, fetched_at: '2026-10-22T12:04:00.000Z' });

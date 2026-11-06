@@ -1,14 +1,17 @@
-import { Component, input } from '@angular/core';
+import { Component, computed, input } from '@angular/core';
 
-/** One row of a chart's table: what it is of, and its figure in full. */
+/** One row of a chart's table: what it is of, and its figures in full, one a column. */
 export interface Row {
   label: string;
-  value: string;
+  values: readonly string[];
 }
 
-/** A chart's data as a table: the headers of its two columns, and its rows. */
+/**
+ * A chart's data as a table: the headers of its columns, first that of what each row is of,
+ * then those of its figures, and its rows.
+ */
 export interface ChartTable {
-  headers: readonly [string, string];
+  headers: readonly [string, ...string[]];
   rows: Row[];
 }
 
@@ -24,14 +27,18 @@ export interface ChartTable {
         <thead>
           <tr>
             <th scope="col">{{ table().headers[0] }}</th>
-            <th scope="col" class="num">{{ table().headers[1] }}</th>
+            @for (header of figures(); track $index) {
+              <th scope="col" class="num">{{ header }}</th>
+            }
           </tr>
         </thead>
         <tbody>
           @for (row of table().rows; track $index) {
             <tr>
               <th scope="row">{{ row.label }}</th>
-              <td class="num">{{ row.value }}</td>
+              @for (value of row.values; track $index) {
+                <td class="num">{{ value }}</td>
+              }
             </tr>
           }
         </tbody>
@@ -41,4 +48,7 @@ export interface ChartTable {
 })
 export class DataTable {
   readonly table = input.required<ChartTable>();
+
+  /** The headers of the figures' columns. */
+  protected readonly figures = computed(() => this.table().headers.slice(1));
 }

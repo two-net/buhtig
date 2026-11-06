@@ -46,8 +46,8 @@ class Host {
   readonly table = signal<ChartTable | undefined>({
     headers: ['Language', 'Share'],
     rows: [
-      { label: 'TypeScript', value: '75%' },
-      { label: 'CSS', value: '25%' },
+      { label: 'TypeScript', values: ['75%'] },
+      { label: 'CSS', values: ['25%'] },
     ],
   });
   readonly releases = load(
@@ -323,7 +323,7 @@ describe('Widget', () => {
       await set((host) =>
         host.table.set({
           headers: ['Language', 'Share'],
-          rows: [{ label: 'Rust', value: '100%' }],
+          rows: [{ label: 'Rust', values: ['100%'] }],
         }),
       );
       expect(table()).toBeNull();

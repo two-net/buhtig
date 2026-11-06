@@ -173,7 +173,7 @@ impl<T> Reply<T> {
 }
 
 /// The items of a paginated list.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub struct List {
     pub items: Vec<Value>,
     /// Whether the list goes on past the limit, so that the dashboard can say that its
@@ -339,11 +339,29 @@ impl Answer {
             .map_err(|_| Error::Invalid("the body is not JSON".to_owned()))
     }
 
+    /// The items of a page of a list: a JSON array, or an object with the list's
+    /// `total_count` and the page's items as its one member that is an array, as GitHub
+    /// wraps some lists, such as a repository's `workflow_runs`.
     fn items(&self) -> Result<Vec<Value>, Error> {
+        let not_a_list = || Error::Invalid("the body is not a list".to_owned());
         match self.json()? {
             Value::Null => Ok(Vec::new()),
             Value::Array(items) => Ok(items),
-            _ => Err(Error::Invalid("the body is not a list".to_owned())),
+            Value::Object(mut wrapped) if wrapped.contains_key("total_count") => {
+                let lists: Vec<String> = wrapped
+                    .iter()
+                    .filter(|(_, value)| value.is_array())
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                match lists.as_slice() {
+                    [key] => match wrapped.remove(key) {
+                        Some(Value::Array(items)) => Ok(items),
+                        _ => Err(not_a_list()),
+                    },
+                    _ => Err(not_a_list()),
+                }
+            }
+            _ => Err(not_a_list()),
         }
     }
 }
@@ -1379,6 +1397,48 @@ mod tests {
             .await;
         let (items, truncated, etag) = list(reply);
         assert_eq!((items.len(), truncated, etag), (PER_PAGE, false, None));
+    }
+
+    #[tokio::test]
+    async fn wrapped_lists_are_read_as_lists() {
+        let runs = path(&["repos", "acme", "widget", "actions", "runs"]);
+        let stub = Stub::new(|request| match request.uri().path() {
+            "/repos/acme/widget/actions/runs" => answer(
+                200,
+                &[(
+                    "link",
+                    r#"<https://api.github.com/repositories/42/actions/runs?page=2>; rel="next""#,
+                )],
+                r#"{"total_count": 3, "workflow_runs": [{"id": 3}, {"id": 2}]}"#,
+            ),
+            _ => answer(
+                200,
+                &[],
+                r#"{"total_count": 3, "workflow_runs": [{"id": 1}]}"#,
+            ),
+        });
+        let reply = client(&stub)
+            .get_list(&Credential::Visitor, &runs, 3, None)
+            .await;
+        let ids = |ids: &[u64]| -> Vec<Value> {
+            ids.iter().map(|id| serde_json::json!({"id": id})).collect()
+        };
+        assert_eq!(list(reply), (ids(&[3, 2, 1]), false, None));
+
+        // Anything else that is not an array is not a list.
+        for body in [
+            r#"{"workflow_runs": []}"#,
+            r#"{"total_count": 1}"#,
+            r#"{"total_count": 1, "a": [], "b": []}"#,
+            r#"{"total_count": 1, "workflow_runs": {}}"#,
+            "3",
+        ] {
+            let stub = Stub::new(move |_| answer(200, &[], body));
+            let reply = client(&stub)
+                .get_list(&Credential::Visitor, &runs, 3, None)
+                .await;
+            assert!(matches!(reply, Err(Error::Invalid(_))), "{body}: {reply:?}");
+        }
     }
 
     #[tokio::test]

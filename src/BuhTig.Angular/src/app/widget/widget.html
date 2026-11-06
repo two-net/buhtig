@@ -43,6 +43,9 @@
                 <span class="skel line" [style.width.%]="width"></span>
               }
             }
+            @case ('figures') {
+              <span class="skel block figures-skel"></span>
+            }
             @default {
               <span class="skel block"></span>
             }

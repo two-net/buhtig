@@ -362,6 +362,10 @@ h3 {
   color: var(--fg-attention);
   border-color: var(--fg-attention);
 }
+.label.danger {
+  color: var(--fg-danger);
+  border-color: var(--fg-danger);
+}
 .counter {
   display: inline-block;
   min-width: 20px;

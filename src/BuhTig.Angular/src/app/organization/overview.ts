@@ -347,7 +347,7 @@ function table(
   rows: [string, number][],
 ): ChartTable | undefined {
   return rows.length > 0
-    ? { headers, rows: rows.map(([label, value]) => ({ label, value: exactNumber(value) })) }
+    ? { headers, rows: rows.map(([label, value]) => ({ label, values: [exactNumber(value)] })) }
     : undefined;
 }
 

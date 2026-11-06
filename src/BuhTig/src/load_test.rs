@@ -66,8 +66,9 @@ const ROWS: usize = 25;
 const CONTRIBUTORS: usize = 240;
 const RELEASES: usize = 42;
 
-/// What a repository dashboard asks for, besides its summary, and how each is reported.
-const REPOSITORY_WIDGETS: [(&str, &str); 7] = [
+/// What a repository dashboard asks for, besides its summary, and how each is reported:
+/// what its overview shows, and what its other tabs add, as of a user who opens each.
+const REPOSITORY_WIDGETS: [(&str, &str); 12] = [
     ("stats", "repository stats"),
     ("commit-activity", "repository commit-activity"),
     ("languages", "repository languages"),
@@ -75,6 +76,11 @@ const REPOSITORY_WIDGETS: [(&str, &str); 7] = [
     ("issues", "repository issues"),
     ("commits", "repository commits"),
     ("releases", "repository releases"),
+    ("merge-velocity", "repository merge-velocity"),
+    ("issue-age", "repository issue-age"),
+    ("workflow-runs", "repository workflow-runs"),
+    ("code-frequency", "repository code-frequency"),
+    ("release-cadence", "repository release-cadence"),
 ];
 /// What an organization dashboard asks for, besides its summary.
 const ORGANIZATION_WIDGETS: [(&str, &str); 7] = [
@@ -728,12 +734,38 @@ fn github(path: &str, query: &HashMap<String, String>) -> (u16, Option<String>, 
             paged(path, query, contributors.collect(), CONTRIBUTORS)
         }
         ["repos", owner, name, "issues"] => ok((0..20).map(|n| issue(owner, name, n)).collect()),
+        ["repos", owner, name, "actions", "runs"] => {
+            let runs: Vec<Value> = (0..50).map(|n| workflow_run(owner, name, n)).collect();
+            ok(json!({"total_count": 2_400, "workflow_runs": runs}))
+        }
+        // Five years of weeks.
+        ["repos", _, name, "stats", "code_frequency"] => {
+            let start = ChronoUtc::now().timestamp() - 260 * 7 * 24 * 60 * 60;
+            let n = number(name);
+            ok((0..260i64)
+                .map(|week| {
+                    let lines = (week * 37 + n as i64) % 900;
+                    json!([start + week * 7 * 24 * 60 * 60, lines * 3, -lines])
+                })
+                .collect())
+        }
+        // All of a repository's releases, as its cadence reads them.
+        ["repos", owner, name, "releases"]
+            if query.get("per_page").map(String::as_str) == Some("100") =>
+        {
+            ok((0..=10).map(|n| release(owner, name, n)).collect())
+        }
         ["repos", owner, name, "commits"] => ok((0..10).map(|n| commit(owner, name, n)).collect()),
         ["repos", owner, name, "releases"] => {
             let releases = (0..5).map(|n| release(owner, name, n));
             paged(path, query, releases.collect(), RELEASES)
         }
         ["repos", owner, name, "releases", "latest"] => ok(release(owner, name, 0)),
+        // The pull requests updated last, as merge velocity searches for them.
+        ["search", "issues"] if query.get("per_page").map(String::as_str) == Some("100") => {
+            let pulls: Vec<Value> = (0..100).map(|n| issue(OWNER, "repo", 2 * n + 1)).collect();
+            ok(json!({"total_count": 1_234, "incomplete_results": false, "items": pulls}))
+        }
         ["search", "issues"] => ok(json!({
             "total_count": 1_234, "incomplete_results": false, "items": []
         })),
@@ -968,6 +1000,25 @@ fn issue(owner: &str, name: &str, n: usize) -> Value {
         });
     }
     issue
+}
+
+/// The `n`th workflow run on the default branch, latest first, with its repository in full.
+fn workflow_run(owner: &str, name: &str, n: usize) -> Value {
+    let id = 9_000_000 + n;
+    json!({
+        "id": id, "name": if n % 3 == 0 { "Release" } else { "CI" },
+        "node_id": format!("WFR_kwLOH{n:06}"), "head_branch": "main",
+        "head_sha": format!("{:040x}", 0xfed_cba_u64 + n as u64), "run_number": 2_400 - n,
+        "event": if n % 5 == 0 { "schedule" } else { "push" }, "status": "completed",
+        "conclusion": if n % 7 == 0 { "failure" } else { "success" },
+        "workflow_id": 161_335, "url": format!("https://api.github.com/repos/{owner}/{name}/actions/runs/{id}"),
+        "html_url": format!("https://github.com/{owner}/{name}/actions/runs/{id}"),
+        "created_at": days_ago(n), "updated_at": days_ago(n), "run_started_at": days_ago(n),
+        "run_attempt": 1,
+        "head_commit": {"id": format!("{:040x}", n), "message": "Steady the widgets".repeat(4)},
+        "repository": repository(owner, name, number(name)),
+        "head_repository": repository(owner, name, number(name))
+    })
 }
 
 /// The `n`th commit on the default branch, newest first.

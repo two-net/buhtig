@@ -87,3 +87,23 @@
     grid-template-columns: 1fr;
   }
 }
+/* A widget's few figures, side by side as stat cards are, and one above another when narrow. */
+.stats.few {
+  grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr));
+}
+@media (max-width: 544px) {
+  .stats.few {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .stats.few .stat {
+    border-left: 0;
+  }
+  .stats.few .stat + .stat {
+    border-top: 1px solid var(--border-muted);
+  }
+}
+.stat .val .label {
+  font-size: 14px;
+  height: 24px;
+  vertical-align: 4px;
+}

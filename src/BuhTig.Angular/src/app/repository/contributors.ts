@@ -77,7 +77,7 @@ export class RepositoryContributorsTab {
           headers: CONTRIBUTORS_HEADERS,
           rows: this.listed().map((contributor) => ({
             label: `@${contributor.login}`,
-            value: exactNumber(contributor.commits),
+            values: [exactNumber(contributor.commits)],
           })),
         }
       : undefined,

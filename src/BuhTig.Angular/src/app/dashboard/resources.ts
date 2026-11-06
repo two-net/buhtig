@@ -357,6 +357,108 @@ export interface Releases {
   count: number;
 }
 
+/**
+ * How a repository's pull requests updated last came to an end (FR-REPO-13). Their merge ratio
+ * is `merged` of `merged` and `closed` together.
+ */
+export interface MergeVelocity {
+  /** How many pull requests were read: up to the 100 updated last. */
+  sampled: number;
+  /** Those of them that were merged. */
+  merged: number;
+  /** Those of them that were closed without being merged. */
+  closed: number;
+  /** The median time from opening to merging, in seconds, unless none were merged. */
+  medianTimeToMerge: number | undefined;
+  /** Whether the repository has more pull requests than were read. */
+  truncated: boolean;
+}
+
+/** How long a repository's open issues updated last have been open (FR-REPO-13). */
+export interface IssueAge {
+  /**
+   * How many open issues were read: those among the 100 open issues and pull requests updated
+   * last.
+   */
+  sampled: number;
+  /** The median time since they were opened, in seconds, unless there were none. */
+  medianAge: number | undefined;
+  /** Whether the repository has more open issues and pull requests than were read. */
+  truncated: boolean;
+}
+
+/**
+ * How a repository's latest GitHub Actions workflow runs for pushes to its default branch fared
+ * (FR-REPO-14). Their pass rate is `passed` of `passed` and `failed` together.
+ */
+export interface WorkflowRuns {
+  /** Its default branch, unless it has none. */
+  branch: string | undefined;
+  /** How many runs were read: up to the 50 latest. */
+  sampled: number;
+  /** Those of them that succeeded. */
+  passed: number;
+  /** Those of them that failed, timed out or could not start. */
+  failed: number;
+  /** The mean time that the completed runs took, in seconds, unless none had completed. */
+  averageDuration: number | undefined;
+  /** The latest run, unless there is none. */
+  latest: WorkflowRun | undefined;
+  /**
+   * Whether GitHub would not list the runs to the viewer's credential, as to a personal access
+   * token without access to Actions.
+   */
+  hidden: boolean;
+}
+
+export interface WorkflowRun {
+  /** The name of its workflow. */
+  name: string | undefined;
+  /** Where it is, as GitHub says, such as `queued`, `in_progress` or `completed`. */
+  status: string | undefined;
+  /** How it ended, once it has, as GitHub says, such as `success` or `failure`. */
+  conclusion: string | undefined;
+  startedAt: Date | undefined;
+  /** Its page on GitHub (FR-REPO-12). */
+  url: string | undefined;
+}
+
+/** How many lines were added to and deleted from a repository each week (FR-REPO-15). */
+export interface CodeFrequency {
+  /** The last 52, oldest first, the current one last, or none for an empty repository. */
+  weeks: WeekOfChanges[];
+  /** The lines added in all the weeks together. */
+  additions: number;
+  /** The lines deleted in all the weeks together. */
+  deletions: number;
+  /** Whether GitHub does not compute it, as for repositories with 10,000 commits or more. */
+  tooLarge: boolean;
+}
+
+export interface WeekOfChanges {
+  /** The Sunday it starts on, at midnight UTC, as GitHub counts weeks. */
+  start: Date;
+  additions: number;
+  deletions: number;
+}
+
+/** How often a repository was released, and downloaded, over its latest releases (FR-REPO-16). */
+export interface ReleaseCadence {
+  /** How many releases were read: up to the 100 latest, without drafts. */
+  sampled: number;
+  /** Those of them that are not pre-releases. */
+  stable: number;
+  prereleases: number;
+  /** The mean time from one release to the next, in seconds, unless there are fewer than two. */
+  averageInterval: number | undefined;
+  /** How many files they have, their assets. */
+  assets: number;
+  /** How many times their assets were downloaded. */
+  downloads: number;
+  /** Whether the repository has more releases than were read. */
+  truncated: boolean;
+}
+
 /** The server's answer about a repository, an organization or a user. */
 interface Answer {
   name: string;
@@ -552,6 +654,56 @@ interface ReleasesAnswer {
     target?: string | null;
   }[];
   count?: number;
+}
+
+/** The server's answer about a repository, for how its pull requests are merged. */
+interface MergeVelocityAnswer {
+  sampled: number;
+  merged: number;
+  closed: number;
+  median_time_to_merge: number | null;
+  truncated: boolean;
+}
+
+/** The server's answer about a repository, for how long its open issues have been open. */
+interface IssueAgeAnswer {
+  sampled: number;
+  median_age: number | null;
+  truncated: boolean;
+}
+
+/** The server's answer about a repository, for how its workflow runs fared. */
+interface WorkflowRunsAnswer {
+  branch: string | null;
+  sampled: number;
+  passed: number;
+  failed: number;
+  average_duration: number | null;
+  latest: {
+    name: string | null;
+    status: string | null;
+    conclusion: string | null;
+    started_at: string | null;
+    url: string | null;
+  } | null;
+  hidden: boolean;
+}
+
+/** The server's answer about a repository, for its code frequency chart. */
+interface CodeFrequencyAnswer {
+  weeks: { week: string; additions: number; deletions: number }[];
+  too_large: boolean;
+}
+
+/** The server's answer about a repository, for how often it is released. */
+interface ReleaseCadenceAnswer {
+  sampled: number;
+  stable: number;
+  prereleases: number;
+  average_interval: number | null;
+  assets?: number;
+  downloads: number;
+  truncated: boolean;
 }
 
 /** What BuhTig knows of repositories and organizations as a whole. */
@@ -934,6 +1086,107 @@ export class Resources {
   }
 
   /**
+   * How the pull requests of the repository `owner/repo` updated last came to an end, which
+   * fails as `commitActivity` does (FR-REPO-13).
+   */
+  mergeVelocity(owner: string, repo: string): Observable<MergeVelocity> {
+    return this.part<MergeVelocityAnswer>(owner, repo, 'merge-velocity').pipe(
+      map((answer) => ({
+        sampled: count(answer.sampled),
+        merged: count(answer.merged),
+        closed: count(answer.closed),
+        medianTimeToMerge: seconds(answer.median_time_to_merge),
+        truncated: answer.truncated === true,
+      })),
+    );
+  }
+
+  /**
+   * How long the open issues of the repository `owner/repo` updated last have been open, which
+   * fails as `commitActivity` does (FR-REPO-13).
+   */
+  issueAge(owner: string, repo: string): Observable<IssueAge> {
+    return this.part<IssueAgeAnswer>(owner, repo, 'issue-age').pipe(
+      map((answer) => ({
+        sampled: count(answer.sampled),
+        medianAge: seconds(answer.median_age),
+        truncated: answer.truncated === true,
+      })),
+    );
+  }
+
+  /**
+   * How the latest workflow runs on the default branch of the repository `owner/repo` fared,
+   * which fail as `commitActivity` does (FR-REPO-14).
+   */
+  workflowRuns(owner: string, repo: string): Observable<WorkflowRuns> {
+    return this.part<WorkflowRunsAnswer>(owner, repo, 'workflow-runs').pipe(
+      map((answer) => {
+        const latest = answer.latest;
+        return {
+          branch: answer.branch || undefined,
+          sampled: count(answer.sampled),
+          passed: count(answer.passed),
+          failed: count(answer.failed),
+          averageDuration: seconds(answer.average_duration),
+          latest: latest
+            ? {
+                name: latest.name || undefined,
+                status: latest.status || undefined,
+                conclusion: latest.conclusion || undefined,
+                startedAt: date(latest.started_at),
+                url: link(latest.url, ['https:']),
+              }
+            : undefined,
+          hidden: answer.hidden === true,
+        };
+      }),
+    );
+  }
+
+  /**
+   * How many lines were added to and deleted from the repository `owner/repo` each week, which
+   * fails with `Computing` while GitHub is still computing it (FR-REPO-10, FR-REPO-15), and
+   * otherwise as `commitActivity` does. Weeks it cannot date are left out.
+   */
+  codeFrequency(owner: string, repo: string): Observable<CodeFrequency> {
+    return this.part<CodeFrequencyAnswer>(owner, repo, 'code-frequency').pipe(
+      map((answer) => {
+        const weeks = answer.weeks.flatMap(({ week, additions, deletions }) => {
+          const start = date(week);
+          return start !== undefined
+            ? [{ start, additions: count(additions), deletions: count(deletions) }]
+            : [];
+        });
+        return {
+          weeks,
+          additions: weeks.reduce((total, week) => total + week.additions, 0),
+          deletions: weeks.reduce((total, week) => total + week.deletions, 0),
+          tooLarge: answer.too_large === true,
+        };
+      }),
+    );
+  }
+
+  /**
+   * How often the repository `owner/repo` was released, and downloaded, over its latest
+   * releases, which fails as `commitActivity` does (FR-REPO-16).
+   */
+  releaseCadence(owner: string, repo: string): Observable<ReleaseCadence> {
+    return this.part<ReleaseCadenceAnswer>(owner, repo, 'release-cadence').pipe(
+      map((answer) => ({
+        sampled: count(answer.sampled),
+        stable: count(answer.stable),
+        prereleases: count(answer.prereleases),
+        averageInterval: seconds(answer.average_interval),
+        assets: count(answer.assets),
+        downloads: count(answer.downloads),
+        truncated: answer.truncated === true,
+      })),
+    );
+  }
+
+  /**
    * The commit activity of the repository `repo` of the organization or user `owner`, for a row
    * of its repository list, which fails as `commitActivity` does. It counts as a load of the
    * account's dashboard (FR-DATA-10).
@@ -1098,6 +1351,11 @@ function userHeader(answer: UserAnswer): User {
 /** `value` if it is a count, or else none. */
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+/** `value` if it is a span of time in seconds, or else none. */
+function seconds(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 /** The time `text` tells, if it tells one. */

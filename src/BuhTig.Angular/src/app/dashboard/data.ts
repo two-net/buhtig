@@ -2,20 +2,25 @@ import { Injector, Signal, runInInjectionContext } from '@angular/core';
 import { Observable } from 'rxjs';
 import { Loader } from '../widget/load';
 import {
+  CodeFrequency,
   CommitActivity,
   Commit,
   Contributors,
+  IssueAge,
   IssuesAndPullRequests,
   LanguageCounts,
   Languages,
   LastPush,
   ListedRepository,
   Members,
+  MergeVelocity,
   OrganizationStats,
+  ReleaseCadence,
   Releases,
   Repository,
   Stats,
   TopRepository,
+  WorkflowRuns,
   YearCount,
 } from './resources';
 
@@ -36,6 +41,16 @@ export abstract class RepositoryData {
   abstract readonly issues: () => Loader<IssuesAndPullRequests>;
   abstract readonly commits: () => Loader<Commit[]>;
   abstract readonly releases: () => Loader<Releases>;
+  /** FR-REPO-13, for its Pull requests tab. */
+  abstract readonly mergeVelocity: () => Loader<MergeVelocity>;
+  /** FR-REPO-13, for its Issues tab. */
+  abstract readonly issueAge: () => Loader<IssueAge>;
+  /** FR-REPO-14, for its Activity tab. */
+  abstract readonly workflowRuns: () => Loader<WorkflowRuns>;
+  /** FR-REPO-15, for its Activity tab. */
+  abstract readonly codeFrequency: () => Loader<CodeFrequency>;
+  /** FR-REPO-16, for its Releases tab. */
+  abstract readonly releaseCadence: () => Loader<ReleaseCadence>;
 }
 
 /**

@@ -10,6 +10,7 @@ import { RelativeTime } from '../format/relative-time';
 import { Icon, IconName } from '../icon/icon';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
+import { RepositoryIssueAge, RepositoryMergeVelocity } from './velocity';
 import {
   ALL_ISSUES,
   ALL_PULL_REQUESTS,
@@ -146,15 +147,21 @@ export function stateSegments(
 }
 
 /**
- * A repository's Issues tab, or its Pull requests tab (FR-REPO-06): how many there are in each
- * state, as counts and as a split bar, then those of its 20 issues and pull requests that
+ * A repository's Issues tab, or its Pull requests tab (FR-REPO-06): how long its open issues
+ * have been open, or how fast its pull requests are merged (FR-REPO-13), then how many there are
+ * in each state, as counts and as a split bar, and those of its 20 issues and pull requests that
  * changed last that are of the tab's kind.
  */
 @Component({
   selector: 'app-repository-issues-tab',
-  imports: [IssueRows, Loaded, SplitBar, Widget],
+  imports: [IssueRows, Loaded, RepositoryIssueAge, RepositoryMergeVelocity, SplitBar, Widget],
   template: `
     <div class="stack-v">
+      @if (kind() === 'pull_request') {
+        <app-repository-merge-velocity />
+      } @else {
+        <app-repository-issue-age />
+      }
       <app-widget
         [heading]="kind() === 'issue' ? 'Issues' : 'Pull requests'"
         [empty]="empty()"
@@ -236,7 +243,7 @@ export class RepositoryIssuesTab {
           headers: STATE_HEADERS,
           rows: segments.map((segment) => ({
             label: segment.label,
-            value: exactNumber(segment.value),
+            values: [exactNumber(segment.value)],
           })),
         }
       : undefined;

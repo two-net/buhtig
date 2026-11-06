@@ -69,6 +69,8 @@ describe('RepositoryReleasesTab', () => {
           useValue: {
             releases: () => ({ state: releases, retry }),
             stats: () => ({ state: statsState, retry: () => {} }),
+            // The figures above the list, which load apart, and are tested apart.
+            releaseCadence: () => ({ state: signal({ status: 'loading' }), retry: () => {} }),
           },
         },
       ],
@@ -95,7 +97,10 @@ describe('RepositoryReleasesTab', () => {
   }
 
   it('lists the latest releases with their tag, name, date and what each was made from (FR-REPO-08)', async () => {
-    expect(element().querySelector('h2')?.textContent?.trim()).toBe('Releases');
+    expect(element().querySelector('app-repository-release-cadence')).not.toBeNull();
+    expect(element().querySelector('.stack-v > app-widget h2')?.textContent?.trim()).toBe(
+      'Releases',
+    );
     await answer(RELEASES);
     expect(
       rows().map((row) => [

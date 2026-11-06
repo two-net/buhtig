@@ -53,6 +53,31 @@ const percentFormat = once(
   (locale?: string) =>
     new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }),
 );
+const durationFormat = once(
+  (unit: string, locale?: string) =>
+    new Intl.NumberFormat(locale, {
+      style: 'unit',
+      unit,
+      unitDisplay: 'long',
+      maximumFractionDigits: 1,
+    }),
+);
+
+const DAY_S = 24 * 60 * 60;
+
+/**
+ * The units of a span of time, each with its length in seconds and the span from which the
+ * next is used instead: "36 hours" reads better than "1.5 days", and "45 days" than
+ * "1.5 months".
+ */
+const DURATION_UNITS: [unit: string, seconds: number, below: number][] = [
+  ['second', 1, 60],
+  ['minute', 60, 60 * 60],
+  ['hour', 60 * 60, 2 * DAY_S],
+  ['day', DAY_S, 60 * DAY_S],
+  ['month', 30.44 * DAY_S, 365 * DAY_S],
+  ['year', 365.25 * DAY_S, Infinity],
+];
 
 /** A number in short, such as "12.3K" for 12,345. */
 export function compactNumber(value: number, locale?: string): string {
@@ -145,4 +170,14 @@ export function list(items: string[], locale?: string): string {
 export function percent(share: number, locale?: string): string {
   const format = percentFormat(locale);
   return share > 0 && share < 0.001 ? `<${format.format(0.001)}` : format.format(share);
+}
+
+/**
+ * How long a span of `seconds` is, in the largest unit it fills, to a tenth, such as "4.2
+ * minutes", "36 hours", "12 days" or "2.3 months".
+ */
+export function duration(seconds: number, locale?: string): string {
+  const span = Math.max(0, seconds);
+  const [unit, size] = DURATION_UNITS.find(([, , below]) => span < below)!;
+  return durationFormat(unit, locale).format(span / size);
 }

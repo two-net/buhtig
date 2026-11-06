@@ -9,8 +9,8 @@ describe('DataTable (NFR-UX-04)', () => {
     fixture.componentRef.setInput('table', {
       headers: ['Repository', 'Stars'],
       rows: [
-        { label: 'widget', value: '12,345' },
-        { label: 'gadget', value: '1' },
+        { label: 'widget', values: ['12,345'] },
+        { label: 'gadget', values: ['1'] },
       ],
     });
     await fixture.whenStable();
@@ -44,6 +44,30 @@ describe('DataTable (NFR-UX-04)', () => {
     ).toEqual([
       ['widget', 'row', '12,345', true],
       ['gadget', 'row', '1', true],
+    ]);
+  });
+
+  it('has a column for each figure of a row, as of lines added and deleted', async () => {
+    fixture.componentRef.setInput('table', {
+      headers: ['Week of', 'Additions', 'Deletions'],
+      rows: [{ label: 'Oct 26, 2025', values: ['1,200', '340'] }],
+    });
+    await fixture.whenStable();
+    expect(
+      [...element().querySelectorAll('thead th')].map((header) => [
+        header.textContent?.trim(),
+        header.classList.contains('num'),
+      ]),
+    ).toEqual([
+      ['Week of', false],
+      ['Additions', true],
+      ['Deletions', true],
+    ]);
+    const cells = [...element().querySelectorAll('tbody tr > *')];
+    expect(cells.map((cell) => [cell.tagName, cell.textContent?.trim()])).toEqual([
+      ['TH', 'Oct 26, 2025'],
+      ['TD', '1,200'],
+      ['TD', '340'],
     ]);
   });
 

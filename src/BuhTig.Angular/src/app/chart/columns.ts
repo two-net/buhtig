@@ -6,6 +6,11 @@ import { READ_WITH_KEYS } from './messages';
 /** One of a chart's columns, such as a week: its figure, and what it is of. */
 export interface Column {
   value: number;
+  /**
+   * A second figure, drawn down from the baseline as `value` is drawn up, such as the lines
+   * deleted in a week beside those added.
+   */
+  below?: number;
   /** What it is of, as its tooltip says, such as "Week of Oct 26, 2025". */
   label: string;
 }
@@ -24,13 +29,18 @@ export interface Tick {
  * End once the chart has focus, and Esc stops (NFR-UX-03). Its bars grow as the widget around it
  * makes its entrance (FR-ANIM-06).
  *
+ * Columns with a second figure, `below`, make it diverge: each column's bars go up and down from
+ * a baseline in the middle, against one scale, such as the lines added and deleted each week,
+ * and its tooltip tells both. Which is which is told by where each bar is, not only by its color
+ * (NFR-UX-05).
+ *
  * Assistive technology reads its summary, and the widget around it shows its data as a table on
  * request (NFR-UX-04).
  */
 @Component({
   selector: 'app-column-chart',
   template: `
-    <div class="colchart" [style.--plot-h.px]="height()">
+    <div class="colchart" [class.diverging]="diverging()" [style.--plot-h.px]="height()">
       <div
         class="plot"
         [class.capped]="caps()"
@@ -54,13 +64,19 @@ export interface Tick {
               class="col"
               [class.active]="active() === $index"
               [style.--h]="bar.height + '%'"
+              [style.--d]="bar.depth + '%'"
               [style.--i]="$index"
               (pointermove)="point($index, $event)"
             >
-              @if (caps() && bar.value > 0) {
-                <b>{{ bar.cap }}</b>
+              @if (diverging()) {
+                <span class="half up"><i></i></span>
+                <span class="half down"><i></i></span>
+              } @else {
+                @if (caps() && bar.value > 0) {
+                  <b>{{ bar.cap }}</b>
+                }
+                <i></i>
               }
-              <i></i>
             </div>
           }
         </div>
@@ -86,6 +102,8 @@ export class ColumnChart {
   readonly ticks = input<Tick[]>([]);
   /** What the figures count, such as "commits", as the tooltip says them. */
   readonly unit = input('');
+  /** What the figures below the baseline count, such as "deletions", if any are. */
+  readonly belowUnit = input('');
   /** What the chart shows, in a sentence, as assistive technology reads it. */
   readonly summary = input.required<string>();
   readonly height = input(180);
@@ -98,23 +116,42 @@ export class ColumnChart {
 
   protected readonly label = computed(() => `${this.summary()} ${READ_WITH_KEYS}`);
 
-  /** The top of the chart: a round figure at least as high as the tallest column. */
-  private readonly top = computed(() =>
-    niceMax(Math.max(0, ...this.columns().map((c) => c.value))),
+  /** Whether the columns go down from the baseline as well as up. */
+  protected readonly diverging = computed(() =>
+    this.columns().some((column) => column.below !== undefined),
   );
 
+  /** The top of the chart: a round figure at least as high as the tallest bar. */
+  private readonly top = computed(() =>
+    niceMax(Math.max(0, ...this.columns().flatMap((c) => [c.value, c.below ?? 0]))),
+  );
+
+  /**
+   * The gridlines, at nothing, halfway and the top, or, when the chart diverges, at the top,
+   * nothing in the middle, and as far below.
+   */
   protected readonly grid = computed(() => {
     const top = this.top();
+    if (this.diverging()) {
+      return [-top, 0, top].map((value) => ({
+        value,
+        at: 50 + (value / top) * 50,
+        label: compactNumber(value),
+      }));
+    }
     return [0, top / 2, top]
       .filter((value) => Number.isInteger(value))
       .map((value) => ({ value, at: (value / top) * 100, label: compactNumber(value) }));
   });
 
+  /** Each bar's height, and that of the bar below the baseline, as shares of their space. */
   protected readonly bars = computed(() => {
     const top = this.top();
-    return this.columns().map(({ value }) => ({
+    const share = (value: number) => ((value / top) * 100).toFixed(2);
+    return this.columns().map(({ value, below }) => ({
       value,
-      height: ((value / top) * 100).toFixed(2),
+      height: share(value),
+      depth: share(below ?? 0),
       cap: compactNumber(value),
     }));
   });
@@ -164,19 +201,19 @@ export class ColumnChart {
 
   private show(index: number, event?: PointerEvent): void {
     this.active.set(index);
-    const bar = this.host.nativeElement.querySelectorAll('.col i')[index];
+    const bar = this.host.nativeElement.querySelectorAll('.col')[index]?.querySelector('i');
     const column = this.columns()[index];
-    if (bar === undefined || column === undefined) {
+    if (!bar || column === undefined) {
       return;
     }
-    const unit = this.unit();
+    const figure = (value: number, unit: string) =>
+      unit ? `${exactNumber(value)} ${unit}` : exactNumber(value);
+    const value = figure(column.value, this.unit());
     this.tip.show(
       bar,
-      {
-        value: unit ? `${exactNumber(column.value)} ${unit}` : exactNumber(column.value),
-        label: column.label,
-        color: 'var(--s1)',
-      },
+      column.below === undefined
+        ? { value, label: column.label, color: 'var(--s1)' }
+        : { value: `${value}, ${figure(column.below, this.belowUnit())}`, label: column.label },
       event,
     );
   }

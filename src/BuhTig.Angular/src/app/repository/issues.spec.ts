@@ -153,7 +153,13 @@ function provideIssues(
     provideRouter([]),
     {
       provide: RepositoryData,
-      useValue: { name: signal('acme/widget'), issues: () => ({ state: issues, retry }) },
+      useValue: {
+        name: signal('acme/widget'),
+        issues: () => ({ state: issues, retry }),
+        // The figures above the tab's list, which load apart, and are tested apart.
+        mergeVelocity: () => ({ state: signal({ status: 'loading' }), retry: () => {} }),
+        issueAge: () => ({ state: signal({ status: 'loading' }), retry: () => {} }),
+      },
     },
   ];
 }
@@ -225,7 +231,10 @@ describe('RepositoryIssuesTab', () => {
   });
 
   const element = () => fixture.nativeElement as HTMLElement;
-  const heading = () => element().querySelector('h2')?.textContent?.trim();
+  /** The heading of the tab's list, below its figures. */
+  const heading = () => element().querySelector('.stack-v > app-widget h2')?.textContent?.trim();
+  const figures = () =>
+    element().querySelector('app-repository-issue-age, app-repository-merge-velocity');
   const counts = () =>
     [...element().querySelectorAll('.list-tabs li')].map((count) => [
       count.textContent?.replace(/\s+/g, ' ').trim(),
@@ -244,6 +253,12 @@ describe('RepositoryIssuesTab', () => {
     issues.set({ status: 'ready', data });
     await fixture.whenStable();
   }
+
+  it('shows how long issues stay open, or how fast pull requests are merged, above (FR-REPO-13)', async () => {
+    expect(figures()?.tagName.toLowerCase()).toBe('app-repository-issue-age');
+    await show('pull_request', ISSUES);
+    expect(figures()?.tagName.toLowerCase()).toBe('app-repository-merge-velocity');
+  });
 
   it('counts issues by state, and lists the issues that changed last (FR-REPO-06)', async () => {
     expect(heading()).toBe('Issues');

@@ -10,6 +10,7 @@ import { READ_WITH_KEYS } from './messages';
     [columns]="columns()"
     [ticks]="ticks()"
     [unit]="unit()"
+    [belowUnit]="belowUnit()"
     [caps]="caps()"
     summary="5,042 commits in 4 weeks. The busiest was the week of Oct 12, with 4,200."
   />`,
@@ -28,6 +29,7 @@ class Host {
     { at: 3, label: 'Nov', minor: true },
   ]);
   readonly unit = signal('commits');
+  readonly belowUnit = signal('');
   readonly caps = signal(false);
 }
 
@@ -223,6 +225,59 @@ describe('ColumnChart', () => {
     await fixture.whenStable();
     expect(active()).toBe(2);
     expect(plot().classList).not.toContain('kbd');
+  });
+
+  describe('with figures below the baseline, as of lines added and deleted', () => {
+    beforeEach(async () => {
+      await set((host) => {
+        host.columns.set([
+          { value: 1_200, below: 340, label: 'Week of Oct 5, 2026' },
+          { value: 0, below: 4_200, label: 'Week of Oct 12, 2026' },
+          { value: 8, below: 0, label: 'Week of Oct 19, 2026' },
+        ]);
+        host.unit.set('additions');
+        host.belowUnit.set('deletions');
+        host.caps.set(true);
+      });
+    });
+
+    const depths = () => columns().map((column) => column.style.getPropertyValue('--d'));
+    const halves = () =>
+      columns().map((column) =>
+        [...column.querySelectorAll('.half')].map((half) => half.className),
+      );
+
+    it('draws each column up and down from a baseline in the middle, against one top', () => {
+      expect(element().querySelector('.colchart')?.classList).toContain('diverging');
+      expect(halves()).toEqual([
+        ['half up', 'half down'],
+        ['half up', 'half down'],
+        ['half up', 'half down'],
+      ]);
+      // The top is 5,000, a round figure above the tallest bar, which is one below.
+      expect(heights()).toEqual(['24.00%', '0.00%', '0.16%']);
+      expect(depths()).toEqual(['6.80%', '84.00%', '0.00%']);
+      // No figures above columns that go both ways.
+      expect(element().querySelector('.col b')).toBeNull();
+    });
+
+    it('draws gridlines as far below the baseline as above it', () => {
+      expect(gridlines()).toEqual([
+        ['-5K', '0%', false],
+        ['0', '50%', true],
+        ['5K', '100%', false],
+      ]);
+    });
+
+    it('tells both figures of the column pointed at, by the pointer and the keyboard', async () => {
+      columns()[0].dispatchEvent(new MouseEvent('pointermove'));
+      await fixture.whenStable();
+      expect(told()).toBe('1,200 additions, 340 deletions · Week of Oct 5, 2026');
+      // Two figures, of two colors, so the tooltip is keyed to neither.
+      expect(tip.shown()?.color).toBeUndefined();
+      await press('End');
+      expect(told()).toBe('8 additions, 0 deletions · Week of Oct 19, 2026');
+    });
   });
 
   it('grows its columns one after another as the widget makes its entrance (FR-ANIM-06)', () => {

@@ -567,6 +567,159 @@ describe('Resources', () => {
     expect(seen.value?.releases.map((release) => release.target)).toEqual([undefined, undefined]);
   });
 
+  it('gives how the pull requests updated last came to an end (FR-REPO-13)', () => {
+    const seen = outcome(resources.mergeVelocity('acme', 'widget'));
+    http.expectOne(`${WIDGET}/merge-velocity`).flush({
+      sampled: 100,
+      merged: 61,
+      closed: 9,
+      median_time_to_merge: 172_800,
+      truncated: true,
+    });
+    expect(seen.value).toEqual({
+      sampled: 100,
+      merged: 61,
+      closed: 9,
+      medianTimeToMerge: 172_800,
+      truncated: true,
+    });
+
+    const none = outcome(resources.mergeVelocity('acme', 'widget'));
+    http.expectOne(`${WIDGET}/merge-velocity`).flush({
+      sampled: 0,
+      merged: -1,
+      closed: 0,
+      median_time_to_merge: null,
+      truncated: false,
+    });
+    expect(none.value).toEqual({
+      sampled: 0,
+      merged: 0,
+      closed: 0,
+      medianTimeToMerge: undefined,
+      truncated: false,
+    });
+  });
+
+  it('gives how long the open issues updated last have been open (FR-REPO-13)', () => {
+    const seen = outcome(resources.issueAge('acme', 'widget'));
+    http
+      .expectOne(`${WIDGET}/issue-age`)
+      .flush({ sampled: 37, median_age: 5_184_000, truncated: true });
+    expect(seen.value).toEqual({ sampled: 37, medianAge: 5_184_000, truncated: true });
+  });
+
+  it('gives how the latest workflow runs fared, linking only to GitHub (FR-REPO-14)', () => {
+    const seen = outcome(resources.workflowRuns('acme', 'widget'));
+    http.expectOne(`${WIDGET}/workflow-runs`).flush({
+      branch: 'main',
+      sampled: 50,
+      passed: 45,
+      failed: 3,
+      average_duration: 252,
+      latest: {
+        name: 'CI',
+        status: 'completed',
+        conclusion: 'success',
+        started_at: '2026-10-22T10:00:00Z',
+        url: 'https://github.com/acme/widget/actions/runs/7',
+      },
+      hidden: false,
+    });
+    expect(seen.value).toEqual({
+      branch: 'main',
+      sampled: 50,
+      passed: 45,
+      failed: 3,
+      averageDuration: 252,
+      latest: {
+        name: 'CI',
+        status: 'completed',
+        conclusion: 'success',
+        startedAt: new Date('2026-10-22T10:00:00Z'),
+        url: 'https://github.com/acme/widget/actions/runs/7',
+      },
+      hidden: false,
+    });
+
+    const hidden = outcome(resources.workflowRuns('acme', 'widget'));
+    http.expectOne(`${WIDGET}/workflow-runs`).flush({
+      branch: null,
+      sampled: 0,
+      passed: 0,
+      failed: 0,
+      average_duration: null,
+      latest: { name: '', status: null, conclusion: null, started_at: null, url: 'javascript:x' },
+      hidden: true,
+    });
+    expect(hidden.value).toEqual({
+      branch: undefined,
+      sampled: 0,
+      passed: 0,
+      failed: 0,
+      averageDuration: undefined,
+      latest: {
+        name: undefined,
+        status: undefined,
+        conclusion: undefined,
+        startedAt: undefined,
+        url: undefined,
+      },
+      hidden: true,
+    });
+  });
+
+  it('totals the weeks of code frequency, leaving out those it cannot date, or fails with Computing (FR-REPO-15)', () => {
+    const seen = outcome(resources.codeFrequency('acme', 'widget'));
+    http.expectOne(`${WIDGET}/code-frequency`).flush({
+      weeks: [
+        { week: '2026-10-18', additions: 1_200, deletions: 340 },
+        { week: 'soon', additions: 5, deletions: 5 },
+        { week: '2026-10-25', additions: 3, deletions: 0 },
+      ],
+      too_large: false,
+    });
+    expect(seen.value).toEqual({
+      weeks: [
+        { start: new Date('2026-10-18T00:00:00Z'), additions: 1_200, deletions: 340 },
+        { start: new Date('2026-10-25T00:00:00Z'), additions: 3, deletions: 0 },
+      ],
+      additions: 1_203,
+      deletions: 340,
+      tooLarge: false,
+    });
+
+    const large = outcome(resources.codeFrequency('acme', 'widget'));
+    http.expectOne(`${WIDGET}/code-frequency`).flush({ weeks: [], too_large: true });
+    expect(large.value?.tooLarge).toBe(true);
+
+    const computing = outcome(resources.codeFrequency('acme', 'widget'));
+    http.expectOne(`${WIDGET}/code-frequency`).flush(null, { status: 202, statusText: 'Accepted' });
+    expect(computing.error).toBeInstanceOf(Computing);
+  });
+
+  it('gives how often the repository was released, and downloaded (FR-REPO-16)', () => {
+    const seen = outcome(resources.releaseCadence('acme', 'widget'));
+    http.expectOne(`${WIDGET}/release-cadence`).flush({
+      sampled: 100,
+      stable: 80,
+      prereleases: 20,
+      average_interval: 1_036_800,
+      assets: 240,
+      downloads: 123_456,
+      truncated: true,
+    });
+    expect(seen.value).toEqual({
+      sampled: 100,
+      stable: 80,
+      prereleases: 20,
+      averageInterval: 1_036_800,
+      assets: 240,
+      downloads: 123_456,
+      truncated: true,
+    });
+  });
+
   it("gives an organization's or a user's repository's commit activity, or Computing", () => {
     const seen = outcome(
       resources.accountActivity({ kind: 'organization', org: 'acme' }, 'widget'),

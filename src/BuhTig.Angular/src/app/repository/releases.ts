@@ -4,18 +4,21 @@ import { exactDay, exactTime } from '../format/format';
 import { Icon } from '../icon/icon';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
+import { RepositoryReleaseCadence } from './cadence';
 import { LATEST, NO_RELEASES, PRERELEASE } from './messages';
 
 /**
- * A repository's Releases tab: its 5 latest releases (FR-REPO-08), each with its tag, linking to
- * its page on GitHub (FR-REPO-12), its name, the date it was published, and what it was made
- * from. The one GitHub marks as the latest says so.
+ * A repository's Releases tab: how often it is released, and downloaded (FR-REPO-16), then its 5
+ * latest releases (FR-REPO-08), each with its tag, linking to its page on GitHub (FR-REPO-12),
+ * its name, the date it was published, and what it was made from. The one GitHub marks as the
+ * latest says so.
  */
 @Component({
   selector: 'app-repository-releases-tab',
-  imports: [Icon, Loaded, Widget],
+  imports: [Icon, Loaded, RepositoryReleaseCadence, Widget],
   template: `
     <div class="stack-v">
+      <app-repository-release-cadence />
       <app-widget
         heading="Releases"
         [empty]="NO_RELEASES"

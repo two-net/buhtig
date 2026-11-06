@@ -13,6 +13,7 @@ import { Component, ViewEncapsulation } from '@angular/core';
     './notice.css',
     './stats.css',
     './charts.css',
+    './diverging.css',
     './lists.css',
     './sidebar.css',
   ],

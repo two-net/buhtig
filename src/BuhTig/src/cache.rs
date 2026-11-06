@@ -309,10 +309,8 @@ impl Fetch<'_> {
         let Some(Value::Array(items)) = data.get_mut("items") else {
             return;
         };
-        for item in items {
-            if let Value::Object(item) = item {
-                item.retain(|key, _| fields.contains(&key.as_str()));
-            }
+        for item in items.iter_mut().filter(|item| item.is_object()) {
+            keep(item, fields);
         }
     }
 }
@@ -1274,6 +1272,33 @@ fn strip_permissions(data: &mut Value) {
         Value::Object(object) => {
             object.remove("permissions");
             object.values_mut().for_each(strip_permissions);
+        }
+        _ => {}
+    }
+}
+
+/// Leaves only `fields` of `data`, an object, or of each object in it, if it is a list.
+/// Each field is the name of a member, kept whole, or `member.field` to keep only `field`
+/// of the member, such as `assets.download_count` of a release, so that the uploader of
+/// each of its assets is not kept too.
+fn keep(data: &mut Value, fields: &[&str]) {
+    match data {
+        Value::Array(items) => items.iter_mut().for_each(|item| keep(item, fields)),
+        Value::Object(object) => {
+            fn member(field: &str) -> &str {
+                field.split_once('.').map_or(field, |(member, _)| member)
+            }
+            object.retain(|key, _| fields.iter().any(|field| member(field) == key));
+            for (key, value) in object.iter_mut() {
+                if fields.contains(&key.as_str()) {
+                    continue;
+                }
+                let inner: Vec<&str> = fields
+                    .iter()
+                    .filter_map(|field| field.strip_prefix(key.as_str())?.strip_prefix('.'))
+                    .collect();
+                keep(value, &inner);
+            }
         }
         _ => {}
     }
@@ -2805,6 +2830,41 @@ mod tests {
             ]
         );
         assert_eq!(rows[0].data, json!({"items": items, "truncated": false}));
+    }
+
+    #[tokio::test]
+    async fn lists_may_keep_only_some_fields_of_members_of_each_item() {
+        let setup = setup().await;
+        setup.answer(|_| {
+            answer(
+                200,
+                &[],
+                r#"[{"tag_name": "v2", "body": "Notes",
+                     "assets": [{"name": "a.zip", "download_count": 3, "uploader": {"login": "alice"}},
+                                {"name": "b.zip", "download_count": 4}, 7],
+                     "author": {"login": "alice", "id": 1}},
+                    {"tag_name": "v1", "assets": [], "author": null}]"#,
+            )
+        });
+        let releases = path(&["repos", "acme", "widget", "releases"]);
+        let fields = ["tag_name", "assets.download_count", "assets.name", "author"];
+
+        let trimmed = data(
+            setup
+                .cache
+                .get_list_of_at(&visitor(), "/acme/widget", &releases, 10, &fields, at(0))
+                .await,
+        );
+        assert_eq!(
+            trimmed.data.items,
+            [
+                json!({"tag_name": "v2",
+                       "assets": [{"name": "a.zip", "download_count": 3},
+                                  {"name": "b.zip", "download_count": 4}, 7],
+                       "author": {"login": "alice", "id": 1}}),
+                json!({"tag_name": "v1", "assets": [], "author": null}),
+            ]
+        );
     }
 
     #[tokio::test]

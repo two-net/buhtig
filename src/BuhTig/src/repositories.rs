@@ -3,8 +3,11 @@
 //! renamed or transferred (FR-NAV-05), its stat cards (FR-REPO-02), its commit activity
 //! (FR-REPO-03), its languages (FR-REPO-04), its top contributors (FR-REPO-05), its issues
 //! and pull requests (FR-REPO-06), its recent commits (FR-REPO-07) and its releases
-//! (FR-REPO-08).
+//! (FR-REPO-08). Then how fast its pull requests are merged and how long its issues stay
+//! open (FR-REPO-13), how its workflow runs fare (FR-REPO-14), how many lines change each
+//! week (FR-REPO-15), and how often it is released, and downloaded (FR-REPO-16).
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -13,7 +16,7 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
-use sea_orm::sea_query::prelude::chrono::SecondsFormat;
+use sea_orm::sea_query::prelude::chrono::{Datelike, SecondsFormat, TimeDelta};
 use serde_json::{Value, json};
 use tracing::error;
 use url::Url;
@@ -43,6 +46,45 @@ const COMMITS: usize = 10;
 
 /// FR-REPO-08: the releases the widget lists.
 const RELEASES: usize = 5;
+
+/// FR-REPO-13: the pull requests updated last whose merges the Pull requests tab tells,
+/// and the open issues and pull requests updated last among which the Issues tab tells the
+/// age of the issues.
+const VELOCITY_SAMPLE: usize = 100;
+
+/// FR-REPO-13: what is kept of each pull request, as the search for them finds them, and of
+/// each open issue.
+const PULL_FIELDS: &[&str] = &["created_at", "closed_at", "pull_request.merged_at"];
+const ISSUE_FIELDS: &[&str] = &["created_at", "pull_request"];
+
+/// FR-REPO-14: the latest workflow runs on the default branch whose health the Activity tab
+/// tells, and what is kept of each.
+const WORKFLOW_RUNS: usize = 50;
+const RUN_FIELDS: &[&str] = &[
+    "name",
+    "status",
+    "conclusion",
+    "run_started_at",
+    "created_at",
+    "updated_at",
+    "html_url",
+];
+
+/// FR-REPO-14: the conclusions of the workflow runs that failed. Those cancelled, skipped,
+/// neutral or stale neither passed nor failed.
+const FAILED: &[&str] = &["failure", "timed_out", "startup_failure"];
+
+/// FR-REPO-16: the latest releases whose cadence and downloads the Releases tab tells, and
+/// what is kept of each: of its assets, only how many times each was downloaded.
+const RELEASE_HISTORY: usize = 100;
+const RELEASE_FIELDS: &[&str] = &[
+    "tag_name",
+    "draft",
+    "prerelease",
+    "published_at",
+    "created_at",
+    "assets.download_count",
+];
 
 /// The search for a repository's open pull requests. Its stat cards and its issues and
 /// pull requests widget both count them, so the same search is cached once for both.
@@ -262,7 +304,7 @@ pub async fn contributors(
         )
         .await;
     let list = match list {
-        Err(error) if too_large(&error) => {
+        Err(error) if refused(&error) => {
             return respond(json!({ "contributors": [], "count": null, "too_large": true }));
         }
         list => match data(list) {
@@ -275,7 +317,7 @@ pub async fn contributors(
             .get_count(&repository.viewer, &repository.dashboard, &path)
             .await;
         match count {
-            Err(error) if too_large(&error) => None,
+            Err(error) if refused(&error) => None,
             count => match data(count) {
                 Ok(count) => Some(count.data.max(listed(&list))),
                 Err(code) => return status(code),
@@ -291,10 +333,11 @@ pub async fn contributors(
     respond(json!({ "contributors": contributors, "count": count, "too_large": false }))
 }
 
-/// Whether GitHub refused to list or count a repository's contributors, as it does when the
-/// history is too large to. The viewer may see the repository, so GitHub refuses the list
+/// Whether GitHub refused to list or count what is under a repository: its contributors,
+/// when the history is too large to, or its workflow runs, to a token without access to
+/// Actions (FR-REPO-14). The viewer may see the repository, so GitHub refuses the list
 /// itself. A rate limit is not a refusal.
-fn too_large(error: &cache::Error) -> bool {
+fn refused(error: &cache::Error) -> bool {
     matches!(error, cache::Error::GitHub(github::Error::Forbidden { .. }))
 }
 
@@ -429,6 +472,248 @@ pub async fn releases(
     };
     let releases: Vec<Value> = list.items.iter().filter_map(listed_release).collect();
     respond(json!({ "releases": releases, "count": count }))
+}
+
+/// `/-/api/repositories/{owner}/{repo}/merge-velocity`: how the repository's 100 pull
+/// requests updated last came to an end (FR-REPO-13),
+///
+/// ```json
+/// {"sampled": 100, "merged": 61, "closed": 9, "median_time_to_merge": 172800 | null,
+///  "truncated": true}
+/// ```
+///
+/// `sampled` is how many pull requests were read, `merged` how many of them were merged,
+/// and `closed` how many were closed without being merged. `median_time_to_merge` is the
+/// median time, in seconds, from opening to merging of those merged, `null` if none were.
+/// `truncated` says whether the repository has more pull requests than were read. One that
+/// has turned pull requests off on GitHub has none, and GitHub is not asked.
+///
+/// They are searched for, as issues, rather than listed as pull requests: GitHub's list
+/// gives each pull request's head repository, which GitHub may mark private, as a fork
+/// made private later, and the shared cache keeps nothing so marked (FR-DATA-04).
+///
+/// Its statuses are those of [`commit_activity`].
+pub async fn merge_velocity(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    if !enabled(&repository.data, "has_pull_requests") {
+        return respond(merges(&List::default()));
+    }
+    let path = github::Path::new(["search", "issues"])
+        .expect("names are neither empty nor dots")
+        .query("q", &format!("repo:{} is:pr", repository.name))
+        .query("sort", "updated")
+        .query("order", "desc");
+    let list = cache
+        .get_list_of(
+            &repository.viewer,
+            &repository.dashboard,
+            &path,
+            VELOCITY_SAMPLE,
+            PULL_FIELDS,
+        )
+        .await;
+    match data(list) {
+        Ok(list) => respond(merges(&list.data)),
+        Err(code) => status(code),
+    }
+}
+
+/// `/-/api/repositories/{owner}/{repo}/issue-age`: how long the open issues among the
+/// repository's 100 open issues and pull requests updated last have been open (FR-REPO-13),
+///
+/// ```json
+/// {"sampled": 37, "median_age": 5184000 | null, "truncated": true}
+/// ```
+///
+/// `sampled` is how many open issues were read, and `median_age` the median time, in
+/// seconds, since they were opened, `null` if there were none. `truncated` says whether the
+/// repository has more open issues and pull requests than were read. One that has turned
+/// issues off on GitHub has none, and GitHub is not asked.
+///
+/// Its statuses are those of [`commit_activity`].
+pub async fn issue_age(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    if !enabled(&repository.data, "has_issues") {
+        return respond(ages(&List::default(), ChronoUtc::now()));
+    }
+    let path = repository
+        .path(&["issues"])
+        .query("state", "open")
+        .query("sort", "updated")
+        .query("direction", "desc");
+    let list = cache
+        .get_list_of(
+            &repository.viewer,
+            &repository.dashboard,
+            &path,
+            VELOCITY_SAMPLE,
+            ISSUE_FIELDS,
+        )
+        .await;
+    match data(list) {
+        Ok(list) => respond(ages(&list.data, ChronoUtc::now())),
+        Err(code) => status(code),
+    }
+}
+
+/// `/-/api/repositories/{owner}/{repo}/workflow-runs`: how the repository's 50 latest
+/// GitHub Actions workflow runs on its default branch fared (FR-REPO-14),
+///
+/// ```json
+/// {"branch": "main" | null, "sampled": 50, "passed": 45, "failed": 3,
+///  "average_duration": 252 | null,
+///  "latest": {"name": "CI", "status": "completed", "conclusion": "success",
+///             "started_at": …, "url": …} | null,
+///  "hidden": false}
+/// ```
+///
+/// Only runs for pushes are read: a run for a pull request from a fork's branch of the same
+/// name is not the default branch's, and GitHub gives with it the fork, which it may mark
+/// private, while the shared cache keeps nothing so marked (FR-DATA-04). `sampled` is how
+/// many runs were read. Of them, `passed` succeeded and
+/// `failed` failed, timed out or could not start. Those cancelled, skipped, neutral or
+/// stale did neither. `average_duration` is the mean time, in seconds, that the completed
+/// runs took, `null` if none did. `latest` is the latest run, with its status and its
+/// conclusion as GitHub names them, and `url` its page on GitHub (FR-REPO-12). A
+/// repository without a default branch has no runs, and GitHub is not asked. `hidden` says
+/// that GitHub refused to list the runs to the viewer's credential, as to a fine-grained
+/// personal access token without access to Actions.
+///
+/// Its statuses are those of [`commit_activity`].
+pub async fn workflow_runs(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    let Some(branch) = text(&repository.data, "default_branch") else {
+        return respond(health(None, &List::default(), false));
+    };
+    let path = repository
+        .path(&["actions", "runs"])
+        .query("branch", branch)
+        .query("event", "push")
+        .query("exclude_pull_requests", "true");
+    let list = cache
+        .get_list_of(
+            &repository.viewer,
+            &repository.dashboard,
+            &path,
+            WORKFLOW_RUNS,
+            RUN_FIELDS,
+        )
+        .await;
+    match list {
+        Err(error) if refused(&error) => respond(health(Some(branch), &List::default(), true)),
+        list => match data(list) {
+            Ok(list) => respond(health(Some(branch), &list.data, false)),
+            Err(code) => status(code),
+        },
+    }
+}
+
+/// `/-/api/repositories/{owner}/{repo}/code-frequency`: how many lines were added to and
+/// deleted from the repository's default branch in each of the last 52 weeks
+/// (FR-REPO-15), oldest first,
+///
+/// ```json
+/// {"weeks": [{"week": "2025-10-26", "additions": 1200, "deletions": 340}, …],
+///  "too_large": false}
+/// ```
+///
+/// Each week starts on the Sunday whose date it gives, in UTC, as GitHub counts them, and
+/// the last is the current week. A week that GitHub leaves out had no changes. An empty
+/// repository has no weeks (FR-REPO-11). GitHub does not compute the code frequency of
+/// repositories with 10,000 commits or more: `too_large` then says so, and there are no
+/// weeks.
+///
+/// Its statuses are those of [`commit_activity`]: 202 while GitHub is still computing it.
+pub async fn code_frequency(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    let path = repository.path(&["stats", "code_frequency"]);
+    let frequency = cache
+        .get(&repository.viewer, &repository.dashboard, &path)
+        .await;
+    let frequency = match frequency {
+        // GitHub's answer for a repository with 10,000 commits or more.
+        Err(cache::Error::GitHub(github::Error::Status { status: 422, .. })) => {
+            return respond(json!({ "weeks": [], "too_large": true }));
+        }
+        frequency => match data(frequency) {
+            Ok(frequency) => frequency.data,
+            Err(code) => return status(code),
+        },
+    };
+    match changes(&frequency, ChronoUtc::now()) {
+        Some(weeks) => respond(json!({ "weeks": weeks, "too_large": false })),
+        None => status(StatusCode::BAD_GATEWAY),
+    }
+}
+
+/// `/-/api/repositories/{owner}/{repo}/release-cadence`: how often the repository was
+/// released, and how many times its releases' files were downloaded, over its 100 latest
+/// releases (FR-REPO-16),
+///
+/// ```json
+/// {"sampled": 100, "stable": 80, "prereleases": 20, "average_interval": 1036800 | null,
+///  "assets": 240, "downloads": 123456, "truncated": true}
+/// ```
+///
+/// Drafts are left out, as from the releases widget, and so are releases without a tag.
+/// `sampled` is how many releases are left, `stable` and `prereleases` how many of them are
+/// each. `average_interval` is the mean time, in seconds, between one release and the next,
+/// `null` with fewer than two. `assets` is how many files they have, and `downloads` how many
+/// times all were downloaded.
+/// `truncated` says whether the repository has more releases than were read.
+///
+/// Its statuses are those of [`commit_activity`].
+pub async fn release_cadence(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    let path = repository.path(&["releases"]);
+    let list = cache
+        .get_list_of(
+            &repository.viewer,
+            &repository.dashboard,
+            &path,
+            RELEASE_HISTORY,
+            RELEASE_FIELDS,
+        )
+        .await;
+    match data(list) {
+        Ok(list) => respond(cadence(&list.data)),
+        Err(code) => status(code),
+    }
 }
 
 /// `POST /-/api/repositories/{owner}/{repo}/refresh`: makes the next requests for the
@@ -858,6 +1143,215 @@ fn listed_release(data: &Value) -> Option<Value> {
     Some(listed)
 }
 
+/// When a pull request was merged, as GitHub's search tells, if it was.
+fn merged_at(pull: &Value) -> Option<&str> {
+    text(pull.get("pull_request")?, "merged_at")
+}
+
+/// How the pull requests of `pulls`, as GitHub's search finds them, came to an end, as
+/// [`merge_velocity`] answers.
+fn merges(pulls: &List) -> Value {
+    let merged: Vec<&Value> = pulls
+        .items
+        .iter()
+        .filter(|pull| merged_at(pull).is_some())
+        .collect();
+    let closed = pulls
+        .items
+        .iter()
+        .filter(|pull| merged_at(pull).is_none() && text(pull, "closed_at").is_some())
+        .count();
+    let times = merged
+        .iter()
+        .filter_map(|pull| since(pull, "created_at", merged_at(pull)?.parse().ok()?))
+        .collect();
+    json!({
+        "sampled": pulls.items.len(),
+        "merged": merged.len(),
+        "closed": closed,
+        "median_time_to_merge": median(times),
+        "truncated": pulls.truncated,
+    })
+}
+
+/// How long the open issues of `items`, which GitHub lists with its open pull requests,
+/// have been open at `now`, as [`issue_age`] answers.
+fn ages(items: &List, now: DateTimeUtc) -> Value {
+    let issues: Vec<&Value> = items
+        .items
+        .iter()
+        .filter(|item| item.is_object() && !item.get("pull_request").is_some_and(Value::is_object))
+        .collect();
+    let ages = issues
+        .iter()
+        .filter_map(|issue| since(issue, "created_at", now))
+        .collect();
+    json!({
+        "sampled": issues.len(),
+        "median_age": median(ages),
+        "truncated": items.truncated,
+    })
+}
+
+/// How the workflow runs of `runs` on `branch` fared, latest first as GitHub lists them,
+/// as [`workflow_runs`] answers, or that GitHub refused to list them, if `hidden`.
+fn health(branch: Option<&str>, runs: &List, hidden: bool) -> Value {
+    let runs: Vec<&Value> = runs.items.iter().filter(|run| run.is_object()).collect();
+    let concluded = |conclusions: &[&str]| {
+        runs.iter()
+            .filter(|run| text(run, "conclusion").is_some_and(|end| conclusions.contains(&end)))
+            .count()
+    };
+    let durations: Vec<i64> = runs
+        .iter()
+        .filter(|run| text(run, "status") == Some("completed"))
+        .filter_map(|run| since(run, "run_started_at", time(run, "updated_at")?))
+        .collect();
+    let latest = runs.first().map(|run| {
+        json!({
+            "name": text(run, "name"),
+            "status": text(run, "status"),
+            "conclusion": text(run, "conclusion"),
+            "started_at": text(run, "run_started_at").or_else(|| text(run, "created_at")),
+            "url": page(run.get("html_url")),
+        })
+    });
+    json!({
+        "branch": branch,
+        "sampled": runs.len(),
+        "passed": concluded(&["success"]),
+        "failed": concluded(FAILED),
+        "average_duration": mean(&durations),
+        "latest": latest,
+        "hidden": hidden,
+    })
+}
+
+/// The weeks of code frequency that GitHub gave, as the chart shows them: the 52 up to the
+/// week of `now`, oldest first, with no changes in those that GitHub left out, and the
+/// lines deleted counted up, not down. `None` if a week lacks its start or its counts.
+/// GitHub has no content, or `{}` or `[]`, for an empty repository, which has no weeks.
+fn changes(frequency: &Value, now: DateTimeUtc) -> Option<Vec<Value>> {
+    let weeks = match frequency {
+        Value::Array(weeks) => weeks.as_slice(),
+        Value::Null => &[],
+        Value::Object(object) if object.is_empty() => &[],
+        _ => return None,
+    };
+    if weeks.is_empty() {
+        return Some(Vec::new());
+    }
+    let given = weeks
+        .iter()
+        .map(|week| {
+            let [start, additions, deletions] = week.as_array()?.as_slice() else {
+                return None;
+            };
+            let start = DateTimeUtc::from_timestamp(start.as_i64()?, 0)?.date_naive();
+            let lines = |count: &Value| count.as_i64().map(i64::unsigned_abs);
+            Some((start, (lines(additions)?, lines(deletions)?)))
+        })
+        .collect::<Option<HashMap<_, _>>>()?;
+    let today = now.date_naive();
+    let current = today - TimeDelta::days(i64::from(today.weekday().num_days_from_sunday()));
+    let first = current - TimeDelta::weeks(i64::try_from(WEEKS - 1).ok()?);
+    let starts = std::iter::successors(Some(first), |week| Some(*week + TimeDelta::weeks(1)));
+    Some(
+        starts
+            .take(WEEKS)
+            .map(|start| {
+                let (additions, deletions) = given.get(&start).copied().unwrap_or_default();
+                json!({
+                    "week": start.to_string(),
+                    "additions": additions,
+                    "deletions": deletions,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// How often the releases of `list` came, and how many times their assets were
+/// downloaded, as [`release_cadence`] answers.
+fn cadence(list: &List) -> Value {
+    let releases: Vec<&Value> = list
+        .items
+        .iter()
+        .filter(|release| {
+            release.get("draft") != Some(&Value::Bool(true)) && text(release, "tag_name").is_some()
+        })
+        .collect();
+    let prereleases = releases
+        .iter()
+        .filter(|release| release.get("prerelease") == Some(&Value::Bool(true)))
+        .count();
+    let dates: Vec<DateTimeUtc> = releases
+        .iter()
+        .filter_map(|release| time(release, "published_at").or_else(|| time(release, "created_at")))
+        .collect();
+    let average_interval = match (dates.iter().min(), dates.iter().max()) {
+        (Some(first), Some(last)) if dates.len() > 1 => i64::try_from(dates.len() - 1)
+            .ok()
+            .map(|gaps| (*last - *first).num_seconds() / gaps),
+        _ => None,
+    };
+    let assets: Vec<&Value> = releases
+        .iter()
+        .filter_map(|release| release.get("assets")?.as_array())
+        .flatten()
+        .collect();
+    let downloads = assets
+        .iter()
+        .filter_map(|asset| asset.get("download_count")?.as_u64())
+        .fold(0u64, u64::saturating_add);
+    json!({
+        "sampled": releases.len(),
+        "stable": releases.len() - prereleases,
+        "prereleases": prereleases,
+        "average_interval": average_interval,
+        "assets": assets.len(),
+        "downloads": downloads,
+        "truncated": list.truncated,
+    })
+}
+
+/// The median of `values`, halfway between the two in the middle, rounded down, if there
+/// is an even number of them. `None` if there are none.
+fn median(mut values: Vec<i64>) -> Option<i64> {
+    values.sort_unstable();
+    let middle = values.len() / 2;
+    if values.len() % 2 == 1 {
+        return values.get(middle).copied();
+    }
+    let (low, high) = (*values.get(middle.checked_sub(1)?)?, *values.get(middle)?);
+    Some(low + (high - low) / 2)
+}
+
+/// The mean of `values`, rounded down. `None` if there are none.
+fn mean(values: &[i64]) -> Option<i64> {
+    let count = i64::try_from(values.len())
+        .ok()
+        .filter(|count| *count > 0)?;
+    Some(
+        values
+            .iter()
+            .fold(0i64, |sum, value| sum.saturating_add(*value))
+            / count,
+    )
+}
+
+/// The seconds from the time of `data`'s member `key` to `until`, unless it tells no time,
+/// or one after `until`.
+fn since(data: &Value, key: &str, until: DateTimeUtc) -> Option<i64> {
+    let seconds = (until - time(data, key)?).num_seconds();
+    (seconds >= 0).then_some(seconds)
+}
+
+/// The time of `data`'s member `key`, if it tells one.
+fn time(data: &Value, key: &str) -> Option<DateTimeUtc> {
+    text(data, key)?.parse().ok()
+}
+
 /// `value` as a URL to link to, if it is one of a page on GitHub (FR-REPO-12).
 pub(crate) fn page(value: Option<&Value>) -> Option<String> {
     link(value, &["https"])
@@ -1073,19 +1567,104 @@ mod tests {
     /// The latest releases of `Acme/Widget`, a draft among them, with some that the widget
     /// must not show as they are.
     const RELEASES: &str = r#"[
-        {"tag_name": "v3.0.0", "name": "Widget 3", "draft": true, "prerelease": false},
+        {"tag_name": "v3.0.0", "name": "Widget 3", "draft": true, "prerelease": false,
+         "assets": [{"name": "widget.zip", "download_count": 1000}]},
         {"tag_name": "v3.0.0-rc.1", "name": "v3.0.0-rc.1", "draft": false, "prerelease": true,
          "target_commitish": "next",
          "created_at": "2026-10-10T12:00:00Z", "published_at": "2026-10-11T12:00:00Z",
-         "html_url": "https://github.com/Acme/Widget/releases/tag/v3.0.0-rc.1"},
+         "html_url": "https://github.com/Acme/Widget/releases/tag/v3.0.0-rc.1",
+         "assets": [{"name": "widget.zip", "download_count": 5,
+                     "uploader": {"login": "alice"}},
+                    {"name": "widget.tar.gz", "download_count": 7}]},
         {"tag_name": "v2.1.0", "name": "Widget 2.1", "draft": false, "prerelease": false,
          "target_commitish": "main",
          "created_at": "2026-09-30T12:00:00Z", "published_at": "2026-10-01T12:00:00Z",
-         "html_url": "https://github.com/Acme/Widget/releases/tag/v2.1.0"},
+         "html_url": "https://github.com/Acme/Widget/releases/tag/v2.1.0",
+         "assets": [{"name": "widget.zip", "download_count": 100}, {"name": "uncounted"}]},
         {"tag_name": "v2.0.0", "name": "", "target_commitish": "", "created_at": "2026-06-01T12:00:00Z",
          "published_at": null, "html_url": "https://evil.example/v2.0.0"},
         {"tag_name": "", "name": "Tagless"}
     ]"#;
+
+    /// The pull requests of `Acme/Widget` updated last, as GitHub's search finds them: two
+    /// merged in a day or more, one in an hour, one merged without a time of opening, one
+    /// closed without being merged, and one open.
+    const PULLS: &str = r#"{"total_count": 6, "incomplete_results": false, "items": [
+        {"number": 49, "created_at": "2026-10-19T08:00:00Z", "closed_at": "2026-10-21T08:00:00Z",
+         "title": "Steady the widgets", "user": {"login": "bob"},
+         "pull_request": {"html_url": "https://github.com/Acme/Widget/pull/49",
+                          "merged_at": "2026-10-21T08:00:00Z"}},
+        {"number": 48, "created_at": "2026-10-18T08:00:00Z", "closed_at": "2026-10-20T08:00:00Z",
+         "pull_request": {"merged_at": null}},
+        {"number": 46, "created_at": "2026-10-17T08:00:00Z", "closed_at": null,
+         "pull_request": {"merged_at": null}},
+        {"number": 43, "created_at": "2026-10-10T08:00:00Z", "closed_at": "2026-10-10T09:00:00Z",
+         "pull_request": {"merged_at": "2026-10-10T09:00:00Z"}},
+        {"number": 42, "created_at": "2026-10-01T08:00:00Z", "closed_at": "2026-10-05T08:00:00Z",
+         "pull_request": {"merged_at": "2026-10-05T08:00:00Z"}},
+        {"number": 41, "created_at": "", "closed_at": "2026-10-01T00:00:00Z",
+         "pull_request": {"merged_at": "2026-10-01T00:00:00Z"}}
+    ]}"#;
+
+    /// The open issues and pull requests of `Acme/Widget` updated last: three issues, one
+    /// of them without a time of opening, and two pull requests.
+    const OPEN_ISSUES: &str = r#"[
+        {"number": 50, "created_at": "2026-01-01T00:00:00Z", "title": "Widgets wobble"},
+        {"number": 46, "created_at": "2020-01-01T00:00:00Z",
+         "pull_request": {"merged_at": null}},
+        {"number": 30, "created_at": "2025-01-01T00:00:00Z"},
+        {"number": 20, "created_at": "2024-01-01T00:00:00Z"},
+        {"number": 10, "created_at": null},
+        {"number": 9, "created_at": "2019-01-01T00:00:00Z",
+         "pull_request": {"merged_at": null}}
+    ]"#;
+
+    /// The latest workflow runs for pushes to `Acme/Widget`'s default branch, latest first:
+    /// one in progress, two that passed, two that failed, one of them with times out of
+    /// order, and one cancelled.
+    const RUNS: &str = r#"{"total_count": 6, "workflow_runs": [
+        {"id": 7, "name": "CI", "event": "push", "status": "in_progress", "conclusion": null,
+         "run_started_at": "2026-10-22T10:00:00Z", "created_at": "2026-10-22T10:00:00Z",
+         "updated_at": "2026-10-22T10:01:00Z",
+         "html_url": "https://github.com/Acme/Widget/actions/runs/7",
+         "head_commit": {"message": "Steady the widgets"},
+         "repository": {"full_name": "Acme/Widget", "private": false}},
+        {"id": 5, "name": "CI", "event": "push", "status": "completed", "conclusion": "success",
+         "run_started_at": "2026-10-21T10:00:00Z", "updated_at": "2026-10-21T10:04:00Z"},
+        {"id": 4, "name": "Release", "event": "push", "status": "completed",
+         "conclusion": "failure", "run_started_at": "2026-10-20T10:00:00Z",
+         "updated_at": "2026-10-20T10:10:00Z"},
+        {"id": 3, "name": "CI", "event": "push", "status": "completed", "conclusion": "cancelled",
+         "run_started_at": "2026-10-19T10:00:00Z", "updated_at": "2026-10-19T10:02:00Z"},
+        {"id": 2, "name": "CI", "event": "push", "status": "completed", "conclusion": "timed_out",
+         "run_started_at": "2026-10-18T10:00:00Z", "updated_at": "2026-10-18T09:00:00Z"},
+        {"id": 1, "name": "CI", "event": "push", "status": "completed",
+         "conclusion": "success", "run_started_at": "2026-10-17T10:00:00Z",
+         "updated_at": "2026-10-17T10:05:00Z"}
+    ]}"#;
+
+    /// The Sunday that the week of `now` starts on, at midnight UTC, as GitHub counts weeks.
+    fn week_of(now: DateTimeUtc) -> DateTimeUtc {
+        let today = now.date_naive();
+        let sunday = today - TimeDelta::days(i64::from(today.weekday().num_days_from_sunday()));
+        sunday.and_hms_opt(0, 0, 0).unwrap().and_utc()
+    }
+
+    /// GitHub's code frequency for `Acme/Widget`: from 60 weeks before the current week to
+    /// the week before it, `10 × n` lines added and `n` deleted in the week `n` weeks ago,
+    /// but for 3 weeks ago, which GitHub left out.
+    fn frequency() -> String {
+        let current = week_of(ChronoUtc::now());
+        let weeks: Vec<Value> = (1..=60)
+            .rev()
+            .filter(|ago| *ago != 3)
+            .map(|ago| {
+                let start = (current - TimeDelta::weeks(ago)).timestamp();
+                json!([start, 10 * ago, -ago])
+            })
+            .collect();
+        Value::from(weeks).to_string()
+    }
 
     /// GitHub's last 52 weeks of commit activity for `Acme/Widget`, from the week that
     /// starts on Sunday 2025-10-26, with as many commits in each week as weeks before it.
@@ -1137,9 +1716,27 @@ mod tests {
                 ),
                 // GitHub is still computing its statistics.
                 "/repos/acme/busy" => answer(200, &[], r#"{"full_name": "acme/busy"}"#),
-                "/repos/acme/busy/stats/commit_activity" => answer(202, &[], "{}"),
-                // GitHub does not list its contributors.
+                "/repos/acme/busy/stats/commit_activity"
+                | "/repos/acme/busy/stats/code_frequency" => answer(202, &[], "{}"),
+                // GitHub does not list its contributors, nor compute its code frequency.
                 "/repos/acme/huge" => answer(200, &[], r#"{"full_name": "acme/huge"}"#),
+                "/repos/acme/huge/stats/code_frequency" => answer(
+                    422,
+                    &[],
+                    r#"{"message": "The code frequency is not available for repositories with 10,000 or more commits.", "status": "422"}"#,
+                ),
+                // GitHub does not list its workflow runs to the credential.
+                "/repos/acme/guarded" => answer(
+                    200,
+                    &[],
+                    r#"{"full_name": "acme/guarded", "private": false,
+                        "default_branch": "release/1.x"}"#,
+                ),
+                "/repos/acme/guarded/actions/runs" => answer(
+                    403,
+                    &[],
+                    r#"{"message": "Resource not accessible by personal access token", "status": "403"}"#,
+                ),
                 "/repos/acme/huge/contributors" => answer(
                     403,
                     &[],
@@ -1161,7 +1758,14 @@ mod tests {
                 "/repos/acme/widget/stats/commit_activity" => answer(200, &[], &activity()),
                 "/repos/acme/widget/languages" => answer(200, &[], LANGUAGES),
                 "/repos/acme/widget/contributors" => answer(200, &[], CONTRIBUTORS),
+                "/repos/acme/widget/issues"
+                    if query.get("state").map(String::as_str) == Some("open") =>
+                {
+                    answer(200, &[], OPEN_ISSUES)
+                }
                 "/repos/acme/widget/issues" => answer(200, &[], ISSUES),
+                "/repos/acme/widget/actions/runs" => answer(200, &[], RUNS),
+                "/repos/acme/widget/stats/code_frequency" => answer(200, &[], &frequency()),
                 "/repos/acme/widget/commits" => answer(200, &[], COMMITS),
                 "/repos/acme/widget/releases" => answer(200, &[], RELEASES),
                 "/repos/acme/mirror/issues" => answer(
@@ -1173,8 +1777,11 @@ mod tests {
                          "pull_request": {"merged_at": null}}]"#,
                 ),
                 // As for an empty repository.
-                "/repos/acme/bare/stats/commit_activity" | "/repos/acme/bare/contributors" => {
-                    answer(204, &[], "")
+                "/repos/acme/bare/stats/commit_activity"
+                | "/repos/acme/bare/stats/code_frequency"
+                | "/repos/acme/bare/contributors" => answer(204, &[], ""),
+                "/repos/acme/bare/actions/runs" => {
+                    answer(200, &[], r#"{"total_count": 0, "workflow_runs": []}"#)
                 }
                 "/repos/acme/bare/languages" => answer(200, &[], "{}"),
                 "/repos/acme/bare/commits" => answer(
@@ -1191,6 +1798,9 @@ mod tests {
                     r#"[{"week": 1761436800, "days": [1, 0, 0, 0, 0, 0, 0]}]"#,
                 ),
                 "/repos/acme/odd/languages" => answer(200, &[], r#"["Rust"]"#),
+                "/repos/acme/odd/stats/code_frequency" => {
+                    answer(200, &[], r#"[[1761436800, 3], [1762041600, "many", -1]]"#)
+                }
                 "/repos/acme/odd/contributors"
                 | "/repos/acme/odd/issues"
                 | "/repos/acme/odd/commits"
@@ -1269,6 +1879,7 @@ mod tests {
                     Some("repo:Acme/Widget is:issue is:closed") => found(120),
                     Some("repo:Acme/Widget is:pr is:merged") => found(300),
                     Some("repo:Acme/Widget is:pr is:closed is:unmerged") => found(40),
+                    Some("repo:Acme/Widget is:pr") => answer(200, &[], PULLS),
                     Some("repo:acme/mirror is:pr is:open") => found(2),
                     Some("repo:acme/mirror is:pr is:merged") => found(5),
                     Some("repo:acme/mirror is:pr is:closed is:unmerged") => found(1),
@@ -1332,10 +1943,15 @@ mod tests {
         Issues,
         Commits,
         Releases,
+        MergeVelocity,
+        IssueAge,
+        WorkflowRuns,
+        CodeFrequency,
+        ReleaseCadence,
     }
 
     impl Api {
-        const ALL: [Api; 8] = [
+        const ALL: [Api; 13] = [
             Api::Summary,
             Api::Stats,
             Api::CommitActivity,
@@ -1344,6 +1960,11 @@ mod tests {
             Api::Issues,
             Api::Commits,
             Api::Releases,
+            Api::MergeVelocity,
+            Api::IssueAge,
+            Api::WorkflowRuns,
+            Api::CodeFrequency,
+            Api::ReleaseCadence,
         ];
     }
 
@@ -1360,16 +1981,26 @@ mod tests {
         ));
         let names = Path((owner.to_owned(), repo.to_owned()));
         let cache = State(cache.clone());
-        let response = match api {
-            Api::Summary => summary(cache, visitor, names).await,
-            Api::Stats => stats(cache, visitor, names).await,
-            Api::CommitActivity => commit_activity(cache, visitor, names).await,
-            Api::Languages => languages(cache, visitor, names).await,
-            Api::Contributors => contributors(cache, visitor, names).await,
-            Api::Issues => issues(cache, visitor, names).await,
-            Api::Commits => commits(cache, visitor, names).await,
-            Api::Releases => releases(cache, visitor, names).await,
-        };
+        // Boxed, so that a test that asks for many is not as large as all their handlers'
+        // futures together in a debug build, which would overflow its stack.
+        let response = Box::pin(async move {
+            match api {
+                Api::Summary => summary(cache, visitor, names).await,
+                Api::Stats => stats(cache, visitor, names).await,
+                Api::CommitActivity => commit_activity(cache, visitor, names).await,
+                Api::Languages => languages(cache, visitor, names).await,
+                Api::Contributors => contributors(cache, visitor, names).await,
+                Api::Issues => issues(cache, visitor, names).await,
+                Api::Commits => commits(cache, visitor, names).await,
+                Api::Releases => releases(cache, visitor, names).await,
+                Api::MergeVelocity => merge_velocity(cache, visitor, names).await,
+                Api::IssueAge => issue_age(cache, visitor, names).await,
+                Api::WorkflowRuns => workflow_runs(cache, visitor, names).await,
+                Api::CodeFrequency => code_frequency(cache, visitor, names).await,
+                Api::ReleaseCadence => release_cadence(cache, visitor, names).await,
+            }
+        })
+        .await;
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let status = response.status();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -1757,20 +2388,26 @@ mod tests {
     async fn statistics_github_is_still_computing_are_asked_for_again() {
         let stub = github();
         let cache = cache(&stub, 30).await;
-        for _ in 0..2 {
+        for (api, statistic) in [
+            (Api::CommitActivity, "commit_activity"),
+            (Api::CodeFrequency, "code_frequency"),
+        ] {
+            for _ in 0..2 {
+                assert_eq!(
+                    ask(&cache, api, "acme", "busy").await,
+                    (StatusCode::ACCEPTED, Value::Null),
+                    "{api:?}"
+                );
+            }
+            // Nothing is cached of what GitHub has yet to compute.
+            let asked = stub.urls();
+            let computing = format!("https://api.github.com/repos/acme/busy/stats/{statistic}");
             assert_eq!(
-                ask(&cache, Api::CommitActivity, "acme", "busy").await,
-                (StatusCode::ACCEPTED, Value::Null)
+                asked.iter().filter(|url| **url == computing).count(),
+                2,
+                "{asked:?}"
             );
         }
-        // Nothing is cached of what GitHub has yet to compute.
-        let asked = stub.urls();
-        let computing = "https://api.github.com/repos/acme/busy/stats/commit_activity";
-        assert_eq!(
-            asked.iter().filter(|url| *url == computing).count(),
-            2,
-            "{asked:?}"
-        );
     }
 
     #[tokio::test]
@@ -2175,6 +2812,322 @@ mod tests {
         );
     }
 
+    /// What [`merge_velocity`] answers without pull requests.
+    fn no_merges() -> Value {
+        json!({"sampled": 0, "merged": 0, "closed": 0, "median_time_to_merge": null,
+               "truncated": false})
+    }
+
+    /// What [`issue_age`] answers without open issues.
+    fn no_ages() -> Value {
+        json!({"sampled": 0, "median_age": null, "truncated": false})
+    }
+
+    /// What [`workflow_runs`] answers without workflow runs on `branch`, or when GitHub
+    /// refused to list them, if `hidden`.
+    fn no_runs(branch: Option<&str>, hidden: bool) -> Value {
+        json!({"branch": branch, "sampled": 0, "passed": 0, "failed": 0,
+               "average_duration": null, "latest": null, "hidden": hidden})
+    }
+
+    #[tokio::test]
+    async fn pull_requests_merged_are_timed_and_counted_against_those_closed() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::MergeVelocity, "acme", "widget").await,
+            (
+                StatusCode::OK,
+                json!({
+                    // #49, #43, #42 and #41, which was merged at an unknown time after it was
+                    // opened. #48 was closed without being merged, and #46 is open.
+                    "sampled": 6,
+                    "merged": 4,
+                    "closed": 1,
+                    // Of an hour, two days and four days.
+                    "median_time_to_merge": 2 * 24 * 60 * 60,
+                    "truncated": false,
+                })
+            )
+        );
+        assert!(
+            stub.urls().contains(
+                &"https://api.github.com/search/issues?q=repo%3AAcme%2FWidget+is%3Apr&sort=updated&order=desc&per_page=100".to_owned()
+            ),
+            "{:?}",
+            stub.urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn open_issues_are_aged_without_pull_requests() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let before = ChronoUtc::now();
+        let (status, body) = ask(&cache, Api::IssueAge, "acme", "widget").await;
+        let after = ChronoUtc::now();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            (&body["sampled"], &body["truncated"]),
+            (&json!(4), &json!(false))
+        );
+        // The issues opened in 2026, 2025 and 2024, of which the median is that of 2025.
+        let opened: DateTimeUtc = "2025-01-01T00:00:00Z".parse().unwrap();
+        let age = body["median_age"].as_i64().unwrap();
+        assert!(
+            ((before - opened).num_seconds()..=(after - opened).num_seconds()).contains(&age),
+            "{age}"
+        );
+        assert!(
+            stub.urls().contains(
+                &"https://api.github.com/repos/Acme/Widget/issues?state=open&sort=updated&direction=desc&per_page=100".to_owned()
+            ),
+            "{:?}",
+            stub.urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn what_a_repository_turned_off_is_not_asked_for() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::MergeVelocity, "acme", "locked").await,
+            (StatusCode::OK, no_merges())
+        );
+        for repo in ["locked", "mirror"] {
+            assert_eq!(
+                ask(&cache, Api::IssueAge, "acme", repo).await,
+                (StatusCode::OK, no_ages()),
+                "{repo}"
+            );
+        }
+        let asked = stub.urls();
+        assert!(
+            asked
+                .iter()
+                .all(|url| !url.contains("is%3Apr") && !url.contains("/issues?state")),
+            "{asked:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_runs_on_the_default_branch_pass_fail_and_take_time() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::WorkflowRuns, "acme", "widget").await,
+            (
+                StatusCode::OK,
+                json!({
+                    "branch": "main",
+                    "sampled": 6,
+                    "passed": 2,
+                    // One failed, one timed out. One was cancelled.
+                    "failed": 2,
+                    // Of 4, 10, 2 and 5 minutes. The run in progress has not ended, and one
+                    // ended before it started.
+                    "average_duration": (4 + 10 + 2 + 5) * 60 / 4,
+                    "latest": {
+                        "name": "CI",
+                        "status": "in_progress",
+                        "conclusion": null,
+                        "started_at": "2026-10-22T10:00:00Z",
+                        "url": "https://github.com/Acme/Widget/actions/runs/7",
+                    },
+                    "hidden": false,
+                })
+            )
+        );
+        assert!(
+            stub.urls().contains(
+                &"https://api.github.com/repos/Acme/Widget/actions/runs?branch=main&event=push&exclude_pull_requests=true&per_page=50".to_owned()
+            ),
+            "{:?}",
+            stub.urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_runs_github_will_not_list_are_hidden() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::WorkflowRuns, "acme", "guarded").await,
+            (StatusCode::OK, no_runs(Some("release/1.x"), true))
+        );
+        assert!(
+            stub.urls().contains(
+                &"https://api.github.com/repos/acme/guarded/actions/runs?branch=release%2F1.x&event=push&exclude_pull_requests=true&per_page=50".to_owned()
+            ),
+            "{:?}",
+            stub.urls()
+        );
+        // Without a default branch, there is nothing to ask for.
+        assert_eq!(
+            ask(&cache, Api::WorkflowRuns, "acme", "huge").await,
+            (StatusCode::OK, no_runs(None, false))
+        );
+        assert!(
+            stub.urls()
+                .iter()
+                .all(|url| !url.contains("/acme/huge/actions")),
+            "{:?}",
+            stub.urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn code_frequency_is_of_the_last_52_weeks() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let current = week_of(ChronoUtc::now());
+        let (status, body) = ask(&cache, Api::CodeFrequency, "acme", "widget").await;
+        assert_eq!(
+            (status, &body["too_large"]),
+            (StatusCode::OK, &json!(false))
+        );
+        let weeks = body["weeks"].as_array().unwrap();
+        let expected: Vec<Value> = (0..52)
+            .rev()
+            .map(|ago: i64| {
+                let start = (current - TimeDelta::weeks(ago)).date_naive().to_string();
+                // GitHub left out the current week and the one 3 weeks ago.
+                let lines = if ago == 0 || ago == 3 { 0 } else { ago };
+                json!({"week": start, "additions": 10 * lines, "deletions": lines})
+            })
+            .collect();
+        assert_eq!(weeks, &expected);
+    }
+
+    #[tokio::test]
+    async fn code_frequency_github_will_not_compute_is_too_large() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::CodeFrequency, "acme", "huge").await,
+            (StatusCode::OK, json!({"weeks": [], "too_large": true}))
+        );
+    }
+
+    #[test]
+    fn code_frequency_is_read_as_github_gives_it() {
+        // A Wednesday, in the week that starts on Sunday 2026-11-01.
+        let now: DateTimeUtc = "2026-11-04T15:00:00Z".parse().unwrap();
+        let current = 1_793_491_200; // 2026-11-01
+        let week = 7 * 24 * 60 * 60;
+        let given = json!([
+            [current - 60 * week, 1, -1],
+            [current - 51 * week, 100, -20],
+            [current - week, 5, 0],
+            [current, 0, -7],
+        ]);
+        let weeks = changes(&given, now).unwrap();
+        assert_eq!(weeks.len(), 52);
+        assert_eq!(
+            weeks[0],
+            json!({"week": "2025-11-09", "additions": 100, "deletions": 20})
+        );
+        assert_eq!(
+            weeks[1],
+            json!({"week": "2025-11-16", "additions": 0, "deletions": 0})
+        );
+        assert_eq!(
+            weeks[50..],
+            [
+                json!({"week": "2026-10-25", "additions": 5, "deletions": 0}),
+                json!({"week": "2026-11-01", "additions": 0, "deletions": 7}),
+            ]
+        );
+        for empty in [json!(null), json!({}), json!([])] {
+            assert_eq!(changes(&empty, now), Some(Vec::new()), "{empty}");
+        }
+        for odd in [
+            json!({"weeks": []}),
+            json!([[current, 1]]),
+            json!([[current, 1, "-1"]]),
+            json!([["2026-11-01", 1, -1]]),
+            json!([{"week": current}]),
+        ] {
+            assert_eq!(changes(&odd, now), None, "{odd}");
+        }
+    }
+
+    #[tokio::test]
+    async fn releases_are_counted_spaced_and_downloaded_without_drafts() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::ReleaseCadence, "acme", "widget").await,
+            (
+                StatusCode::OK,
+                json!({
+                    // v3.0.0-rc.1, v2.1.0 and v2.0.0, without the draft or the one without a tag.
+                    "sampled": 3,
+                    "stable": 2,
+                    "prereleases": 1,
+                    // From 2026-06-01, when v2.0.0 was created, to 2026-10-11, 132 days, in two
+                    // intervals.
+                    "average_interval": 132 * 24 * 60 * 60 / 2,
+                    // One of them counts no downloads.
+                    "assets": 4,
+                    "downloads": 5 + 7 + 100,
+                    "truncated": false,
+                })
+            )
+        );
+        assert!(
+            stub.urls().contains(
+                &"https://api.github.com/repos/Acme/Widget/releases?per_page=100".to_owned()
+            ),
+            "{:?}",
+            stub.urls()
+        );
+        // Releases past the 100 latest are not read.
+        assert_eq!(
+            ask(&cache, Api::ReleaseCadence, "acme", "crowded").await,
+            (
+                StatusCode::OK,
+                json!({"sampled": 100, "stable": 100, "prereleases": 0,
+                       "average_interval": null, "assets": 0, "downloads": 0,
+                       "truncated": true})
+            )
+        );
+    }
+
+    #[test]
+    fn medians_and_means_are_of_what_there_is() {
+        assert_eq!(median(vec![]), None);
+        assert_eq!(median(vec![7]), Some(7));
+        assert_eq!(median(vec![9, 1, 5]), Some(5));
+        assert_eq!(median(vec![10, 1, 4, 100]), Some(7));
+        assert_eq!(median(vec![1, 2]), Some(1));
+        assert_eq!(median(vec![i64::MAX, i64::MAX - 2]), Some(i64::MAX - 1));
+        assert_eq!(mean(&[]), None);
+        assert_eq!(mean(&[1, 2]), Some(1));
+        assert_eq!(mean(&[60, 120, 300]), Some(160));
+    }
+
+    #[test]
+    fn open_issues_are_aged_at_the_time_given() {
+        let now: DateTimeUtc = "2026-11-01T00:00:00Z".parse().unwrap();
+        let items = List {
+            items: vec![
+                json!({"created_at": "2026-10-31T00:00:00Z"}),
+                json!({"created_at": "2026-10-29T00:00:00Z"}),
+                // Opened after now, as a clock out of step would tell.
+                json!({"created_at": "2026-11-02T00:00:00Z"}),
+                json!({"created_at": "2026-01-01T00:00:00Z", "pull_request": {}}),
+                json!("odd"),
+            ],
+            truncated: true,
+        };
+        assert_eq!(
+            ages(&items, now),
+            json!({"sampled": 3, "median_age": 2 * 24 * 60 * 60, "truncated": true})
+        );
+    }
+
     #[tokio::test]
     async fn an_empty_repository_has_nothing_to_show() {
         let stub = github();
@@ -2213,6 +3166,30 @@ mod tests {
             ask(&cache, Api::Releases, "acme", "bare").await,
             (StatusCode::OK, json!({"releases": [], "count": 0}))
         );
+        assert_eq!(
+            ask(&cache, Api::MergeVelocity, "acme", "bare").await,
+            (StatusCode::OK, no_merges())
+        );
+        assert_eq!(
+            ask(&cache, Api::IssueAge, "acme", "bare").await,
+            (StatusCode::OK, no_ages())
+        );
+        assert_eq!(
+            ask(&cache, Api::WorkflowRuns, "acme", "bare").await,
+            (StatusCode::OK, no_runs(Some("main"), false))
+        );
+        assert_eq!(
+            ask(&cache, Api::CodeFrequency, "acme", "bare").await,
+            (StatusCode::OK, json!({"weeks": [], "too_large": false}))
+        );
+        assert_eq!(
+            ask(&cache, Api::ReleaseCadence, "acme", "bare").await,
+            (
+                StatusCode::OK,
+                json!({"sampled": 0, "stable": 0, "prereleases": 0, "average_interval": null,
+                       "assets": 0, "downloads": 0, "truncated": false})
+            )
+        );
     }
 
     #[tokio::test]
@@ -2240,6 +3217,7 @@ mod tests {
                 "{api:?}"
             );
         }
+        // `acme/odd` has no default branch, so its workflow runs are not asked for.
         for api in [
             Api::CommitActivity,
             Api::Languages,
@@ -2247,6 +3225,10 @@ mod tests {
             Api::Issues,
             Api::Commits,
             Api::Releases,
+            Api::MergeVelocity,
+            Api::IssueAge,
+            Api::CodeFrequency,
+            Api::ReleaseCadence,
         ] {
             assert_eq!(
                 ask(&cache, api, "acme", "odd").await.0,

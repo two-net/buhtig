@@ -147,6 +147,11 @@ export class RepositoryDashboard implements RepositoryData {
   readonly issues = this.part((owner, repo) => this.resources.issues(owner, repo));
   readonly commits = this.part((owner, repo) => this.resources.commits(owner, repo));
   readonly releases = this.part((owner, repo) => this.resources.releases(owner, repo));
+  readonly mergeVelocity = this.part((owner, repo) => this.resources.mergeVelocity(owner, repo));
+  readonly issueAge = this.part((owner, repo) => this.resources.issueAge(owner, repo));
+  readonly workflowRuns = this.part((owner, repo) => this.resources.workflowRuns(owner, repo));
+  readonly codeFrequency = this.part((owner, repo) => this.resources.codeFrequency(owner, repo));
+  readonly releaseCadence = this.part((owner, repo) => this.resources.releaseCadence(owner, repo));
 
   /** What the tabs count, loaded with the dashboard, whatever its tab. */
   private readonly counted = {

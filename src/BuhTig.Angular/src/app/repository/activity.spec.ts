@@ -139,7 +139,7 @@ describe('RepositoryActivity', () => {
 });
 
 describe('RepositoryActivityTab', () => {
-  it('shows the commit activity, taller, and the 10 latest commits', async () => {
+  it('shows the commit activity, taller, the code frequency, the workflow runs and the 10 latest commits', async () => {
     const commits: Commit[] = Array.from({ length: 12 }, (_, index) => ({
       sha: `${index}`.padStart(7, '0'),
       message: `Commit ${index}`,
@@ -161,6 +161,8 @@ describe('RepositoryActivityTab', () => {
               retry: () => {},
             }),
             commits: () => ({ state: signal({ status: 'ready', data: commits }), retry: () => {} }),
+            codeFrequency: () => ({ state: signal({ status: 'loading' }), retry: () => {} }),
+            workflowRuns: () => ({ state: signal({ status: 'loading' }), retry: () => {} }),
           },
         },
       ],
@@ -171,6 +173,14 @@ describe('RepositoryActivityTab', () => {
     expect(
       fixture.debugElement.query(By.directive(RepositoryActivity)).componentInstance.height(),
     ).toBe(240);
+    expect(
+      [...element.querySelectorAll('.stack-v > *')].map((widget) => widget.tagName.toLowerCase()),
+    ).toEqual([
+      'app-repository-activity',
+      'app-repository-code-frequency',
+      'app-repository-workflows',
+      'app-repository-commits',
+    ]);
     expect(fixture.debugElement.query(By.directive(RepositoryCommits))).not.toBeNull();
     expect(element.querySelectorAll('app-repository-commits li')).toHaveLength(10);
     expect(element.querySelector('app-repository-commits .Box-footer')).toBeNull();
