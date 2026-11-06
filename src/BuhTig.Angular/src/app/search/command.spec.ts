@@ -1,4 +1,5 @@
 import { Command, Tab, commandPath, parseCommand, tabLabel, tabsNamed, tabsOf } from './command';
+import { GITHUB_COM } from '../github/host';
 import { problemMessage } from './messages';
 import { Resource } from './parse';
 
@@ -14,7 +15,7 @@ function opens(resource: Resource, tab?: Tab): Command {
 /** Checks that each input names `resource`'s dashboard at `tab`, and opens `path`. */
 function expectEach(inputs: string[], resource: Resource, tab: Tab | undefined, path: string) {
   for (const input of inputs) {
-    const command = parseCommand(input);
+    const command = parseCommand(input, GITHUB_COM);
     expect(command, input).toEqual(opens(resource, tab));
     if (command.ok) {
       expect(commandPath(command.resource, command.tab), input).toBe(path);
@@ -33,8 +34,8 @@ describe('parseCommand (FR-SRCH-13)', () => {
     expectEach(['github.com/orgs/org'], ORG, undefined, '/org');
     expectEach(['github.com/users/mona'], USER, undefined, '/mona');
     expectEach(['name'], ACCOUNT, undefined, '/name');
-    expect(parseCommand('')).toEqual({ ok: false, problem: { kind: 'empty' } });
-    expect(parseCommand('gitlab.com/owner/repo')).toEqual({
+    expect(parseCommand('', GITHUB_COM)).toEqual({ ok: false, problem: { kind: 'empty' } });
+    expect(parseCommand('gitlab.com/owner/repo', GITHUB_COM)).toEqual({
       ok: false,
       problem: { kind: 'not-github' },
     });
@@ -108,7 +109,7 @@ describe('parseCommand (FR-SRCH-13)', () => {
   });
 
   it('says which tabs the beginning of a name may be, when it is more than one', () => {
-    expect(parseCommand('owner/repo co')).toEqual({
+    expect(parseCommand('owner/repo co', GITHUB_COM)).toEqual({
       ok: false,
       problem: { kind: 'bad-tab', word: 'co', resource: REPO, could: ['activity', 'contributors'] },
     });
@@ -116,8 +117,8 @@ describe('parseCommand (FR-SRCH-13)', () => {
 
   it("says what is no tab of the resource's dashboard, and which are (NFR-UX-06)", () => {
     const message = (input: string) => {
-      const command = parseCommand(input);
-      return command.ok ? undefined : problemMessage(command.problem);
+      const command = parseCommand(input, GITHUB_COM);
+      return command.ok ? undefined : problemMessage(command.problem, GITHUB_COM);
     };
     expect(message('owner/repo people')).toBe(
       "“people” is not a tab of a repository's dashboard. Its tabs are overview, activity, issues, pulls, contributors and releases.",
@@ -137,7 +138,7 @@ describe('parseCommand (FR-SRCH-13)', () => {
   });
 
   it('says what is wrong with the resource before its tab', () => {
-    expect(parseCommand('gitlab.com/owner/repo pulls')).toEqual({
+    expect(parseCommand('gitlab.com/owner/repo pulls', GITHUB_COM)).toEqual({
       ok: false,
       problem: { kind: 'not-github' },
     });

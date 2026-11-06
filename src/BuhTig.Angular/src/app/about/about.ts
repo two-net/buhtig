@@ -3,6 +3,7 @@ import { paletteKeys } from '../palette/keys';
 import { Shortcut } from '../search/shortcut';
 import { Header } from '../header/header';
 import { PageStyles } from '../styles/styles';
+import { GITHUB_HOST } from '../github/host';
 
 /**
  * What BuhTig is, and that it is not GitHub's (§1.2, UI-08). It names the keys that BuhTig
@@ -15,6 +16,8 @@ import { PageStyles } from '../styles/styles';
   templateUrl: './about.html',
 })
 export class About {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   private readonly shortcut = inject(Shortcut);
 
   protected readonly slash = this.shortcut.enabled;

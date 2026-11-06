@@ -134,6 +134,8 @@ mod tests {
         GithubConfig {
             client_id: "Iv1.not-a-client-id".to_owned(),
             client_secret: Secret::new("not-a-client-secret".to_owned()),
+            host: "github.com".to_owned(),
+            api_url: Url::parse("https://api.github.com").unwrap(),
             proxy_url: proxy_url.map(|url| Secret::new(Url::parse(url).unwrap())),
         }
     }

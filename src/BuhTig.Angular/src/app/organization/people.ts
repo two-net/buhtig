@@ -4,6 +4,7 @@ import { AccountData } from '../dashboard/data';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
 import { NO_MEMBERS, moreMembers } from './messages';
+import { GITHUB_HOST } from '../github/host';
 
 /**
  * An organization's People tab (FR-ORG-07): up to 24 of the members the viewer may see, each
@@ -19,7 +20,7 @@ import { NO_MEMBERS, moreMembers } from './messages';
           <ul class="people-grid stagger">
             @for (member of members.members; track member.login) {
               <li [style.--i]="$index">
-                <a [href]="member.url ?? 'https://github.com/' + member.login">
+                <a [href]="member.url ?? 'https://' + gitHub + '/' + member.login">
                   <app-avatar
                     [name]="member.login"
                     [src]="member.avatarUrl"
@@ -39,6 +40,8 @@ import { NO_MEMBERS, moreMembers } from './messages';
   `,
 })
 export class OrganizationPeople {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   protected readonly members = emptyWhen(
     inject(AccountData).members(),
     (members) => members.members.length === 0,

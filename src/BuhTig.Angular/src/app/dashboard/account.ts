@@ -29,6 +29,7 @@ import { CommitActivity, Resources } from './resources';
 import { followSummary, same } from './summary';
 import { USER_TABS, accountTabUrl, urlOf } from './account-tabs';
 import { AccountTab, ORGANIZATION_TABS, TabInfo } from './tabs';
+import { GITHUB_HOST } from '../github/host';
 
 /**
  * An account's dashboard, an organization's or a user's, at `/{name}`, and an organization's at
@@ -66,6 +67,8 @@ import { AccountTab, ORGANIZATION_TABS, TabInfo } from './tabs';
   providers: [{ provide: AccountData, useExisting: forwardRef(() => AccountDashboard) }],
 })
 export class AccountDashboard implements AccountData {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   private readonly resources = inject(Resources);
   private readonly injector = inject(Injector);
   private readonly header = viewChild.required(Header);

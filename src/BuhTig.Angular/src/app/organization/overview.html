@@ -107,7 +107,7 @@
             @for (member of members.members.slice(0, 18); track member.login) {
               <li>
                 <a
-                  [href]="member.url ?? 'https://github.com/' + member.login"
+                  [href]="member.url ?? 'https://' + gitHub + '/' + member.login"
                   [title]="'@' + member.login"
                   [attr.aria-label]="'@' + member.login"
                 >

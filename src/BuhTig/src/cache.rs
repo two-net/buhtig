@@ -414,6 +414,11 @@ impl Cache {
         self.org_repositories
     }
 
+    /// `github.host`, which links to GitHub's own pages must be on (FR-REPO-12).
+    pub fn github_host(&self) -> &str {
+        self.github.host()
+    }
+
     /// One resource, for a dashboard: its path, such as `/owner/repo` or `/org`
     /// (FR-NAV-01), which [`Cache::refresh`] takes.
     ///
@@ -1458,7 +1463,7 @@ mod tests {
         })
         .await
         .unwrap();
-        db::migrate(&db).await.unwrap();
+        db::migrate(&db, crate::config::GITHUB_COM).await.unwrap();
         let alice = add_user(&db, 1, "alice").await;
         let bob = add_user(&db, 2, "bob").await;
         let alice_pat = add_pat(&db, alice).await;
@@ -1477,8 +1482,7 @@ mod tests {
         };
         let github = Arc::new(github::Client::with_transport(
             Arc::new(transport),
-            "client-id",
-            &Secret::new("client-secret".to_owned()),
+            &github::stub::config(),
         ));
         Setup {
             cache: Arc::new(Cache::new(

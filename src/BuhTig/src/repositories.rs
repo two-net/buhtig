@@ -123,7 +123,7 @@ pub async fn summary(
     // The repository is read for its dashboard, so a visitor's load of that counts once
     // (FR-DATA-10).
     let result = read(&cache, &viewer, &owner, &repo).await;
-    if let Some(denied) = denied(&viewer, &result) {
+    if let Some(denied) = denied(&viewer, &result, cache.github_host()) {
         return denied;
     }
     let cached = match data(result) {
@@ -191,7 +191,12 @@ pub async fn stats(
         (Ok(pulls), Ok(latest)) => (pulls.data, latest.data),
         (Err(code), _) | (_, Err(code)) => return status(code),
     };
-    match figures(&repository.data, &pulls, latest.as_ref()) {
+    match figures(
+        &repository.data,
+        &pulls,
+        latest.as_ref(),
+        cache.github_host(),
+    ) {
         Some(figures) => respond(figures),
         None => status(StatusCode::BAD_GATEWAY),
     }
@@ -326,7 +331,12 @@ pub async fn contributors(
     } else {
         Some(listed(&list))
     };
-    let mut contributors: Vec<(u64, Value)> = list.items.iter().filter_map(contributor).collect();
+    let host = cache.github_host();
+    let mut contributors: Vec<(u64, Value)> = list
+        .items
+        .iter()
+        .filter_map(|item| contributor(item, host))
+        .collect();
     contributors.sort_by(|(one, _), (other, _)| other.cmp(one));
     contributors.truncate(CONTRIBUTORS);
     let contributors: Vec<Value> = contributors.into_iter().map(|(_, data)| data).collect();
@@ -419,7 +429,12 @@ pub async fn commits(
             Err(code) => return status(code),
         },
     };
-    let commits: Vec<Value> = list.items.iter().filter_map(commit).collect();
+    let host = cache.github_host();
+    let commits: Vec<Value> = list
+        .items
+        .iter()
+        .filter_map(|item| commit(item, host))
+        .collect();
     respond(json!({ "commits": commits }))
 }
 
@@ -470,7 +485,12 @@ pub async fn releases(
     } else {
         listed(&list)
     };
-    let releases: Vec<Value> = list.items.iter().filter_map(listed_release).collect();
+    let host = cache.github_host();
+    let releases: Vec<Value> = list
+        .items
+        .iter()
+        .filter_map(|item| listed_release(item, host))
+        .collect();
     respond(json!({ "releases": releases, "count": count }))
 }
 
@@ -603,8 +623,9 @@ pub async fn workflow_runs(
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
+    let host = cache.github_host();
     let Some(branch) = text(&repository.data, "default_branch") else {
-        return respond(health(None, &List::default(), false));
+        return respond(health(None, &List::default(), false, host));
     };
     let path = repository
         .path(&["actions", "runs"])
@@ -621,9 +642,11 @@ pub async fn workflow_runs(
         )
         .await;
     match list {
-        Err(error) if refused(&error) => respond(health(Some(branch), &List::default(), true)),
+        Err(error) if refused(&error) => {
+            respond(health(Some(branch), &List::default(), true, host))
+        }
         list => match data(list) {
-            Ok(list) => respond(health(Some(branch), &list.data, false)),
+            Ok(list) => respond(health(Some(branch), &list.data, false, host)),
             Err(code) => status(code),
         },
     }
@@ -850,11 +873,12 @@ async fn read(
 pub(crate) fn denied<T>(
     viewer: &Viewer,
     result: &Result<Outcome<T>, cache::Error>,
+    host: &str,
 ) -> Option<Response> {
     let body = match result {
         Err(cache::Error::GitHub(github::Error::SsoRequired { url })) => {
             let url = url.as_deref().map(Value::from);
-            json!({ "denied": "sso", "url": page(url.as_ref()) })
+            json!({ "denied": "sso", "url": page(url.as_ref(), host) })
         }
         Err(cache::Error::GitHub(github::Error::Forbidden { .. }))
             if matches!(viewer, Viewer::TokenUser { .. }) =>
@@ -942,7 +966,7 @@ async fn issues_and_pulls(cache: &Cache, repository: &Under) -> Result<Value, St
         .data
         .items
         .iter()
-        .filter_map(recent_item)
+        .filter_map(|item| recent_item(item, cache.github_host()))
         .collect();
     Ok(json!({ "issues": issues, "pull_requests": pull_requests, "recent": recent }))
 }
@@ -977,7 +1001,7 @@ fn search(name: &str, qualifiers: &str) -> github::Path {
 
 /// The stat cards' figures, from the repository, the search for its open pull requests,
 /// and its latest release, if it has one. `None` if GitHub left a count out.
-fn figures(repository: &Value, pulls: &Value, latest: Option<&Value>) -> Option<Value> {
+fn figures(repository: &Value, pulls: &Value, latest: Option<&Value>, host: &str) -> Option<Value> {
     let count = |data: &Value, key| data.get(key).and_then(Value::as_u64);
     let open_pulls = total(pulls)?;
     Some(json!({
@@ -986,7 +1010,7 @@ fn figures(repository: &Value, pulls: &Value, latest: Option<&Value>) -> Option<
         "watchers": count(repository, "subscribers_count")?,
         "open_issues": open_issues(repository, open_pulls)?,
         "open_pull_requests": open_pulls,
-        "latest_release": latest.and_then(release),
+        "latest_release": latest.and_then(|latest| release(latest, host)),
     }))
 }
 
@@ -1010,12 +1034,12 @@ fn enabled(repository: &Value, feature: &str) -> bool {
 }
 
 /// A release as its stat card shows it, unless it has no tag.
-fn release(release: &Value) -> Option<Value> {
+fn release(release: &Value, host: &str) -> Option<Value> {
     let tag = text(release, "tag_name")?;
     Some(json!({
         "tag": tag,
         "published_at": text(release, "published_at").or_else(|| text(release, "created_at")),
-        "url": page(release.get("html_url")),
+        "url": page(release.get("html_url"), host),
     }))
 }
 
@@ -1079,14 +1103,14 @@ fn shares(languages: &Value) -> Option<Value> {
 
 /// A contributor as the widget shows them, with their count of commits, unless GitHub
 /// left out their login or that count.
-fn contributor(contributor: &Value) -> Option<(u64, Value)> {
+fn contributor(contributor: &Value, host: &str) -> Option<(u64, Value)> {
     let commits = contributor.get("contributions")?.as_u64()?;
     Some((
         commits,
         json!({
             "login": text(contributor, "login")?,
             "avatar_url": link(contributor.get("avatar_url"), &["https"]),
-            "url": page(contributor.get("html_url")),
+            "url": page(contributor.get("html_url"), host),
             "commits": commits,
         }),
     ))
@@ -1094,7 +1118,7 @@ fn contributor(contributor: &Value) -> Option<(u64, Value)> {
 
 /// An issue or pull request as the widget lists it, unless GitHub left out its number or
 /// title, or gave it a state that BuhTig does not know.
-fn recent_item(item: &Value) -> Option<Value> {
+fn recent_item(item: &Value, host: &str) -> Option<Value> {
     let pull_request = item.get("pull_request").filter(|pull| pull.is_object());
     let state = match (text(item, "state")?, pull_request) {
         ("open", _) => "open",
@@ -1110,12 +1134,12 @@ fn recent_item(item: &Value) -> Option<Value> {
         "author": first_text(item, &["/user/login"]),
         "created_at": text(item, "created_at"),
         "updated_at": text(item, "updated_at"),
-        "url": page(item.get("html_url")),
+        "url": page(item.get("html_url"), host),
     }))
 }
 
 /// A commit as the widget lists it, unless GitHub left out its SHA.
-fn commit(commit: &Value) -> Option<Value> {
+fn commit(commit: &Value, host: &str) -> Option<Value> {
     let message = first_text(commit, &["/commit/message"])
         .and_then(|message| message.lines().next())
         .map(str::trim)
@@ -1126,16 +1150,16 @@ fn commit(commit: &Value) -> Option<Value> {
         "author": first_text(commit, &["/author/login", "/commit/author/name"]),
         "author_avatar_url": link(commit.pointer("/author/avatar_url"), &["https"]),
         "committed_at": first_text(commit, &["/commit/committer/date", "/commit/author/date"]),
-        "url": page(commit.get("html_url")),
+        "url": page(commit.get("html_url"), host),
     }))
 }
 
 /// A release as the releases widget lists it, unless it is a draft or has no tag.
-fn listed_release(data: &Value) -> Option<Value> {
+fn listed_release(data: &Value, host: &str) -> Option<Value> {
     if data.get("draft") == Some(&Value::Bool(true)) {
         return None;
     }
-    let mut listed = release(data)?;
+    let mut listed = release(data, host)?;
     let tag = text(data, "tag_name")?;
     listed["name"] = text(data, "name").filter(|name| *name != tag).into();
     listed["prerelease"] = (data.get("prerelease") == Some(&Value::Bool(true))).into();
@@ -1195,7 +1219,7 @@ fn ages(items: &List, now: DateTimeUtc) -> Value {
 
 /// How the workflow runs of `runs` on `branch` fared, latest first as GitHub lists them,
 /// as [`workflow_runs`] answers, or that GitHub refused to list them, if `hidden`.
-fn health(branch: Option<&str>, runs: &List, hidden: bool) -> Value {
+fn health(branch: Option<&str>, runs: &List, hidden: bool, host: &str) -> Value {
     let runs: Vec<&Value> = runs.items.iter().filter(|run| run.is_object()).collect();
     let concluded = |conclusions: &[&str]| {
         runs.iter()
@@ -1213,7 +1237,7 @@ fn health(branch: Option<&str>, runs: &List, hidden: bool) -> Value {
             "status": text(run, "status"),
             "conclusion": text(run, "conclusion"),
             "started_at": text(run, "run_started_at").or_else(|| text(run, "created_at")),
-            "url": page(run.get("html_url")),
+            "url": page(run.get("html_url"), host),
         })
     });
     json!({
@@ -1352,10 +1376,10 @@ fn time(data: &Value, key: &str) -> Option<DateTimeUtc> {
     text(data, key)?.parse().ok()
 }
 
-/// `value` as a URL to link to, if it is one of a page on GitHub (FR-REPO-12).
-pub(crate) fn page(value: Option<&Value>) -> Option<String> {
+/// `value` as a URL to link to, if it is one of a page on GitHub, on `github.host` (FR-REPO-12).
+pub(crate) fn page(value: Option<&Value>, host: &str) -> Option<String> {
     link(value, &["https"])
-        .filter(|url| Url::parse(url).is_ok_and(|url| url.host_str() == Some("github.com")))
+        .filter(|url| Url::parse(url).is_ok_and(|url| url.host_str() == Some(host)))
 }
 
 /// `owner/repo` as its two names, if it is a repository's.
@@ -1917,7 +1941,7 @@ mod tests {
         })
         .await
         .unwrap();
-        db::migrate(&db).await.unwrap();
+        db::migrate(&db, crate::config::GITHUB_COM).await.unwrap();
         Arc::new(Cache::new(
             db,
             Arc::new(client(stub)),
@@ -2319,6 +2343,7 @@ mod tests {
         let release = |url: &str| {
             release(
                 &json!({"tag_name": "v1", "created_at": "2026-10-01T12:00:00Z", "html_url": url}),
+                "github.com",
             )
         };
         assert_eq!(
@@ -2336,7 +2361,30 @@ mod tests {
         ] {
             assert_eq!(release(url).unwrap()["url"], Value::Null, "{url}");
         }
-        assert_eq!(super::release(&json!({"tag_name": ""})), None);
+        assert_eq!(super::release(&json!({"tag_name": ""}), "github.com"), None);
+    }
+
+    /// On GitHub Enterprise Server, links go to its pages alone, and no longer to
+    /// github.com's.
+    #[test]
+    fn pages_are_on_the_configured_github_host() {
+        let page = |url: &str| super::page(Some(&json!(url)), "ghe.example.com");
+        assert_eq!(
+            page("https://ghe.example.com/acme/widget/releases/tag/v1").as_deref(),
+            Some("https://ghe.example.com/acme/widget/releases/tag/v1")
+        );
+        assert_eq!(
+            page("https://GHE.example.com/acme").as_deref(),
+            Some("https://ghe.example.com/acme")
+        );
+        for url in [
+            "https://github.com/acme/widget",
+            "http://ghe.example.com/acme",
+            "https://ghe.example.com.evil.example/acme",
+            "https://evil.example/ghe.example.com",
+        ] {
+            assert_eq!(page(url), None, "{url}");
+        }
     }
 
     #[tokio::test]

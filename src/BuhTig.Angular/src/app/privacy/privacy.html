@@ -121,7 +121,9 @@
     <p>
       Deleting your data doesn't remove BuhTig from the apps you've authorized on GitHub. You can
       revoke its access in your GitHub settings.
-      <a href="https://github.com/settings/applications">Review your authorized apps on GitHub</a>
+      <a [href]="'https://' + gitHub + '/settings/applications'"
+        >Review your authorized apps on GitHub</a
+      >
     </p>
     <p>
       If you haven't signed in, nothing BuhTig keeps identifies you, so there is nothing to delete.

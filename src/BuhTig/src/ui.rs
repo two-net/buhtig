@@ -16,7 +16,7 @@ use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::{IntoResponse, Response};
 use rust_embed::RustEmbed;
 
-use crate::security;
+use crate::security::{self, Images};
 
 #[derive(rust_embed::Embed)]
 #[folder = "../BuhTig.Angular/dist/BuhTig/browser"]
@@ -42,6 +42,16 @@ BuhTig.</p>
 /// keeps still for everyone from its first render, as it does for a browser that asks for
 /// reduced motion (FR-ANIM-10).
 pub const STILL: &str = "<meta name=\"buhtig-animations\" content=\"off\">\n";
+
+/// What the app's page carries in its `<head>` when `github.host` is not github.com, so
+/// that the UI takes URLs on `host` in its search box, and links to GitHub's pages there
+/// (CON-09, FR-SRCH-05). Without it, the UI's host is github.com.
+pub fn github_host(host: &str) -> String {
+    format!(
+        "<meta name=\"buhtig-github-host\" content=\"{}\">\n",
+        crate::card::escape(host)
+    )
+}
 
 /// The compressed copies of a file that the build may write, by the coding each is in,
 /// the one that compresses best first: `main-E5OAMLPD.js.br` and `main-E5OAMLPD.js.gz`
@@ -212,15 +222,15 @@ fn file_name(path: &str) -> Option<&str> {
 ///
 /// Each one has a nonce of its own, which Angular gives the styles that it adds, and its
 /// Content Security Policy lets in those alone (NFR-SEC-06).
-pub fn app<A: RustEmbed>(head: Option<&str>) -> Response {
+pub fn app<A: RustEmbed>(head: Option<&str>, images: &Images) -> Response {
     let (policy, body) = match A::get(INDEX) {
         Some(file) => {
             // Before `head` is added, which can quote GitHub, so that no nonce goes there.
-            let (policy, page) = security::with_nonce(&file.data);
+            let (policy, page) = security::with_nonce(images, &file.data);
             let page = head.and_then(|head| with_head(&page, head)).unwrap_or(page);
             (policy, Body::from(page))
         }
-        None => (security::policy(None), Body::from(NOT_BUILT)),
+        None => (security::policy(images, None), Body::from(NOT_BUILT)),
     };
     (
         [
@@ -403,6 +413,10 @@ mod tests {
         }
     }
 
+    fn avatars() -> Images {
+        Images::avatars("github.com")
+    }
+
     /// The nonce of a page, as its policy names it.
     fn nonce(response: &Response) -> String {
         security::nonce(&response.headers()[header::CONTENT_SECURITY_POLICY]).to_owned()
@@ -410,11 +424,11 @@ mod tests {
 
     #[tokio::test]
     async fn every_route_gets_the_index_with_a_nonce_of_its_own() {
-        let response = app::<Built>(None);
+        let response = app::<Built>(None, &avatars());
         let nonce = nonce(&response);
         assert_eq!(
             response.headers()[header::CONTENT_SECURITY_POLICY],
-            security::policy(Some(&nonce))
+            security::policy(&avatars(), Some(&nonce))
         );
         let (status, content_type, cache, body) = parts(response).await;
         assert_eq!(status, StatusCode::OK);
@@ -427,14 +441,14 @@ mod tests {
                  <app-root ngCspNonce=\"{nonce}\"></app-root>\n"
             )
         );
-        assert_ne!(self::nonce(&app::<Built>(None)), nonce);
+        assert_ne!(self::nonce(&app::<Built>(None, &avatars())), nonce);
     }
 
     #[tokio::test]
     async fn what_is_added_to_the_head_ends_it_as_it_is() {
         // As a link preview could, quoting GitHub.
         let head = format!("<meta name=\"x\" content=\"{}\">", security::NONCE);
-        let response = app::<Built>(Some(&head));
+        let response = app::<Built>(Some(&head), &avatars());
         let nonce = nonce(&response);
         let (status, _, cache, body) = parts(response).await;
         assert_eq!(status, StatusCode::OK);
@@ -477,10 +491,10 @@ mod tests {
     #[tokio::test]
     async fn a_build_without_the_ui_says_how_to_build_it() {
         assert!(asset::<NotBuilt>("/main-ABCDEFGH.js", &HeaderMap::new()).is_none());
-        let response = app::<NotBuilt>(Some("<meta>"));
+        let response = app::<NotBuilt>(Some("<meta>"), &avatars());
         assert_eq!(
             response.headers()[header::CONTENT_SECURITY_POLICY],
-            security::policy(None)
+            security::policy(&avatars(), None)
         );
         let (status, content_type, _, body) = parts(response).await;
         assert_eq!(status, StatusCode::OK);

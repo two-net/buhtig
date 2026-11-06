@@ -5,7 +5,8 @@ import { Router, provideRouter } from '@angular/router';
 import type { Mock, MockInstance } from 'vitest';
 import { Icon } from '../icon/icon';
 import { Motion } from '../motion/motion';
-import { LABEL, PLACEHOLDERS } from './messages';
+import { GITHUB_HOST } from '../github/host';
+import { LABEL, placeholders } from './messages';
 import { Search, SearchVariant } from './search';
 import { Shortcut } from './shortcut';
 
@@ -89,6 +90,32 @@ describe('Search', () => {
     expect(said().classList).toContain('err');
     expect(icons()).toEqual(['alert']);
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  // CON-09, FR-SRCH-05: on GitHub Enterprise Server, URLs on its host alone.
+  it('takes URLs on the GitHub host that BuhTig reads from, and names it', async () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      imports: [Search],
+      providers: [
+        provideRouter([]),
+        { provide: Motion, useValue: { full: motion } },
+        { provide: GITHUB_HOST, useValue: 'ghe.example.com' },
+      ],
+    });
+    navigate = vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+    fixture = TestBed.createComponent(Search);
+    await fixture.whenStable();
+
+    expect(input().placeholder).toBe('ghe.example.com/owner/repo or ghe.example.com/owner');
+    type('https://ghe.example.com/');
+    await fixture.whenStable();
+    expect(hint()).toBeFalsy();
+    await search('https://github.com/owner/repo');
+    expect(message()).toBe('BuhTig supports ghe.example.com URLs only.');
+    expect(navigate).not.toHaveBeenCalled();
+    await search('https://ghe.example.com/owner/repo/pull/42');
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/owner/repo');
   });
 
   it('checks names before going anywhere (FR-SRCH-04)', async () => {
@@ -422,7 +449,7 @@ describe('Search', () => {
         await at(variant);
         expect(submit()?.textContent?.trim(), variant).toBe('Show dashboard');
         expect(element().querySelector('kbd'), variant).toBeNull();
-        expect(input().placeholder, variant).toBe(PLACEHOLDERS.hero);
+        expect(input().placeholder, variant).toBe(placeholders('github.com').hero);
       }
     });
 
@@ -431,7 +458,7 @@ describe('Search', () => {
       const narrow = TestBed.createComponent(Search);
       narrow.detectChanges();
       expect((narrow.nativeElement as HTMLElement).querySelector('input')!.placeholder).toBe(
-        PLACEHOLDERS.narrow,
+        placeholders('github.com').narrow,
       );
     });
 

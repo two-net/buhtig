@@ -60,14 +60,14 @@ type Candidate = Omit<Suggestion, 'key' | 'tab' | 'tabLabel' | 'path'>;
  * (FR-SRCH-13). Nothing here waits on the server, so it is shown with each keystroke
  * (NFR-PERF-06).
  */
-export function suggest(query: string, sources: Sources): Suggestions {
+export function suggest(query: string, sources: Sources, host: string): Suggestions {
   const [target, ...rest] = query.trim().split(/\s+/);
   const word = rest.join(' ');
   const candidates = candidatesOf(sources);
 
   let ranked: Candidate[] = candidates;
   if (target !== '') {
-    const needle = searchable(target);
+    const needle = searchable(target, host);
     ranked = candidates
       .flatMap((candidate, index) => {
         const match = fuzzy(needle, candidate.name);
@@ -82,7 +82,7 @@ export function suggest(query: string, sources: Sources): Suggestions {
       .map(({ candidate }) => candidate);
   }
 
-  const command = parseCommand(query);
+  const command = parseCommand(query, host);
   const typed = command.ok
     ? command.resource
     : command.problem.kind === 'bad-tab'
@@ -122,9 +122,9 @@ export function suggest(query: string, sources: Sources): Suggestions {
   const problem = command.problem;
   const unfinished =
     problem.kind === 'empty' ||
-    (word === '' && isUnfinished(target)) ||
+    (word === '' && isUnfinished(target, host)) ||
     (problem.kind === 'bad-tab' && problem.could.length > 1);
-  return { items, problem: unfinished ? undefined : problemMessage(problem) };
+  return { items, problem: unfinished ? undefined : problemMessage(problem, host) };
 }
 
 /** The pins, then the dashboards viewed lately, then the repositories opened here lately, once. */
@@ -166,12 +166,14 @@ function isSame(a: Resource, b: Resource): boolean {
 }
 
 /**
- * What of `target` to match names against: a GitHub URL without its scheme and host, and an
- * organization's or a user's without `orgs/` or `users/`, as in `github.com/tokio-rs/ax`.
+ * What of `target` to match names against: a URL of GitHub at `host` without its scheme and
+ * host, and an organization's or a user's without `orgs/` or `users/`, as in
+ * `github.com/tokio-rs/ax`.
  */
-function searchable(target: string): string {
+function searchable(target: string, host: string): string {
+  const name = host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return target
-    .replace(/^(?:[a-z]+:\/\/)?(?:[^/@]+@)?(?:www\.)?github\.com[/:]?/i, '')
+    .replace(new RegExp(`^(?:[a-z]+://)?(?:[^/@]+@)?(?:www\\.)?${name}[/:]?`, 'i'), '')
     .replace(/^(?:orgs|users)\//i, '')
     .replace(/\.git$/i, '')
     .replace(/\/+$/, '');

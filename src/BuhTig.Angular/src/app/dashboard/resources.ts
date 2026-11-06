@@ -1,9 +1,10 @@
 import { HttpClient, HttpErrorResponse, HttpStatusCode } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
 import { Observable, catchError, map, of, switchMap, tap, throwError } from 'rxjs';
-import { Known, Owner, Resource, dashboardPath, parse } from '../search/parse';
+import { Known, Owner, Resource, dashboardPath, parseName } from '../search/parse';
 import { Computing, Failure, failureOf } from '../widget/load';
 import { organizationUrl, repositoryUrl, resourceUrl, userUrl } from './urls';
+import { GITHUB_HOST } from '../github/host';
 
 /** What a dashboard learns of its repository, organization or user before its widgets load. */
 export interface Summary {
@@ -710,6 +711,7 @@ interface ReleaseCadenceAnswer {
 @Injectable({ providedIn: 'root' })
 export class Resources {
   private readonly http = inject(HttpClient);
+  private readonly gitHub = inject(GITHUB_HOST);
 
   private readonly refreshCount = signal(0);
 
@@ -749,7 +751,7 @@ export class Resources {
         };
       }),
       catchError((error: unknown) => {
-        const denied = deniedBy(error);
+        const denied = deniedBy(error, this.gitHub);
         const status = error instanceof HttpErrorResponse ? error.status : undefined;
         const notFound = status === HttpStatusCode.NotFound;
         const invalid = status === HttpStatusCode.BadRequest;
@@ -1238,8 +1240,11 @@ function activity(answer: CommitActivityAnswer): CommitActivity {
   return { weeks, total: weeks.reduce((total, week) => total + week.commits, 0) };
 }
 
-/** Why GitHub keeps a resource from the viewer, if `error` is the server's word that it does. */
-function deniedBy(error: unknown): Denied | undefined {
+/**
+ * Why GitHub keeps a resource from the viewer, if `error` is the server's word that it does,
+ * with where to authorize single sign-on if it is a page on GitHub at `host`.
+ */
+function deniedBy(error: unknown, host: string): Denied | undefined {
   if (!(error instanceof HttpErrorResponse) || error.status !== HttpStatusCode.Forbidden) {
     return undefined;
   }
@@ -1247,7 +1252,7 @@ function deniedBy(error: unknown): Denied | undefined {
   switch (answer?.denied) {
     case 'sso': {
       const url = link(answer.url, ['https:']);
-      return { reason: 'sso', url: url && new URL(url).host === 'github.com' ? url : undefined };
+      return { reason: 'sso', url: url && new URL(url).host === host ? url : undefined };
     }
     case 'token':
       return { reason: 'token' };
@@ -1262,7 +1267,7 @@ function deniedBy(error: unknown): Denied | undefined {
  * would make one of, such as a URL. `parse` takes a login alone as an account's, of either kind.
  */
 function canonicalPath(name: string, kind: Known['kind']): string | undefined {
-  const parsed = parse(name);
+  const parsed = parseName(name);
   const path = `/${name}`;
   return parsed.ok &&
     parsed.resource.kind === (kind === 'repository' ? 'repository' : 'account') &&

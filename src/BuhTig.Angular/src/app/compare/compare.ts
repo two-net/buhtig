@@ -21,7 +21,7 @@ import { Resources, Summary } from '../dashboard/resources';
 import { same } from '../dashboard/summary';
 import { Header } from '../header/header';
 import { Announcer } from '../live/announcer';
-import { Known, Owner, Resource, dashboardPath, parse } from '../search/parse';
+import { Known, Owner, Resource, dashboardPath, parseName } from '../search/parse';
 import { CompareStyles, DashboardStyles } from '../styles/styles';
 import { TipHost } from '../tip/tip';
 import { Toasts } from '../toast/toasts';
@@ -196,7 +196,7 @@ export class Comparison implements ComparisonData {
 
   /** The resource the URL names `name`, such as `owner/repo`, as the route took it. */
   private side(name: string): Resource {
-    const parsed = parse(name);
+    const parsed = parseName(name);
     return parsed.ok ? parsed.resource : { kind: 'account', name };
   }
 

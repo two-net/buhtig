@@ -10,8 +10,8 @@
 //! no one's cookie but its sender's.
 //!
 //! Every response carries a Content Security Policy, under which pages run scripts and
-//! apply styles from BuhTig alone, and show images from BuhTig and GitHub's avatars
-//! (NFR-SEC-06). The UI's build writes no script or style into its page, since it does not
+//! apply styles from BuhTig alone, and show images from BuhTig and GitHub's avatars on
+//! `github.host` ([`Images`], NFR-SEC-06). The UI's build writes no script or style into its page, since it does not
 //! inline critical CSS (`inlineCritical` in `angular.json`). Angular adds the styles of its
 //! components to the page as it renders them, though, so each page names a nonce of its
 //! own for those ([`with_nonce`]).
@@ -32,29 +32,53 @@ use axum::response::{IntoResponse, Response};
 use tracing::debug;
 use url::Url;
 
+use crate::config::GITHUB_COM;
 use crate::crypto;
 
 /// What a page has where its nonce goes, which [`with_nonce`] replaces with one of the
 /// response's own: in the app's page, Angular's `ngCspNonce`.
 pub const NONCE: &str = "BUHTIG_CSP_NONCE";
 
-/// GitHub's avatar host, the one other place that pages show images from (FR-DATA-01).
-const AVATARS: &str = "https://avatars.githubusercontent.com";
+/// Where pages may show images from besides BuhTig itself, as `img-src` sources.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Images(String);
+
+impl Images {
+    /// GitHub's avatars on `github_host`, the one other place that pages show images from
+    /// (FR-DATA-01): `avatars.githubusercontent.com` for github.com. GitHub Enterprise
+    /// Server serves them from `avatars.{host}` when it isolates subdomains, and otherwise
+    /// under `/avatars/` on its host, which lets in nothing else there.
+    pub fn avatars(github_host: &str) -> Images {
+        Images(if github_host == GITHUB_COM {
+            "https://avatars.githubusercontent.com".to_owned()
+        } else {
+            format!("https://avatars.{github_host} https://{github_host}/avatars/")
+        })
+    }
+
+    /// None besides BuhTig's own, for a page that shows no avatars.
+    pub fn own() -> Images {
+        Images(String::new())
+    }
+}
 
 const SEC_FETCH_SITE: &str = "sec-fetch-site";
 
 pub struct Security {
     /// `server.public_url`'s origin, as browsers write it in `Origin`.
     origin: String,
+    /// What the [`policy`] of a response without its own lets images in from.
+    images: Images,
     /// Whether BuhTig is on HTTPS, as `server.public_url` says (IF-04). TLS is terminated
     /// in front of it (A-06), so its requests do not tell.
     https: bool,
 }
 
 impl Security {
-    pub fn new(public_url: &Url) -> Security {
+    pub fn new(public_url: &Url, images: Images) -> Security {
         Security {
             origin: public_url.origin().ascii_serialization(),
+            images,
             https: public_url.scheme() == "https",
         }
     }
@@ -103,7 +127,7 @@ pub async fn headers(
     let headers = response.headers_mut();
     headers
         .entry(header::CONTENT_SECURITY_POLICY)
-        .or_insert_with(|| policy(None));
+        .or_insert_with(|| policy(&security.images, None));
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -147,26 +171,31 @@ fn plain(response: Response) -> Response {
 
 /// The Content Security Policy of a response (NFR-SEC-06): scripts, styles and everything
 /// else from BuhTig alone, besides styles in elements that carry `nonce`, if there is one,
-/// and images from GitHub's avatar host. Nothing may frame BuhTig or embed objects, and
-/// pages may not move their base or send their forms elsewhere.
-pub fn policy(nonce: Option<&str>) -> HeaderValue {
+/// and `images` from elsewhere. Nothing may frame BuhTig or embed objects, and pages may
+/// not move their base or send their forms elsewhere.
+pub fn policy(images: &Images, nonce: Option<&str>) -> HeaderValue {
     let style = match nonce {
         Some(nonce) => format!("'self' 'nonce-{nonce}'"),
         None => "'self'".to_owned(),
     };
+    let img = match images.0.as_str() {
+        "" => "'self'".to_owned(),
+        sources => format!("'self' {sources}"),
+    };
     HeaderValue::try_from(format!(
-        "default-src 'self'; script-src 'self'; style-src {style}; img-src 'self' {AVATARS}; \
+        "default-src 'self'; script-src 'self'; style-src {style}; img-src {img}; \
          object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     ))
-    .expect("a nonce of base64url is a header")
+    .expect("a nonce of base64url and a validated host are a header")
 }
 
 /// `page` with a new nonce wherever it has [`NONCE`], and the [`policy`] under which its
-/// styles with that nonce apply. A page without one is as any other response.
-pub fn with_nonce(page: &[u8]) -> (HeaderValue, Vec<u8>) {
+/// styles with that nonce apply, and its images from `images`. A page without one is as
+/// any other response.
+pub fn with_nonce(images: &Images, page: &[u8]) -> (HeaderValue, Vec<u8>) {
     let placeholder = NONCE.as_bytes();
     if find(page, placeholder).is_none() {
-        return (policy(None), page.to_vec());
+        return (policy(images, None), page.to_vec());
     }
     let nonce = crypto::random_id();
     let mut with = Vec::with_capacity(page.len());
@@ -177,7 +206,7 @@ pub fn with_nonce(page: &[u8]) -> (HeaderValue, Vec<u8>) {
         rest = &rest[at + placeholder.len()..];
     }
     with.extend_from_slice(rest);
-    (policy(Some(&nonce)), with)
+    (policy(images, Some(&nonce)), with)
 }
 
 /// The nonce that `policy` lets styles in with.
@@ -214,7 +243,10 @@ mod tests {
     const PUBLIC_URL: &str = "https://buhtig.example.com";
 
     fn security(public_url: &str) -> Arc<Security> {
-        Arc::new(Security::new(&Url::parse(public_url).unwrap()))
+        Arc::new(Security::new(
+            &Url::parse(public_url).unwrap(),
+            Images::avatars("github.com"),
+        ))
     }
 
     fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
@@ -278,24 +310,50 @@ mod tests {
 
     #[test]
     fn policies_let_in_styles_with_their_nonce_alone() {
+        let avatars = Images::avatars("github.com");
         assert_eq!(
-            policy(None),
+            policy(&avatars, None),
             "default-src 'self'; script-src 'self'; style-src 'self'; \
              img-src 'self' https://avatars.githubusercontent.com; object-src 'none'; \
              base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
         );
         assert_eq!(
-            policy(Some("abc_-1")),
+            policy(&avatars, Some("abc_-1")),
             "default-src 'self'; script-src 'self'; style-src 'self' 'nonce-abc_-1'; \
              img-src 'self' https://avatars.githubusercontent.com; object-src 'none'; \
              base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
         );
     }
 
+    /// On GitHub Enterprise Server, avatars are on its host, under `avatars.` or
+    /// `/avatars/`; a page that shows none lets in BuhTig's images alone.
+    #[test]
+    fn images_come_from_the_github_hosts_avatars() {
+        let img = |images: &Images| {
+            let policy = policy(images, None);
+            let policy = policy.to_str().unwrap();
+            policy
+                .split("; ")
+                .find(|directive| directive.starts_with("img-src "))
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(
+            img(&Images::avatars("github.com")),
+            "img-src 'self' https://avatars.githubusercontent.com"
+        );
+        assert_eq!(
+            img(&Images::avatars("ghe.example.com")),
+            "img-src 'self' https://avatars.ghe.example.com https://ghe.example.com/avatars/"
+        );
+        assert_eq!(img(&Images::own()), "img-src 'self'");
+    }
+
     #[test]
     fn each_page_gets_a_nonce_of_its_own() {
         let page = format!("<style nonce=\"{NONCE}\"></style><app-root ngCspNonce=\"{NONCE}\">");
-        let (policy, with) = with_nonce(page.as_bytes());
+        let avatars = Images::avatars("github.com");
+        let (policy, with) = with_nonce(&avatars, page.as_bytes());
         let nonce = nonce(&policy).to_owned();
         assert_eq!(nonce.len(), 43);
         assert_eq!(
@@ -303,11 +361,11 @@ mod tests {
             format!("<style nonce=\"{nonce}\"></style><app-root ngCspNonce=\"{nonce}\">")
         );
 
-        let (again, _) = with_nonce(page.as_bytes());
+        let (again, _) = with_nonce(&avatars, page.as_bytes());
         assert_ne!(self::nonce(&again), nonce);
 
-        let (policy, with) = with_nonce(b"<p>no styles</p>");
-        assert_eq!(policy, self::policy(None));
+        let (policy, with) = with_nonce(&avatars, b"<p>no styles</p>");
+        assert_eq!(policy, self::policy(&avatars, None));
         assert_eq!(with, b"<p>no styles</p>");
     }
 
@@ -419,7 +477,11 @@ mod tests {
         assert_guarded(&headers, true);
         assert_eq!(
             header(&headers, "content-security-policy"),
-            Some(policy(None).to_str().unwrap())
+            Some(
+                policy(&Images::avatars("github.com"), None)
+                    .to_str()
+                    .unwrap()
+            )
         );
 
         // HTTPS alone keeps browsers on HTTPS.

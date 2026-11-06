@@ -1,5 +1,5 @@
 import { UrlMatchResult, UrlSegment } from '@angular/router';
-import { Resource, dashboardPath, parse } from '../search/parse';
+import { Resource, dashboardPath, parseName } from '../search/parse';
 
 /**
  * What a comparison is of: two repositories, or two accounts, each an organization or a user,
@@ -52,7 +52,7 @@ export function comparedAt(
  * nor a repository's name with `.git`, which `parse` takes too.
  */
 function named(name: string, kind: Compared): Resource | undefined {
-  const parsed = parse(name);
+  const parsed = parseName(name);
   return parsed.ok && parsed.resource.kind === kind && dashboardPath(parsed.resource) === `/${name}`
     ? parsed.resource
     : undefined;

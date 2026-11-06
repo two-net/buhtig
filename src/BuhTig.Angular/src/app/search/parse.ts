@@ -44,28 +44,32 @@ const ACCOUNT = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,38}$/;
 const REPOSITORY = /^[A-Za-z0-9._-]{1,100}$/;
 
 /**
- * How the forms of SRS Table 4-1 begin, up to an organization's or a user's name, in lowercase.
+ * How the forms of SRS Table 4-1 begin on GitHub at `host`, up to an organization's or a user's
+ * name, in lowercase.
  */
-const BEGINNINGS = ['orgs/', 'users/'].flatMap((below) =>
-  [
-    'https://github.com/',
-    'https://www.github.com/',
-    'http://github.com/',
-    'http://www.github.com/',
-    'github.com/',
-    'www.github.com/',
-    'ssh://git@github.com/',
-    'git@github.com:',
-    '',
-  ].map((start) => start + below),
-);
+function beginnings(host: string): string[] {
+  return ['orgs/', 'users/'].flatMap((below) =>
+    [
+      `https://${host}/`,
+      `https://www.${host}/`,
+      `http://${host}/`,
+      `http://www.${host}/`,
+      `${host}/`,
+      `www.${host}/`,
+      `ssh://git@${host}/`,
+      `git@${host}:`,
+      '',
+    ].map((start) => start + below),
+  );
+}
 
 /**
  * The repository, organization, user or account that `input` names, in any of the forms of SRS
- * Table 4-1, or why it names none (FR-SRCH-01, FR-SRCH-02, FR-SRCH-04, FR-SRCH-05). An account
+ * Table 4-1 on GitHub at `host`, the lowercase `github.host`, or why it names none (FR-SRCH-01,
+ * FR-SRCH-02, FR-SRCH-04, FR-SRCH-05). Table 4-1's `github.com` stands for `host`. An account
  * named alone may be an organization or a user, which GitHub tells (FR-SRCH-06).
  */
-export function parse(input: string): Parsed {
+export function parse(input: string, host: string): Parsed {
   const text = input.trim().split(/[?#]/)[0];
   if (text === '') {
     return problem({ kind: 'empty' });
@@ -74,7 +78,7 @@ export function parse(input: string): Parsed {
   if (location === undefined) {
     return problem({ kind: 'unrecognized' });
   }
-  if (location.host !== undefined && location.host !== 'github.com') {
+  if (location.host !== undefined && location.host !== host && location.host !== `www.${host}`) {
     return problem({ kind: 'not-github' });
   }
   const segments = location.path.split('/').filter((segment) => segment !== '');
@@ -97,13 +101,22 @@ export function parse(input: string): Parsed {
 }
 
 /**
- * Whether `input` is empty or the beginning of a form in Table 4-1 that names nothing yet, such
- * as `https://github.c` while a URL is being typed, rather than wrong (FR-SRCH-09). Some
- * beginnings, such as `github`, also name an organization; `parse` comes first.
+ * The resource that `name` names, a name from BuhTig's own URLs or data such as `owner/repo`,
+ * rather than what someone typed: it names no host, so any host turns it away.
  */
-export function isUnfinished(input: string): boolean {
+export function parseName(name: string): Parsed {
+  return parse(name, '');
+}
+
+/**
+ * Whether `input` is empty or the beginning of a form in Table 4-1 on GitHub at `host` that
+ * names nothing yet, such as `https://github.c` while a URL is being typed, rather than wrong
+ * (FR-SRCH-09). Some beginnings, such as `github`, also name an organization; `parse` comes
+ * first.
+ */
+export function isUnfinished(input: string, host: string): boolean {
   const text = input.trim().toLowerCase();
-  return BEGINNINGS.some((beginning) => beginning.startsWith(text));
+  return beginnings(host).some((beginning) => beginning.startsWith(text));
 }
 
 /** The dashboard's path (FR-NAV-01). Names need no escaping: they are letters, digits and `._-`. */
@@ -143,13 +156,12 @@ function locate(text: string): { host?: string; path: string } | undefined {
   return { path: text };
 }
 
-/** The host of an authority such as `git@GitHub.com:22`, lowercased and without `www.`. */
+/** The host of an authority such as `git@GitHub.com:22`, lowercased. */
 function host(authority: string): string {
-  const host = authority
+  return authority
     .slice(authority.lastIndexOf('@') + 1)
     .replace(/:\d*$/, '')
     .toLowerCase();
-  return host.startsWith('www.') ? host.slice('www.'.length) : host;
 }
 
 /** The account `name`, of `kind` if the form names it, or else of a kind that GitHub tells. */

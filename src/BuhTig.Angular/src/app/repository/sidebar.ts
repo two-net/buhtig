@@ -18,6 +18,7 @@ import {
   languagesDescription,
   moreReleases,
 } from './messages';
+import { GITHUB_HOST } from '../github/host';
 
 /**
  * What a repository's Overview tab shows beside its widgets (FR-REPO-01): its description,
@@ -33,6 +34,8 @@ import {
   styles: ':host { display: block; min-width: 0; }',
 })
 export class RepositorySidebar {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   private readonly data = inject(RepositoryData);
 
   protected readonly repository = this.data.repository;

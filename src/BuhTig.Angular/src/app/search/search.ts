@@ -15,11 +15,12 @@ import { Motion } from '../motion/motion';
 import {
   KINDS,
   LABEL,
-  PLACEHOLDERS,
+  placeholders,
   SHOW_DASHBOARD,
   problemMessage,
   resourceName,
 } from './messages';
+import { GITHUB_HOST } from '../github/host';
 import { commandPath, parseCommand, tabLabel } from './command';
 import { Resource, isUnfinished } from './parse';
 import { Shortcut } from './shortcut';
@@ -61,6 +62,7 @@ export class Search {
   private readonly router = inject(Router);
   private readonly motion = inject(Motion);
   private readonly shortcut = inject(Shortcut);
+  private readonly host = inject(GITHUB_HOST);
   private readonly input = viewChild.required<ElementRef<HTMLInputElement>>('input');
   private readonly box = viewChild.required<ElementRef<HTMLElement>>('box');
 
@@ -76,13 +78,14 @@ export class Search {
   protected readonly label = LABEL;
   protected readonly button = SHOW_DASHBOARD;
   protected readonly header = computed(() => this.variant() === 'header');
-  protected readonly placeholder = computed(() =>
-    this.header()
-      ? PLACEHOLDERS.header
+  protected readonly placeholder = computed(() => {
+    const placeholder = placeholders(this.host);
+    return this.header()
+      ? placeholder.header
       : typeof innerWidth === 'number' && innerWidth < 520
-        ? PLACEHOLDERS.narrow
-        : PLACEHOLDERS.hero,
-  );
+        ? placeholder.narrow
+        : placeholder.hero;
+  });
 
   protected readonly query = linkedSignal(() => this.prefill());
   /**
@@ -97,7 +100,7 @@ export class Search {
     if (query === this.prefill()) {
       return undefined;
     }
-    const parsed = parseCommand(query);
+    const parsed = parseCommand(query, this.host);
     if (parsed.ok) {
       const { resource, tab } = parsed;
       return {
@@ -109,9 +112,9 @@ export class Search {
     if (problem.kind === 'bad-tab' && problem.could.length > 1) {
       return named(problem.resource);
     }
-    return isUnfinished(query) || problem.kind === 'empty'
+    return isUnfinished(query, this.host) || problem.kind === 'empty'
       ? undefined
-      : { problem: problemMessage(problem) };
+      : { problem: problemMessage(problem, this.host) };
   });
   /**
    * Why the input opens no dashboard, shown in place of the hint once it is searched for, until
@@ -160,9 +163,9 @@ export class Search {
 
   protected async search(event: Event): Promise<void> {
     event.preventDefault();
-    const parsed = parseCommand(this.query());
+    const parsed = parseCommand(this.query(), this.host);
     if (!parsed.ok) {
-      this.message.set(problemMessage(parsed.problem));
+      this.message.set(problemMessage(parsed.problem, this.host));
       this.animate(SHAKE, { duration: 280, easing: 'ease-in-out' });
       this.input().nativeElement.focus();
       return;

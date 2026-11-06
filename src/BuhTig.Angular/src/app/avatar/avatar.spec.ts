@@ -1,5 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Avatar, avatarOf, identicon } from './avatar';
+import { Avatar, identicon } from './avatar';
 
 describe('Avatar', () => {
   let fixture: ComponentFixture<Avatar>;
@@ -93,15 +93,5 @@ describe('identicon', () => {
         expect(cells, name).toContainEqual({ x: 4 - x, y });
       }
     }
-  });
-});
-
-describe('avatarOf', () => {
-  it("is where GitHub serves an account's avatar by its name, at twice the size for sharp screens", () => {
-    expect(avatarOf('mona', 20)).toBe('https://avatars.githubusercontent.com/mona?s=40');
-  });
-
-  it('escapes the name', () => {
-    expect(avatarOf('a/b?c', 16)).toBe('https://avatars.githubusercontent.com/a%2Fb%3Fc?s=32');
   });
 });

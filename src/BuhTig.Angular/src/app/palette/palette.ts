@@ -13,6 +13,7 @@ import {
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { Router } from '@angular/router';
 import { catchError, filter, of, switchMap, take } from 'rxjs';
+import { GITHUB_HOST } from '../github/host';
 import { Avatar } from '../avatar/avatar';
 import { Dialog } from '../dialog/dialog';
 import { Icon, IconName } from '../icon/icon';
@@ -72,6 +73,7 @@ export class Palette {
   private readonly session = inject(Session);
   private readonly personalService = inject(Personal);
   private readonly recent = inject(Recent);
+  private readonly host = inject(GITHUB_HOST);
   private readonly list = viewChild.required<ElementRef<HTMLElement>>('list');
 
   /** Asked for as the palette closes, with Esc, beside it, or as it opens a dashboard. */
@@ -107,11 +109,15 @@ export class Palette {
 
   protected readonly suggestions = computed(() => {
     const personal = this.personal() ?? NONE;
-    return suggest(this.query(), {
-      pins: personal.pins,
-      recent: personal.recent,
-      opened: this.opened() ?? [],
-    });
+    return suggest(
+      this.query(),
+      {
+        pins: personal.pins,
+        recent: personal.recent,
+        opened: this.opened() ?? [],
+      },
+      this.host,
+    );
   });
 
   /** Each suggestion as the list shows it. */

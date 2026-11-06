@@ -47,7 +47,7 @@
             <p class="help">{{ TOKEN_PURPOSE }} {{ TOKEN_HANDLING }}</p>
             <p class="help">
               {{ TOKEN_ADVICE }}
-              <a href="https://github.com/settings/personal-access-tokens/new">{{
+              <a [href]="'https://' + gitHub + '/settings/personal-access-tokens/new'">{{
                 CREATE_TOKEN
               }}</a>
             </p>
@@ -142,7 +142,7 @@
               </p>
             }
             <p class="help manage">
-              <a href="https://github.com/settings/tokens">{{ MANAGE_TOKENS }}</a>
+              <a [href]="'https://' + gitHub + '/settings/tokens'">{{ MANAGE_TOKENS }}</a>
             </p>
           </section>
 

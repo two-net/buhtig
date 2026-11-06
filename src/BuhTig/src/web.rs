@@ -33,13 +33,14 @@ use crate::accounts;
 use crate::auth::{self, Auth};
 use crate::cache::Cache;
 use crate::config::AccessMode;
+use crate::config::GITHUB_COM;
 use crate::health::{self, Health};
 use crate::navigation::{self, Dashboard};
 use crate::organizations;
 use crate::preview::{self, Cards, Previews};
 use crate::recent;
 use crate::repositories;
-use crate::security::{self, Security};
+use crate::security::{self, Images, Security};
 use crate::session::{self, Sessions};
 use crate::shortcuts::{self, Shortcuts};
 use crate::surprise;
@@ -59,6 +60,10 @@ struct Pages {
     previews: Option<Arc<Previews>>,
     /// `ui.animations`: whether the UI may move (FR-ANIM-10).
     animations: bool,
+    /// `github.host`, which the UI takes URLs on and links to (CON-09).
+    github_host: String,
+    /// GitHub's avatars on that host, which pages show (NFR-SEC-06).
+    images: Images,
 }
 
 /// Every request may carry a session, so each has the [`Sessions`] at hand, to tell who
@@ -80,13 +85,17 @@ pub fn router(
     tokens: Arc<Tokens>,
     shortcuts: Arc<Shortcuts>,
     animations: bool,
+    github_host: &str,
 ) -> Router {
     let previews = previews.map(Arc::new);
     let cards = Cards::new(previews.clone());
+    let images = Images::avatars(github_host);
     let pages = Pages {
         health: health.clone(),
         previews,
         animations,
+        github_host: github_host.to_owned(),
+        images: images.clone(),
     };
     let router = Router::new()
         .route("/-/health", get(health::check))
@@ -302,14 +311,14 @@ pub fn router(
         AccessMode::Private => router.layer(middleware::from_fn(access::gate::<Ui>)),
     };
     // Outside the gate, which needs them to tell who a request is from.
-    guard(router.layer(Extension(sessions)), public_url)
+    guard(router.layer(Extension(sessions)), public_url, images)
 }
 
 /// `router`, with what every request and response of BuhTig's goes through: requests from
 /// other origins' pages are refused, every response is guarded, as `public_url` calls for
-/// ([`security`]), larger ones are compressed, and each is logged.
-fn guard(router: Router, public_url: &Url) -> Router {
-    let security = Arc::new(Security::new(public_url));
+/// with images from `images` ([`security`]), larger ones are compressed, and each is logged.
+fn guard(router: Router, public_url: &Url, images: Images) -> Router {
+    let security = Arc::new(Security::new(public_url, images));
     router
         // Before anything reads a session, so that a forged request changes nothing.
         .layer(middleware::from_fn_with_state(
@@ -371,17 +380,26 @@ async fn page(State(pages): State<Pages>, uri: Uri, headers: HeaderMap) -> Respo
         })
     });
     let tags = preview.map(|preview| preview.tags());
-    ui::app::<Ui>(head(preload, tags, pages.animations).as_deref())
+    let head = head(preload, tags, pages.animations, &pages.github_host);
+    ui::app::<Ui>(head.as_deref(), &pages.images)
 }
 
 /// What the app's page adds to its `<head>`: a dashboard's `preload` of its code and its
-/// link preview `tags`, and [`ui::STILL`] unless `animations` are on. `None` if that is
-/// nothing.
-fn head(preload: Option<String>, tags: Option<String>, animations: bool) -> Option<String> {
+/// link preview `tags`, [`ui::STILL`] unless `animations` are on, and [`ui::github_host`]
+/// unless `github_host` is github.com. `None` if that is nothing.
+fn head(
+    preload: Option<String>,
+    tags: Option<String>,
+    animations: bool,
+    github_host: &str,
+) -> Option<String> {
     let mut head = preload.unwrap_or_default();
     head.push_str(&tags.unwrap_or_default());
     if !animations {
         head.push_str(ui::STILL);
+    }
+    if github_host != GITHUB_COM {
+        head.push_str(&ui::github_host(github_host));
     }
     (!head.is_empty()).then_some(head)
 }
@@ -402,9 +420,9 @@ fn moved(tab: &str) -> Response {
 }
 
 /// The response to a request that needs the database while it is unreachable. Its style
-/// has a nonce, as the app's page does (NFR-SEC-06).
+/// has a nonce, as the app's page does (NFR-SEC-06). It shows no images but its own.
 pub(crate) fn unavailable() -> Response {
-    let (policy, page) = security::with_nonce(UNAVAILABLE.as_bytes());
+    let (policy, page) = security::with_nonce(&Images::own(), UNAVAILABLE.as_bytes());
     (
         StatusCode::SERVICE_UNAVAILABLE,
         [
@@ -591,13 +609,19 @@ mod tests {
 
     #[test]
     fn pages_say_to_keep_still_only_when_animations_are_off() {
-        assert_eq!(head(None, None, true), None);
-        assert_eq!(head(None, None, false).as_deref(), Some(ui::STILL));
+        assert_eq!(head(None, None, true, GITHUB_COM), None);
+        assert_eq!(
+            head(None, None, false, GITHUB_COM).as_deref(),
+            Some(ui::STILL)
+        );
 
         let tags = "<meta name=\"description\" content=\"x\">\n";
-        assert_eq!(head(None, Some(tags.into()), true).as_deref(), Some(tags));
         assert_eq!(
-            head(None, Some(tags.into()), false),
+            head(None, Some(tags.into()), true, GITHUB_COM).as_deref(),
+            Some(tags)
+        );
+        assert_eq!(
+            head(None, Some(tags.into()), false, GITHUB_COM),
             Some(format!("{tags}{}", ui::STILL))
         );
     }
@@ -607,8 +631,26 @@ mod tests {
         let preload = "<link rel=\"modulepreload\" href=\"/repository-ABCDEFGH.js\">\n";
         let tags = "<meta name=\"description\" content=\"x\">\n";
         assert_eq!(
-            head(Some(preload.into()), Some(tags.into()), false),
+            head(Some(preload.into()), Some(tags.into()), false, GITHUB_COM),
             Some(format!("{preload}{tags}{}", ui::STILL))
+        );
+    }
+
+    /// CON-09: the UI hears of GitHub's host only when it is not github.com.
+    #[test]
+    fn pages_name_the_github_host_unless_it_is_github_com() {
+        assert_eq!(head(None, None, true, GITHUB_COM), None);
+        assert_eq!(
+            head(None, None, true, "ghe.example.com").as_deref(),
+            Some("<meta name=\"buhtig-github-host\" content=\"ghe.example.com\">\n")
+        );
+        assert_eq!(
+            head(None, None, false, "ghe.example.com"),
+            Some(format!(
+                "{}{}",
+                ui::STILL,
+                ui::github_host("ghe.example.com")
+            ))
         );
     }
 
@@ -680,7 +722,11 @@ mod tests {
                 "/failed",
                 get(|| async { (StatusCode::BAD_REQUEST, json_of(4096)) }),
             );
-        guard(routes, &Url::parse("https://buhtig.example.com").unwrap())
+        guard(
+            routes,
+            &Url::parse("https://buhtig.example.com").unwrap(),
+            Images::avatars(GITHUB_COM),
+        )
     }
 
     /// Sends `GET path` with `headers` to `app`, served as BuhTig is. The status line, the

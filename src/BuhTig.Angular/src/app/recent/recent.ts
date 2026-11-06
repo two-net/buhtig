@@ -1,7 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, map, of } from 'rxjs';
-import { dashboardPath, parse } from '../search/parse';
+import { dashboardPath, parseName } from '../search/parse';
 
 /**
  * A public repository whose dashboard someone opened on this BuhTig lately, as the shared cache
@@ -49,7 +49,7 @@ export class Recent {
       map(({ repositories }) =>
         repositories.flatMap((repository): RecentRepository[] => {
           // Only `owner/repo` itself, not a URL or a deeper path that `parse` would make one of.
-          const parsed = parse(repository.name);
+          const parsed = parseName(repository.name);
           if (
             !parsed.ok ||
             parsed.resource.kind !== 'repository' ||

@@ -28,6 +28,7 @@
 
 pub mod cache_entry;
 pub mod credential;
+pub mod github_host;
 pub mod history_entry;
 pub mod pin;
 pub mod schema_version;
@@ -47,6 +48,7 @@ pub fn schema(builder: SchemaBuilder) -> SchemaBuilder {
         .register(history_entry::Entity)
         .register(pin::Entity)
         .register(schema_version::Entity)
+        .register(github_host::Entity)
 }
 
 /// What a dashboard shows, as recorded in history and pins.

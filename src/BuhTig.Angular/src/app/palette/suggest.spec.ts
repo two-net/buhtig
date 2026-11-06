@@ -1,3 +1,4 @@
+import { GITHUB_COM } from '../github/host';
 import { Sources, Suggestion, suggest } from './suggest';
 
 const SOURCES: Sources = {
@@ -18,14 +19,14 @@ const SOURCES: Sources = {
 
 /** What the palette lists for `query`, as `name (source)` or `name › tab (source)`. */
 function listed(query: string, sources = SOURCES): string[] {
-  return suggest(query, sources).items.map(
+  return suggest(query, sources, GITHUB_COM).items.map(
     (item: Suggestion) =>
       `${item.name}${item.tabLabel ? ` › ${item.tabLabel}` : ''} (${item.source})`,
   );
 }
 
 function first(query: string): Suggestion {
-  return suggest(query, SOURCES).items[0];
+  return suggest(query, SOURCES, GITHUB_COM).items[0];
 }
 
 describe('suggest (FR-SRCH-12)', () => {
@@ -48,7 +49,7 @@ describe('suggest (FR-SRCH-12)', () => {
   });
 
   it('opens each at its dashboard', () => {
-    expect(suggest('', SOURCES).items.map((item) => item.path)).toEqual([
+    expect(suggest('', SOURCES, GITHUB_COM).items.map((item) => item.path)).toEqual([
       '/tokio-rs/axum',
       '/rust-lang',
       '/mona',
@@ -58,7 +59,7 @@ describe('suggest (FR-SRCH-12)', () => {
   });
 
   it("keeps the owner's avatar of what was opened here", () => {
-    expect(suggest('angular', SOURCES).items[0].avatar).toBe(
+    expect(suggest('angular', SOURCES, GITHUB_COM).items[0].avatar).toBe(
       'https://avatars.githubusercontent.com/u/1',
     );
   });
@@ -107,21 +108,36 @@ describe('suggest (FR-SRCH-12)', () => {
   });
 
   it('tells rows apart, tabs too', () => {
-    const keys = suggest('rust-lang/rust co', SOURCES).items.map((item) => item.key);
+    const keys = suggest('rust-lang/rust co', SOURCES, GITHUB_COM).items.map((item) => item.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('says why what the user typed opens nothing, when nothing matches it either', () => {
-    expect(suggest('gitlab.com/x/y', SOURCES)).toEqual({
+    expect(suggest('gitlab.com/x/y', SOURCES, GITHUB_COM)).toEqual({
       items: [],
       problem: 'BuhTig supports github.com URLs only.',
     });
-    expect(suggest('owner/repo people', SOURCES).problem).toContain(
+    expect(suggest('owner/repo people', SOURCES, GITHUB_COM).problem).toContain(
       "“people” is not a tab of a repository's dashboard.",
     );
   });
 
+  // CON-09: on GitHub Enterprise Server, URLs on its host find dashboards, and github.com's do not.
+  it('takes URLs on the GitHub host that BuhTig reads from alone', () => {
+    const GHES = 'ghe.example.com';
+    // The URL's own repository first, and those it matches without its host after it.
+    expect(
+      suggest('https://ghe.example.com/rust-lang/ru', SOURCES, GHES).items.map((item) => item.name),
+    ).toEqual(['rust-lang/ru', 'rust-lang/rust']);
+    expect(suggest('ghe.example.com/owner/repo', SOURCES, GHES).items[0].path).toBe('/owner/repo');
+    expect(suggest('github.com/x/y', SOURCES, GHES)).toEqual({
+      items: [],
+      problem: 'BuhTig supports ghe.example.com URLs only.',
+    });
+    expect(suggest('https://ghe.ex', SOURCES, GHES)).toEqual({ items: [] });
+  });
+
   it('says nothing is wrong while the query is the beginning of a URL', () => {
-    expect(suggest('https://github.c', SOURCES)).toEqual({ items: [] });
+    expect(suggest('https://github.c', SOURCES, GITHUB_COM)).toEqual({ items: [] });
   });
 });

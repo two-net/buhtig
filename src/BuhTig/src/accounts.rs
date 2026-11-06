@@ -133,7 +133,7 @@ mod tests {
         })
         .await
         .unwrap();
-        db::migrate(&db).await.unwrap();
+        db::migrate(&db, crate::config::GITHUB_COM).await.unwrap();
         Arc::new(Cache::new(
             db,
             Arc::new(client(stub)),

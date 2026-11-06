@@ -13,6 +13,7 @@ import {
   REVIEW_GITHUB_ACCESS,
   deletionWarning,
 } from './messages';
+import { GITHUB_HOST } from '../github/host';
 
 /**
  * Where a signed-in user deletes all that BuhTig keeps of theirs, in Settings (FR-PERS-04): their
@@ -29,7 +30,7 @@ import {
       <p class="help">{{ DELETION_PURPOSE }}</p>
       <p class="help">
         {{ GITHUB_ACCESS }}
-        <a href="https://github.com/settings/applications">{{ REVIEW_GITHUB_ACCESS }}</a>
+        <a [href]="'https://' + gitHub + '/settings/applications'">{{ REVIEW_GITHUB_ACCESS }}</a>
       </p>
       <button type="button" class="btn danger" (click)="confirming.set(true)">
         <app-icon name="trash" />Delete my data
@@ -52,6 +53,8 @@ import {
   `,
 })
 export class DataDeletion {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   private readonly session = inject(Session);
   private readonly toasts = inject(Toasts);
   private readonly router = inject(Router);

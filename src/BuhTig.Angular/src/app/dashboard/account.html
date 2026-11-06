@@ -1,7 +1,7 @@
 @let known = summary();
 <app-dashboard-styles />
 <app-tip />
-<app-header [crumbs]="crumbs()" [prefill]="'github.com/' + login()">
+<app-header [crumbs]="crumbs()" [prefill]="gitHub + '/' + login()">
   @if (shown()) {
     <app-tabs [tabs]="tabs()" />
   }

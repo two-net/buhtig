@@ -9,6 +9,7 @@ import { HeadActions } from './head-actions';
 import { OPEN_ON_GITHUB, SHARE_CARD, UPDATED } from './messages';
 import { Refresh } from './refresh';
 import { ShareCard } from './share-card';
+import { GITHUB_HOST } from '../github/host';
 
 @Component({
   imports: [HeadActions],
@@ -70,6 +71,26 @@ describe('HeadActions', () => {
       OPEN_ON_GITHUB,
       'https://github.com/Acme/Widget',
     ]);
+  });
+
+  // CON-09: on GitHub Enterprise Server, to its page there.
+  it('links to the page on the GitHub host that BuhTig reads from', async () => {
+    http.match('/-/api/session');
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: Clock, useValue: { now: signal(now) } },
+        { provide: GITHUB_HOST, useValue: 'ghe.example.com' },
+      ],
+    });
+    http = TestBed.inject(HttpTestingController);
+    fixture = TestBed.createComponent(Host);
+    await fixture.whenStable();
+    expect(element().querySelector('a.btn')!.getAttribute('href')).toBe(
+      'https://ghe.example.com/Acme/Widget',
+    );
   });
 
   it('says when the dashboard was refreshed', () => {

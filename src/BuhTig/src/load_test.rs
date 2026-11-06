@@ -131,7 +131,7 @@ fn a_hundred_users_get_fresh_dashboards_within_300_ms() {
     });
     let address = server.block_on(async {
         let db = db::connect(&config.database).await.unwrap();
-        db::migrate(&db).await.unwrap();
+        db::migrate(&db, &config.github.host).await.unwrap();
         let app = crate::app(&config, &db, Arc::new(client(&stub)));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

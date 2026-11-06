@@ -34,6 +34,7 @@ import { Resources } from './resources';
 import { followSummary } from './summary';
 import { accountTabUrl, urlOf } from './account-tabs';
 import { REPOSITORY_TABS, RepositoryTab, repositoryTabPath } from './tabs';
+import { GITHUB_HOST } from '../github/host';
 
 /**
  * A repository's dashboard, at `/{owner}/{repo}` and its tabs below (FR-NAV-01): the header with
@@ -71,6 +72,8 @@ import { REPOSITORY_TABS, RepositoryTab, repositoryTabPath } from './tabs';
   providers: [{ provide: RepositoryData, useExisting: forwardRef(() => RepositoryDashboard) }],
 })
 export class RepositoryDashboard implements RepositoryData {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   private readonly resources = inject(Resources);
   private readonly router = inject(Router);
   private readonly injector = inject(Injector);

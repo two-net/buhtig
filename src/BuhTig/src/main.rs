@@ -148,7 +148,7 @@ async fn serve(config: Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match db::migrate(&db).await {
+    match db::migrate(&db, &config.github.host).await {
         Ok(migration) => info!("{migration}"),
         Err(error) => {
             error!("{error}");
@@ -253,6 +253,7 @@ fn app(config: &Config, db: &DatabaseConnection, github: Arc<github::Client>) ->
         tokens,
         shortcuts,
         config.ui.animations,
+        &config.github.host,
     )
 }
 

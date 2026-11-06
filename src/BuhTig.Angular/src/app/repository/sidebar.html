@@ -118,7 +118,7 @@
           @for (contributor of contributors.contributors; track contributor.login) {
             <li>
               <a
-                [href]="contributor.url ?? 'https://github.com/' + contributor.login"
+                [href]="contributor.url ?? 'https://' + gitHub + '/' + contributor.login"
                 [title]="'@' + contributor.login"
                 [attr.aria-label]="'@' + contributor.login"
               >

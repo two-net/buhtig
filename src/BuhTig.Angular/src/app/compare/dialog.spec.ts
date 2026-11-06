@@ -6,9 +6,10 @@ import { Router, provideRouter } from '@angular/router';
 import type { MockInstance } from 'vitest';
 import { HeadActions } from '../dashboard/head-actions';
 import { Clock } from '../format/clock';
+import { GITHUB_COM, GITHUB_HOST } from '../github/host';
 import { problemMessage } from '../search/messages';
 import { Known } from '../search/parse';
-import { ANOTHER_KIND, COMPARE_WITH, compareHeading, sameResource } from './messages';
+import { COMPARE_WITH, anotherKind, compareHeading, sameResource } from './messages';
 
 @Component({ template: '' })
 class Page {}
@@ -27,20 +28,24 @@ describe('CompareDialog (FR-CMP-02)', () => {
   let http: HttpTestingController;
   let navigateByUrl: MockInstance<Router['navigateByUrl']>;
 
-  beforeEach(async () => {
+  /** Shows the dashboard's head, with GitHub at `host`. */
+  async function setup(host = GITHUB_COM): Promise<void> {
     TestBed.configureTestingModule({
       providers: [
         provideRouter([{ path: '**', component: Page }]),
         provideHttpClient(),
         provideHttpClientTesting(),
         { provide: Clock, useValue: { now: signal(Date.now()) } },
+        { provide: GITHUB_HOST, useValue: host },
       ],
     });
     http = TestBed.inject(HttpTestingController);
     navigateByUrl = vi.spyOn(TestBed.inject(Router), 'navigateByUrl');
     fixture = TestBed.createComponent(Host);
     await fixture.whenStable();
-  });
+  }
+
+  beforeEach(() => setup());
 
   afterEach(() => {
     http.match('/-/api/session');
@@ -91,10 +96,10 @@ describe('CompareDialog (FR-CMP-02)', () => {
   it('says why what was typed opens no comparison, and opens none (NFR-UX-06)', async () => {
     await open();
     await compareWith('gitlab.com/umbrella/gadget');
-    expect(problem()).toBe(problemMessage({ kind: 'not-github' }));
+    expect(problem()).toBe(problemMessage({ kind: 'not-github' }, GITHUB_COM));
     expect(input().getAttribute('aria-invalid')).toBe('true');
     await compareWith('umbrella');
-    expect(problem()).toBe(ANOTHER_KIND.repository);
+    expect(problem()).toBe(anotherKind('repository', GITHUB_COM));
     await compareWith('github.com/ACME/widget');
     expect(problem()).toBe(sameResource('acme/widget'));
     expect(navigateByUrl).not.toHaveBeenCalled();
@@ -109,9 +114,31 @@ describe('CompareDialog (FR-CMP-02)', () => {
       'Organization or user URL or name',
     );
     await compareWith('umbrella/gadget');
-    expect(problem()).toBe(ANOTHER_KIND.account);
+    expect(problem()).toBe(anotherKind('account', GITHUB_COM));
     await compareWith('github.com/users/mona');
     expect(navigateByUrl).toHaveBeenCalledExactlyOnceWith('/-/compare/acme...mona');
+  });
+
+  // CON-09: on GitHub Enterprise Server, it takes URLs on its host, and says so.
+  describe('on GitHub Enterprise Server', () => {
+    beforeEach(async () => {
+      http.match('/-/api/session');
+      TestBed.resetTestingModule();
+      await setup('ghe.example.com');
+    });
+
+    it('takes URLs on its host alone', async () => {
+      await open();
+      expect(input().placeholder).toBe('ghe.example.com/owner/repo');
+      await compareWith('https://github.com/umbrella/gadget');
+      expect(problem()).toBe('BuhTig supports ghe.example.com URLs only.');
+      await compareWith('umbrella');
+      expect(problem()).toContain('such as ghe.example.com/owner/repo.');
+      await compareWith('ghe.example.com/umbrella/gadget');
+      expect(navigateByUrl).toHaveBeenCalledExactlyOnceWith(
+        '/-/compare/acme/widget...umbrella/gadget',
+      );
+    });
   });
 
   it('closes on Cancel, opening nothing', async () => {

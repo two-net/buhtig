@@ -1,4 +1,4 @@
-import { Component, computed, input } from '@angular/core';
+import { Component, computed, input, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Avatar } from '../avatar/avatar';
 import { OPEN_ON_GITHUB, UPDATED } from '../dashboard/messages';
@@ -8,6 +8,7 @@ import { RelativeTime } from '../format/relative-time';
 import { Icon } from '../icon/icon';
 import { VISIBILITY } from '../repository/head';
 import { KINDS } from '../search/messages';
+import { GITHUB_HOST } from '../github/host';
 
 /** What a side's head shows of its resource, whatever its kind. */
 interface Shown {
@@ -58,7 +59,7 @@ interface Shown {
             @if (summary.fetchedAt; as fetchedAt) {
               <span>{{ UPDATED }} <app-relative-time [value]="fetchedAt" /></span>
             }
-            <a class="btn sm" [href]="'https://github.com/' + name()">
+            <a class="btn sm" [href]="'https://' + gitHub + '/' + name()">
               <app-icon name="external" />{{ OPEN_ON_GITHUB }}
             </a>
           </div>
@@ -75,6 +76,8 @@ interface Shown {
   styles: ':host { display: block; min-width: 0; }',
 })
 export class CompareHead {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   /** What BuhTig knows of the side's resource, once it says. */
   readonly summary = input.required<Summary | undefined>();
   /** Its name, as GitHub spells it once known, such as `owner/repo`. */

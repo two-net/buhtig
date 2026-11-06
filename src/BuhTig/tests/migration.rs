@@ -82,8 +82,10 @@ fn first_start_creates_the_schema_and_a_restart_changes_nothing() {
             "SELECT string_agg(table_name, ' ' ORDER BY table_name) \
              FROM information_schema.tables WHERE table_schema = 'public'"
         ),
-        "cache_entries credentials history_entries pins schema_versions sessions users"
+        "cache_entries credentials github_hosts history_entries pins schema_versions sessions \
+         users"
     );
+    assert_eq!(db.psql("SELECT host FROM github_hosts"), "github.com");
 
     let (_running, log) = start(&db.config);
     assert_logged(
@@ -282,6 +284,8 @@ fn every_earlier_release_upgrades_and_keeps_its_data() {
             db.psql("SELECT string_agg(version, ' ' ORDER BY applied_at) FROM schema_versions"),
             format!("{release} {VERSION}")
         );
+        // FR-DB-11: earlier releases read from github.com alone.
+        assert_eq!(db.psql("SELECT host FROM github_hosts"), "github.com");
 
         let (_running, log) = start(&db.config);
         assert_logged(
@@ -384,6 +388,63 @@ fn assert_concurrent_starts_take_turns(db: &Setup) {
     assert_eq!(count("the database schema is up to date"), 3);
     assert_eq!(db.psql("SELECT version FROM schema_versions"), VERSION);
     assert_eq!(db.fingerprint(), expected);
+}
+
+/// The minimal config file for `db`, with `github.host` set to `host`.
+fn with_github_host(db: &Setup, host: &str) {
+    let config = minimal_config(&db.cluster.url(&db.database))
+        .replace("[github]\n", &format!("[github]\nhost = {host:?}\n"));
+    std::fs::write(&db.config, config).unwrap();
+}
+
+fn assert_refused_for_another_github_host(db: &Setup, database: &str, configured: &str) {
+    let before = db.fingerprint();
+    let output = run_to_exit(&db.config);
+    assert_eq!(output.status.code(), Some(1));
+    let log = stdout(&output);
+    assert!(
+        log.contains(&format!(
+            "the database holds data from {database}, but github.host is {configured}; \
+             use a new database for another GitHub host"
+        )),
+        "{log}"
+    );
+    assert!(!log.contains("listening on"), "{log}");
+    assert_eq!(db.fingerprint(), before);
+}
+
+/// FR-DB-11: a database holds data from the GitHub host it was first used with alone, as
+/// GitHub's user IDs and names mean something on that host alone.
+#[test]
+fn a_database_keeps_the_github_host_it_was_first_used_with() {
+    let db = setup();
+    with_github_host(&db, "ghe.example.com");
+    db.migrate();
+    assert_eq!(db.psql("SELECT host FROM github_hosts"), "ghe.example.com");
+
+    with_github_host(&db, "github.com");
+    assert_refused_for_another_github_host(&db, "ghe.example.com", "github.com");
+    with_github_host(&db, "other.example.com");
+    assert_refused_for_another_github_host(&db, "ghe.example.com", "other.example.com");
+
+    with_github_host(&db, "GHE.example.com");
+    let (_running, log) = start(&db.config);
+    assert_logged(
+        &log,
+        &format!("the database schema is up to date for BuhTig {VERSION}"),
+    );
+    assert_eq!(db.psql("SELECT host FROM github_hosts"), "ghe.example.com");
+}
+
+/// FR-DB-11: an earlier release's database holds data from github.com, so it cannot be
+/// moved to another host; migrating it is refused without changing it.
+#[test]
+fn an_earlier_releases_database_is_github_coms() {
+    let dump = &earlier_releases()[0];
+    let db = setup();
+    db.cluster.load(&db.database, dump);
+    with_github_host(&db, "ghe.example.com");
+    assert_refused_for_another_github_host(&db, "github.com", "ghe.example.com");
 }
 
 /// FR-DB-07: downgrades are not supported, and the schema is left alone.

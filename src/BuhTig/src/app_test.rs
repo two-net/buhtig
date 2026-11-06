@@ -177,7 +177,7 @@ async fn serve(mode: &str) -> Served {
     ))
     .expect("the config is valid");
     let db = db::connect(&config.database).await.unwrap();
-    db::migrate(&db).await.unwrap();
+    db::migrate(&db, &config.github.host).await.unwrap();
 
     let revoked = Arc::new(AtomicBool::new(false));
     let stub = github(revoked.clone());

@@ -2,13 +2,14 @@
 //!
 //! Only the server calls GitHub, so credentials never reach a browser (FR-DATA-01). The
 //! client sends nothing but GET requests, so BuhTig cannot change anything on GitHub
-//! (CON-08), and it sends them only to `https://api.github.com` (CON-09, IF-05): callers
-//! name a [`Path`] rather than a URL, and the client follows a redirect or a next-page
-//! link only if it stays there. So a credential never goes anywhere else.
+//! (CON-08), and it sends them only to the API at `github.api_url` over HTTPS (CON-09,
+//! IF-05), `https://api.github.com` by default: callers name a [`Path`] rather than a URL,
+//! and the client follows a redirect or a next-page link only if it stays there. So a
+//! credential never goes anywhere else.
 //!
 //! Sign-in is the one exception (IF-02). OAuth's web flow sends the browser to GitHub's
-//! [`Client::authorize_url`], and the code it brings back is then exchanged for the
-//! user's token with a POST to `https://github.com/login/oauth/access_token`
+//! [`Client::authorize_url`] on `github.host`, and the code it brings back is then
+//! exchanged for the user's token with a POST to `/login/oauth/access_token` on that host
 //! ([`Client::exchange`]), which reads the token and changes nothing on GitHub either.
 //!
 //! It uses REST rather than GraphQL because visitors' requests carry BuhTig's OAuth app
@@ -48,14 +49,16 @@ use url::Url;
 
 use crate::config::{GithubConfig, Secret};
 
-const API: &str = "https://api.github.com";
-const API_HOST: &str = "api.github.com";
+/// The origin that a [`Path`] is held on until [`Client::locate`] puts it on the API. It
+/// is never sent anything: `.invalid` names no host (RFC 2606).
+const PLACEHOLDER: &str = "https://api.invalid";
 
-/// Where a browser signs in with GitHub.
-const AUTHORIZE: &str = "https://github.com/login/oauth/authorize";
+/// Where a browser signs in with GitHub, on `github.host`.
+const AUTHORIZE: &str = "/login/oauth/authorize";
 
-/// Where BuhTig exchanges the code that sign-in gives for the user's token.
-const ACCESS_TOKEN: &str = "https://github.com/login/oauth/access_token";
+/// Where BuhTig exchanges the code that sign-in gives for the user's token, on
+/// `github.host`.
+const ACCESS_TOKEN: &str = "/login/oauth/access_token";
 
 /// The REST API version BuhTig is written against.
 const API_VERSION: &str = "2022-11-28";
@@ -72,7 +75,10 @@ const MAX_REDIRECTS: usize = 5;
 /// How long to wait after a secondary rate limit that does not say, as GitHub asks.
 const SECONDARY_WAIT: TimeDelta = TimeDelta::seconds(60);
 
-/// A path on api.github.com, such as `/repos/{owner}/{repo}`, with its query.
+/// A path in GitHub's API, such as `/repos/{owner}/{repo}`, with its query. It names the
+/// same resource on every GitHub host, so it is what the cache keys data by: the client
+/// puts it under `github.api_url`, as `/api/v3/repos/{owner}/{repo}` on GitHub Enterprise
+/// Server.
 ///
 /// Each segment is percent-encoded on its own, so a name from a visitor stays one
 /// segment, whatever it contains.
@@ -83,7 +89,7 @@ impl Path {
     /// The path of these segments. An empty, `.` or `..` segment is [`Error::NotFound`],
     /// since no GitHub resource is named so.
     pub fn new<'a>(segments: impl IntoIterator<Item = &'a str>) -> Result<Path, Error> {
-        let mut url = Url::parse(API).expect("API is a URL");
+        let mut url = Url::parse(PLACEHOLDER).expect("PLACEHOLDER is a URL");
         {
             let mut path = url.path_segments_mut().expect("an https URL has a path");
             path.clear();
@@ -103,8 +109,8 @@ impl Path {
         self
     }
 
-    /// Its URL, asking for `per_page` items a page in place of any `per_page` it has.
-    fn paged(&self, per_page: usize) -> Url {
+    /// It, asking for `per_page` items a page in place of any `per_page` it has.
+    fn paged(&self, per_page: usize) -> Path {
         let mut url = self.0.clone();
         let query: Vec<(String, String)> = url
             .query_pairs()
@@ -115,7 +121,7 @@ impl Path {
             .clear()
             .extend_pairs(query)
             .append_pair("per_page", &per_page.to_string());
-        url
+        Path(url)
     }
 }
 
@@ -228,7 +234,7 @@ pub enum Error {
     /// GitHub, or the proxy to it, could not be reached or did not answer in time.
     Unreachable(String),
     /// An answer BuhTig cannot use, such as one that is not JSON or that redirects away
-    /// from api.github.com.
+    /// from GitHub's API.
     Invalid(String),
 }
 
@@ -276,6 +282,13 @@ pub trait Transport: Send + Sync {
 
 pub struct Client {
     transport: Arc<dyn Transport>,
+    /// `github.host`.
+    host: String,
+    /// `github.api_url`, the only place requests with a credential go.
+    api: Url,
+    /// [`AUTHORIZE`] and [`ACCESS_TOKEN`] on `github.host`.
+    authorize: Url,
+    access_token: Url,
     /// The OAuth app's, for sign-in.
     client_id: String,
     client_secret: Secret<String>,
@@ -370,31 +383,44 @@ impl Client {
     /// The client BuhTig uses: HTTPS to GitHub, through `github.proxy_url` if it is set.
     pub fn new(config: &GithubConfig) -> Result<Client, String> {
         let transport = https::Https::new(config.proxy_url.as_ref())?;
-        Ok(Client::with_transport(
-            Arc::new(transport),
-            &config.client_id,
-            &config.client_secret,
-        ))
+        Ok(Client::with_transport(Arc::new(transport), config))
     }
 
-    pub fn with_transport(
-        transport: Arc<dyn Transport>,
-        client_id: &str,
-        client_secret: &Secret<String>,
-    ) -> Client {
+    /// A client that sends its requests through `transport`. It takes every setting of
+    /// `config` but the proxy, which is the transport's.
+    pub fn with_transport(transport: Arc<dyn Transport>, config: &GithubConfig) -> Client {
+        let GithubConfig {
+            client_id,
+            client_secret,
+            host,
+            api_url,
+            proxy_url: _,
+        } = config;
         let credentials = BASE64.encode(format!("{client_id}:{}", client_secret.expose()));
         let mut app = HeaderValue::try_from(format!("Basic {credentials}"))
             .expect("base64 is a valid header value");
         app.set_sensitive(true);
+        let on_host = |path: &str| {
+            Url::parse(&format!("https://{host}{path}")).expect("a validated host makes a URL")
+        };
         Client {
             transport,
-            client_id: client_id.to_owned(),
+            host: host.clone(),
+            api: api_url.clone(),
+            authorize: on_host(AUTHORIZE),
+            access_token: on_host(ACCESS_TOKEN),
+            client_id: client_id.clone(),
             client_secret: client_secret.clone(),
             app,
             app_rejected: AtomicBool::new(false),
             limits: Mutex::new(HashMap::new()),
             hasher: RandomState::new(),
         }
+    }
+
+    /// `github.host`, which links to GitHub's own pages are on.
+    pub fn host(&self) -> &str {
+        &self.host
     }
 
     /// Where to send a browser to sign in with GitHub (IF-02). GitHub asks the user to let
@@ -404,7 +430,7 @@ impl Client {
     /// (FR-AUTH-02, A-03): neither private repositories nor private organization data, and
     /// nothing to write.
     pub fn authorize_url(&self, redirect_uri: &Url, state: &str) -> Url {
-        let mut url = Url::parse(AUTHORIZE).expect("AUTHORIZE is a URL");
+        let mut url = self.authorize.clone();
         url.query_pairs_mut()
             .append_pair("client_id", &self.client_id)
             .append_pair("redirect_uri", redirect_uri.as_str())
@@ -426,7 +452,7 @@ impl Client {
             .finish();
         let mut request = Request::new(Bytes::from(form));
         *request.method_mut() = Method::POST;
-        *request.uri_mut() = ACCESS_TOKEN.parse().expect("ACCESS_TOKEN is a URI");
+        *request.uri_mut() = self.access_token.as_str().parse().expect("a URL is a URI");
         let headers = request.headers_mut();
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
         headers.insert(
@@ -437,7 +463,7 @@ impl Client {
 
         let start = Instant::now();
         let result = self.transport.send(request).await;
-        let path = "/login/oauth/access_token";
+        let path = ACCESS_TOKEN;
         match &result {
             Ok(response) => debug!(
                 path,
@@ -474,7 +500,7 @@ impl Client {
         path: &Path,
         etag: Option<&str>,
     ) -> Result<Reply<Value>, Error> {
-        let answer = self.fetch(credential, path.0.clone(), etag).await?;
+        let answer = self.fetch(credential, self.locate(path), etag).await?;
         Ok(match answer.status {
             StatusCode::NOT_MODIFIED => Reply::NotModified,
             StatusCode::ACCEPTED => Reply::Computing,
@@ -502,7 +528,9 @@ impl Client {
         etag: Option<&str>,
     ) -> Result<Reply<List>, Error> {
         let per_page = limit.clamp(1, PER_PAGE);
-        let first = self.fetch(credential, path.paged(per_page), etag).await?;
+        let first = self
+            .fetch(credential, self.locate(&path.paged(per_page)), etag)
+            .await?;
         match first.status {
             StatusCode::NOT_MODIFIED => return Ok(Reply::NotModified),
             StatusCode::ACCEPTED => return Ok(Reply::Computing),
@@ -516,7 +544,7 @@ impl Client {
 
         while items.len() < limit {
             let Some(link) = next.take() else { break };
-            let page = self.fetch(credential, on_api(&link)?, None).await?;
+            let page = self.fetch(credential, self.on_api(&link)?, None).await?;
             if page.status == StatusCode::ACCEPTED {
                 return Ok(Reply::Computing);
             }
@@ -545,7 +573,9 @@ impl Client {
     /// It is never conditional, and the reply has no validator: GitHub's covers the one
     /// item on the page, which stays the same while items are added or removed after it.
     pub async fn count(&self, credential: &Credential, path: &Path) -> Result<Reply<u64>, Error> {
-        let answer = self.fetch(credential, path.paged(1), None).await?;
+        let answer = self
+            .fetch(credential, self.locate(&path.paged(1)), None)
+            .await?;
         if answer.status == StatusCode::ACCEPTED {
             return Ok(Reply::Computing);
         }
@@ -565,7 +595,7 @@ impl Client {
     pub async fn inspect(&self, token: &Secret<String>) -> Result<TokenInfo, Error> {
         let user = Path::new(["user"]).expect("user is neither empty nor dots");
         let answer = self
-            .fetch(&Credential::Token(token.clone()), user.0, None)
+            .fetch(&Credential::Token(token.clone()), self.locate(&user), None)
             .await?;
         let scopes = header(&answer.headers, "x-oauth-scopes").map(|scopes| {
             scopes
@@ -606,7 +636,7 @@ impl Client {
         etag: Option<&str>,
     ) -> Result<Answer, Error> {
         let key = self.key(credential);
-        self.check(key, bucket(&url))?;
+        self.check(key, self.bucket(&url))?;
         let mut redirected = false;
         for _ in 0..=MAX_REDIRECTS {
             let (parts, body) = self.send(credential, &url, etag).await?.into_parts();
@@ -635,7 +665,7 @@ impl Client {
                     let target = url
                         .join(location)
                         .map_err(|_| Error::Invalid("a redirect to no URL".to_owned()))?;
-                    url = on_api(target.as_str())?;
+                    url = self.on_api(target.as_str())?;
                     redirected = true;
                 }
                 status => return Err(self.failure(key, status, &parts.headers, &body, now)),
@@ -769,7 +799,7 @@ impl Client {
         let Some(reading) = rate_limit(headers) else {
             return;
         };
-        let name = header(headers, "x-ratelimit-resource").unwrap_or(bucket(url));
+        let name = header(headers, "x-ratelimit-resource").unwrap_or(self.bucket(url));
         let mut limits = self.limits();
         let buckets = &mut account(&mut limits, key, now).buckets;
         match buckets.get_mut(name) {
@@ -862,6 +892,43 @@ impl Client {
     fn limits(&self) -> MutexGuard<'_, HashMap<Key, Account>> {
         self.limits.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// `path`'s URL: `path` under `github.api_url`.
+    fn locate(&self, path: &Path) -> Url {
+        let base = self.api.as_str().trim_end_matches('/');
+        Url::parse(&format!("{base}{path}")).expect("a path under a URL is a URL")
+    }
+
+    /// The path of `github.api_url`, without a trailing slash: empty for
+    /// `https://api.github.com`, and `/api/v3` on GitHub Enterprise Server.
+    fn prefix(&self) -> &str {
+        self.api.path().trim_end_matches('/')
+    }
+
+    /// `url`, if it is in the API at `github.api_url` over HTTPS, the only place a
+    /// credential may go: on its host and port, and under its path.
+    fn on_api(&self, url: &str) -> Result<Url, Error> {
+        let prefix = self.prefix();
+        Url::parse(url)
+            .ok()
+            .filter(|url| {
+                url.scheme() == "https"
+                    && url.host() == self.api.host()
+                    && url.port_or_known_default() == self.api.port_or_known_default()
+                    && url.username().is_empty()
+                    && url.password().is_none()
+                    && url
+                        .path()
+                        .strip_prefix(prefix)
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            })
+            .ok_or_else(|| Error::Invalid("a link away from GitHub's API".to_owned()))
+    }
+
+    /// The bucket GitHub counts a request in, before an answer says.
+    fn bucket(&self, url: &Url) -> &'static str {
+        bucket(url.path().strip_prefix(self.prefix()).unwrap_or(url.path()))
+    }
 }
 
 /// `key`'s account, which is added if need be. Adding one first drops the accounts that
@@ -873,9 +940,10 @@ fn account(limits: &mut HashMap<Key, Account>, key: Key, now: DateTimeUtc) -> &m
     limits.entry(key).or_default()
 }
 
-/// The bucket GitHub counts a request in, before an answer says.
-fn bucket(url: &Url) -> &'static str {
-    match url.path() {
+/// The bucket GitHub counts a request to `path` in, a path in the API such as
+/// `/search/issues`.
+fn bucket(path: &str) -> &'static str {
+    match path {
         "/search/code" => "code_search",
         path if path.starts_with("/search/") => "search",
         _ => "core",
@@ -963,20 +1031,6 @@ fn link_to(headers: &HeaderMap, rel: &str) -> Option<String> {
     None
 }
 
-/// `url`, if it is on api.github.com over HTTPS, the only place a credential may go.
-fn on_api(url: &str) -> Result<Url, Error> {
-    Url::parse(url)
-        .ok()
-        .filter(|url| {
-            url.scheme() == "https"
-                && url.host_str() == Some(API_HOST)
-                && url.port_or_known_default() == Some(443)
-                && url.username().is_empty()
-                && url.password().is_none()
-        })
-        .ok_or_else(|| Error::Invalid("a link away from api.github.com".to_owned()))
-}
-
 fn header(headers: &HeaderMap, name: impl axum::http::header::AsHeaderName) -> Option<&str> {
     headers.get(name)?.to_str().ok()
 }
@@ -1019,7 +1073,7 @@ pub mod stub {
 
     impl Transport for Stub {
         fn send(&self, request: Request<Bytes>) -> Sending<'_> {
-            if request.uri() == ACCESS_TOKEN {
+            if request.uri().path() == ACCESS_TOKEN {
                 assert_eq!(request.method(), "POST", "a code is exchanged with a POST");
             } else {
                 assert_eq!(request.method(), "GET", "BuhTig only reads from GitHub");
@@ -1051,13 +1105,31 @@ pub mod stub {
         Ok(response)
     }
 
-    /// A client for `stub`, with the client ID `client-id` and secret `client-secret`.
+    /// A client for `stub` on github.com, with the client ID `client-id` and secret
+    /// `client-secret`.
     pub fn client(stub: &Arc<Stub>) -> Client {
-        Client::with_transport(
-            stub.clone(),
-            "client-id",
-            &Secret::new("client-secret".to_owned()),
-        )
+        Client::with_transport(stub.clone(), &config())
+    }
+
+    /// A client for `stub` on the GitHub host `host`, with its API at `api_url`.
+    pub fn client_on(stub: &Arc<Stub>, host: &str, api_url: &str) -> Client {
+        Client::with_transport(stub.clone(), &config_on(host, api_url))
+    }
+
+    /// The `[github]` settings of [`client`].
+    pub fn config() -> GithubConfig {
+        config_on(crate::config::GITHUB_COM, "https://api.github.com")
+    }
+
+    /// The `[github]` settings of [`client_on`].
+    pub fn config_on(host: &str, api_url: &str) -> GithubConfig {
+        GithubConfig {
+            client_id: "client-id".to_owned(),
+            client_secret: Secret::new("client-secret".to_owned()),
+            host: host.to_owned(),
+            api_url: Url::parse(api_url).unwrap(),
+            proxy_url: None,
+        }
     }
 }
 
@@ -1179,7 +1251,7 @@ mod tests {
         let token = client.exchange("the-code", &callback()).await.unwrap();
         assert_eq!(token.expose(), "gho_token");
 
-        assert_eq!(stub.urls(), [ACCESS_TOKEN]);
+        assert_eq!(stub.urls(), ["https://github.com/login/oauth/access_token"]);
         let headers = &stub.requests()[0].1;
         assert_eq!(header(headers, ACCEPT), Some("application/json"));
         assert_eq!(
@@ -1895,6 +1967,114 @@ mod tests {
             Err(Error::Invalid("more than 5 redirects".to_owned()))
         );
         assert_eq!(stub.requests().len(), 3 + 1 + MAX_REDIRECTS);
+    }
+
+    const GHES_API: &str = "https://ghe.example.com/api/v3";
+
+    /// A client on the GitHub Enterprise Server `ghe.example.com`, with its default API.
+    fn ghes(stub: &Arc<Stub>) -> Client {
+        stub::client_on(stub, "ghe.example.com", GHES_API)
+    }
+
+    /// CON-09: on GitHub Enterprise Server, every request goes to its API under `/api/v3`,
+    /// next pages and redirects included, and sign-in to the server itself. A server
+    /// without rate limits sends no rate-limit headers, which is no limit.
+    #[tokio::test]
+    async fn on_github_enterprise_server_requests_go_to_its_api() {
+        let stub = Stub::new(|request| match request.uri().path() {
+            "/api/v3/orgs/org/repos" => answer(
+                200,
+                &[(
+                    "link",
+                    r#"<https://ghe.example.com/api/v3/organizations/1/repos?page=2>; rel="next""#,
+                )],
+                "[1]",
+            ),
+            "/api/v3/repos/owner/old" => answer(
+                301,
+                &[("location", "https://ghe.example.com/api/v3/repositories/42")],
+                "",
+            ),
+            "/login/oauth/access_token" => answer(200, &[], r#"{"access_token":"gho_token"}"#),
+            _ => answer(200, &[], "[2]"),
+        });
+        let client = ghes(&stub);
+        let orgs = path(&["orgs", "org", "repos"]);
+        let repos = client.get_list(&Credential::Visitor, &orgs, 10, None).await;
+        assert_eq!(list(repos).0, [Value::from(1), Value::from(2)]);
+        let old = path(&["repos", "owner", "old"]);
+        assert!(is_fresh(&client.get(&token("t"), &old, None).await));
+        let contributors = path(&["repos", "owner", "repo", "contributors"]);
+        assert!(is_fresh(&client.count(&token("t"), &contributors).await));
+        client.inspect(&Secret::new("t".to_owned())).await.unwrap();
+        let token = client.exchange("the-code", &callback()).await.unwrap();
+        assert_eq!(token.expose(), "gho_token");
+
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://ghe.example.com/api/v3/orgs/org/repos?per_page=10",
+                "https://ghe.example.com/api/v3/organizations/1/repos?page=2",
+                "https://ghe.example.com/api/v3/repos/owner/old",
+                "https://ghe.example.com/api/v3/repositories/42",
+                "https://ghe.example.com/api/v3/repos/owner/repo/contributors?per_page=1",
+                "https://ghe.example.com/api/v3/user",
+                "https://ghe.example.com/login/oauth/access_token",
+            ]
+        );
+        assert!(
+            client
+                .authorize_url(&callback(), "the-state")
+                .as_str()
+                .starts_with("https://ghe.example.com/login/oauth/authorize?client_id=client-id&")
+        );
+        assert_eq!(client.visitor_rate_limit(), None);
+    }
+
+    /// A credential for GitHub Enterprise Server goes nowhere but its API: neither
+    /// elsewhere on the server, nor to github.com.
+    #[tokio::test]
+    async fn on_github_enterprise_server_links_never_leave_its_api() {
+        for target in [
+            "/admin",
+            "../../admin",
+            "https://ghe.example.com/api/v3x/repositories/42",
+            "https://ghe.example.com/api/v3/../../admin",
+            "https://api.github.com/repositories/42",
+            "https://ghe.example.com.evil.example/api/v3/x",
+            "http://ghe.example.com/api/v3/x",
+            "https://ghe.example.com:8443/api/v3/x",
+            "https://user:pw@ghe.example.com/api/v3/x",
+        ] {
+            let stub = Stub::new(move |_| answer(301, &[("location", target)], ""));
+            let reply = ghes(&stub).get(&token("t"), &path(&["x"]), None).await;
+            assert!(
+                matches!(reply, Err(Error::Invalid(_))),
+                "{target}: {reply:?}"
+            );
+            assert_eq!(stub.requests().len(), 1, "{target}");
+
+            let link = format!(r#"<{target}>; rel="next""#);
+            let stub = Stub::new(move |_| answer(200, &[("link", &link)], "[1]"));
+            let reply = ghes(&stub)
+                .get_list(&token("t"), &path(&["x"]), 10, None)
+                .await;
+            assert!(
+                matches!(reply, Err(Error::Invalid(_))),
+                "{target}: {reply:?}"
+            );
+            assert_eq!(stub.requests().len(), 1, "{target}");
+        }
+    }
+
+    /// Rate limits are counted per bucket in the API's own paths, under `/api/v3`.
+    #[test]
+    fn on_github_enterprise_server_searches_count_as_searches() {
+        let client = ghes(&Stub::new(|_| unreachable!()));
+        let bucket = |path: &str| client.bucket(&Url::parse(&format!("{GHES_API}{path}")).unwrap());
+        assert_eq!(bucket("/search/issues?q=is%3Apr"), "search");
+        assert_eq!(bucket("/search/code"), "code_search");
+        assert_eq!(bucket("/repos/owner/repo"), "core");
     }
 
     #[tokio::test]

@@ -105,6 +105,44 @@ fn every_response_is_guarded() {
     }
 }
 
+/// CON-09, NFR-SEC-06: with GitHub Enterprise Server, pages show its avatars rather than
+/// github.com's, the UI hears of its host, and users sign in there.
+#[test]
+fn pages_follow_the_github_host() {
+    let cluster = cluster();
+    let dir = tempfile::tempdir().unwrap();
+    let config = minimal_config(&cluster.url(&cluster.create_database()))
+        .replace("[github]\n", "[github]\nhost = \"ghe.example.com\"\n");
+    let (running, _) = start(&write_config(&dir, &config, 0o600));
+    for response in [running.get("/"), running.get("/-/api/session")] {
+        let policy = header(&response, "content-security-policy").unwrap();
+        assert!(
+            policy.contains(
+                "img-src 'self' https://avatars.ghe.example.com https://ghe.example.com/avatars/;"
+            ),
+            "{policy}"
+        );
+        assert!(!policy.contains("githubusercontent"), "{policy}");
+    }
+
+    // If the UI is built, its page has a head to say so in.
+    let page = running.get("/");
+    if body(&page).contains("</head>") {
+        assert!(
+            body(&page).contains(r#"<meta name="buhtig-github-host" content="ghe.example.com">"#),
+            "{page}"
+        );
+    }
+
+    let sign_in = running.get("/-/auth/sign-in");
+    assert_status(&sign_in, 303);
+    let to = header(&sign_in, "location").unwrap();
+    assert!(
+        to.starts_with("https://ghe.example.com/login/oauth/authorize?client_id=Iv1.client-id&"),
+        "{to}"
+    );
+}
+
 /// NFR-SEC-02: whatever changes state, other origins' pages cannot ask for.
 #[test]
 fn other_origins_pages_cannot_change_state() {

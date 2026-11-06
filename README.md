@@ -4,8 +4,8 @@ BuhTig turns a GitHub repository, organization or user URL into an animated dash
 puts two of them side by side at `/-/compare/{a}...{b}`, and draws a card of each to embed
 at `/-/preview/{name}.svg`. On any page, `Ctrl+K` (`⌘K` on a Mac) opens a command palette
 that finds dashboards as you type, and `owner/repo pulls` opens a dashboard's tab. It is one
-application plus one PostgreSQL database, configured by one file. What it must do is in
-[SRS.md](SRS.md).
+application plus one PostgreSQL database, configured by one file, for github.com or a GitHub
+Enterprise Server. What it must do is in [SRS.md](SRS.md).
 
 - `src/BuhTig`: the server (Rust). It serves the UI, talks to GitHub and PostgreSQL. It
   draws cards as PNG in Noto Sans, under the SIL Open Font License (`src/BuhTig/fonts/OFL.txt`),
@@ -104,8 +104,9 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   over which browsers open at most 6 connections to a host, and a dashboard asks for about
   10 things at once, so have the proxy speak HTTP/2 to browsers.
 - **GitHub:** BuhTig only reads from GitHub, through `api.github.com` over HTTPS, and
-  signs users in through `github.com`. It checks GitHub's certificate against the root
-  certificates built into it, not the host's.
+  signs users in through `github.com`, unless `github.host` names a GitHub Enterprise
+  Server (below). It checks GitHub's certificate against the root certificates built into
+  it, not the host's.
   Requests go through `github.proxy_url` if it is set, and never through a proxy named in
   the environment, so a proxy that inspects TLS does not work. Visitors' requests carry
   the OAuth app's client ID and secret, which earn a higher rate limit than anonymous
@@ -118,6 +119,16 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   computes a repository's commit activity when it is first asked for, so its chart may say
   "Calculating on GitHub…" for up to a minute while BuhTig asks again. GitHub does not list
   the contributors of its very largest repositories, and their dashboards say so.
+- **GitHub Enterprise Server:** set `github.host` to the server's host name, such as
+  `github.example.com`, and register the OAuth app on that server. BuhTig then reads from its
+  API at `https://{github.host}/api/v3`, signs users in there, takes URLs on that host alone
+  in its search box, links to that server's pages, and shows avatars from it. Set
+  `github.api_url` too if the API is elsewhere, as on GitHub Enterprise Cloud with data
+  residency, `https://api.{subdomain}.ghe.com`. The server's certificate must chain to a
+  public root certificate authority, as BuhTig trusts no other. GitHub's user IDs and names
+  mean something on one host alone, so a database keeps the host it was first used with:
+  BuhTig refuses to start with another, and a database from before `github.host` existed
+  is github.com's. Use a new database to move to another host.
 - **Sign-in:** users sign in with their GitHub account. GitHub asks them to let BuhTig
   identify them, and grants it nothing more: no private repositories or organization data,
   and nothing to write. Open BuhTig at `server.public_url`, since a sign-in started at
@@ -204,7 +215,7 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   origin's page with `403`. It tells them apart by the `Sec-Fetch-Site` and `Origin`
   headers, compared with `server.public_url`, so a reverse proxy must pass both on
   unchanged. Every response carries a Content Security Policy, under which pages load
-  scripts and styles from BuhTig alone, and images from BuhTig and GitHub's avatar host. It
+  scripts and styles from BuhTig alone, and images from BuhTig and the avatars of `github.host`. It
   also carries `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
   `Referrer-Policy: strict-origin-when-cross-origin`, and `Strict-Transport-Security` for a
   year when `server.public_url` is `https`. Don't add a policy of your own in the proxy:
@@ -215,7 +226,7 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   `/{owner}/{repo}/activity`, `/issues`, `/pulls`, `/graphs/contributors` and `/releases`,
   `/orgs/{org}/repositories` and `/orgs/{org}/people`, and `/{user}?tab=repositories`.
   `/users/{user}/…` leads to the user's dashboard, and `/{user}/repositories` to their
-  Repositories tab, unless they have a repository of that name. So replacing `github.com` with BuhTig's host in a GitHub link opens
+  Repositories tab, unless they have a repository of that name. So replacing `github.com`, or `github.host`, with BuhTig's host in a GitHub link opens
   the matching tab: deeper paths redirect to the tab that shows the same, such as
   `/{owner}/{repo}/pull/42` to `/pulls` and `/commits` to `/activity`, or else to the
   dashboard. A

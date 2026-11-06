@@ -143,7 +143,7 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 | CON-06 | **Simple architecture.** One deployable application plus PostgreSQL, and nothing else: no separate cache server, message queue, search engine, worker service, object storage, or secret manager. A single instance is the norm; scaling out is not a goal. |
 | CON-07 | **Single configuration file.** Every setting, including sensitive ones, comes from one file. No environment variables, `.env` files, secret stores, or vaults (§4.11). |
 | CON-08 | **Read-only.** BuhTig never performs write operations on GitHub. |
-| CON-09 | **github.com only.** GitHub Enterprise Server and other GitHub hosts are not supported in this release. |
+| CON-09 | **One GitHub host.** An instance reads from, and signs users in through, one GitHub host: github.com by default, or the GitHub Enterprise Server host in `github.host` (Table 4-3). A database holds data from that host alone (FR-DB-11). |
 | CON-10 | **Original branding.** The layout may echo Google's home page, but BuhTig uses its own wordmark and visual identity. It does not use Google's or GitHub's logos, marks, or trade dress. |
 
 ### 2.6 Assumptions and dependencies
@@ -153,7 +153,7 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 | A-01 | "No secret" in the brief means **no separate secret mechanism**. Sensitive values (the GitHub OAuth client secret, the database password, and the encryption key) live in the single config file, protected by file permissions (OI-02). |
 | A-02 | "Private and public" means: (a) public data can be viewed without signing in; (b) personal features and private data require sign-in; and (c) an operator can switch the whole instance to private mode, where every page requires sign-in (OI-03). |
 | A-03 | Signing in only identifies the user and gives them their own GitHub rate limit. Access to private data comes only from the user's optional PAT, so BuhTig never asks for broad permissions at sign-in (OI-07). |
-| A-04 | The operator registers BuhTig with GitHub as an OAuth application with the callback URL `{server.public_url}/-/auth/callback`. The operator copies its client ID and client secret into the config file. |
+| A-04 | The operator registers BuhTig as an OAuth application on the GitHub host of CON-09, with the callback URL `{server.public_url}/-/auth/callback`. The operator copies its client ID and client secret into the config file. |
 | A-05 | The operator provides a PostgreSQL server and a role allowed to create and alter tables in BuhTig's database. That database is either empty or does not exist yet, in which case BuhTig creates it (FR-DB-10) and the role must also be allowed to create databases (`CREATEDB`). |
 | A-06 | TLS is terminated by the hosting environment (a reverse proxy, platform, or load balancer). BuhTig may listen on plain HTTP behind it. |
 | A-07 | One application instance serves all users. Running a second instance against the same database is not a goal, but it must not corrupt data (FR-DB-06). |
@@ -232,8 +232,8 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 
 | ID | Requirement | Priority |
 |---|---|---|
-| IF-01 | **GitHub API (REST and/or GraphQL), read-only.** BuhTig shall handle pagination, rate-limit responses, statistics GitHub is still computing, redirects for renamed or transferred repositories, and "not found" answers for resources the caller cannot access. | Must |
-| IF-02 | **GitHub sign-in** shall use the OAuth 2.0 web application flow and request the minimum permissions needed to identify the user (FR-AUTH-02). | Must |
+| IF-01 | **GitHub API (REST and/or GraphQL), read-only,** at `github.api_url`. BuhTig shall handle pagination, rate-limit responses, statistics GitHub is still computing, redirects for renamed or transferred repositories, and "not found" answers for resources the caller cannot access. It shall follow pagination links and redirects only within that API. | Must |
+| IF-02 | **GitHub sign-in** shall use the OAuth 2.0 web application flow on `github.host` and request the minimum permissions needed to identify the user (FR-AUTH-02). | Must |
 | IF-03 | **PostgreSQL** shall be accessed only through the ORM, with connection settings taken only from the config file. | Must |
 
 ### 3.3 Communication interfaces
@@ -241,7 +241,7 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | ID | Requirement | Priority |
 |---|---|---|
 | IF-04 | Browsers shall reach BuhTig over HTTPS. `server.public_url` shall use `https://` unless its host is `localhost`. | Must |
-| IF-05 | All requests to GitHub shall use HTTPS. | Must |
+| IF-05 | All requests to GitHub shall use HTTPS, and go to `github.host` and `github.api_url` alone. | Must |
 | IF-06 | BuhTig's HTTP endpoints serve its own UI only, but for the cards of FR-NAV-07, whose URLs are stable so that they can be embedded elsewhere. They are not a supported public API in this release. | Must |
 
 ---
@@ -256,7 +256,7 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | FR-SRCH-02 | Parsing shall ignore surrounding whitespace, the letter case of the host, a `www.` prefix, the scheme (`http` or `https`), trailing slashes, a `.git` suffix, query strings, and fragments. | Must |
 | FR-SRCH-03 | Pressing Enter or the primary button shall open the recognized resource's dashboard at its canonical URL (FR-NAV-01). | Must |
 | FR-SRCH-04 | Before calling GitHub, BuhTig shall check names for allowed characters and length. The check shall be permissive enough to accept older names that predate GitHub's current naming rules. Input that fails shall produce an inline message and no navigation. | Must |
-| FR-SRCH-05 | URLs on any host other than github.com shall be rejected with the message "BuhTig supports github.com URLs only." | Must |
+| FR-SRCH-05 | URLs on any host other than `github.host` shall be rejected with the message "BuhTig supports {github.host} URLs only.", such as "BuhTig supports github.com URLs only." | Must |
 | FR-SRCH-06 | A name alone, such as `name`, may be an organization's or a user's. Its dashboard shall ask GitHub which, before it reads anything else, and then show the organization's dashboard or the user's (§4.4). | Must |
 | FR-SRCH-07 | On desktop, the input shall be focused when the home page loads. Pressing `/` outside a text field shall focus it, and Esc shall clear it. | Should |
 | FR-SRCH-08 | Signed-in users' home page shall list up to 12 shortcuts beside the input, which they can filter by name: pinned dashboards first, then recent ones (§4.8). | Should |
@@ -281,12 +281,14 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | `owner/repo pulls`, `github.com/owner/repo releases`, `owner/repo con` | Repository `owner/repo`, at its Pull requests, Releases or Contributors tab (FR-SRCH-13) |
 | `org people`, `github.com/orgs/org repos`, `users/user repositories` | Account `org` at an organization's People tab; organization `org` at its Repositories tab; user `user` at their Repositories tab (FR-SRCH-13) |
 
+In Table 4-1, `github.com` stands for `github.host` (CON-09): with GitHub Enterprise Server at `ghe.example.com`, `https://ghe.example.com/owner/repo` and `git@ghe.example.com:owner/repo.git` name repository `owner/repo`, and github.com's URLs are rejected (FR-SRCH-05).
+
 ### 4.2 Navigation and URLs
 
 | ID | Requirement | Priority |
 |---|---|---|
 | FR-NAV-01 | Each dashboard shall have a stable, shareable URL that mirrors its GitHub path: `/{owner}/{repo}` for a repository, `/{org}` for an organization and `/{user}` for a user. Each tab shall have the URL of the matching page on GitHub: `/{owner}/{repo}/activity`, `/issues`, `/pulls`, `/graphs/contributors` and `/releases`, `/orgs/{org}/repositories` and `/orgs/{org}/people`, and `/{user}?tab=repositories`. | Must |
-| FR-NAV-02 | Deeper paths under a dashboard URL shall redirect to the tab that shows the same, e.g. `/{owner}/{repo}/pull/42` to `/{owner}/{repo}/pulls`, `/commits` and `/pulse` to `/activity`, and `/tags` to `/releases`, and any other to the overview. Other paths of the form `/orgs/{org}/…` shall redirect to `/{org}`, and paths of the form `/users/{user}/…` to `/{user}`. A user's dashboard with any other `tab` shall switch to `/{user}`, and an organization's at `/{org}?tab=repositories` to `/orgs/{org}/repositories`. `/{user}/repositories` shall open the repository of that name if the user has one, and otherwise the user's Repositories tab. Replacing `github.com` with BuhTig's host in any GitHub link therefore opens the matching dashboard. | Should |
+| FR-NAV-02 | Deeper paths under a dashboard URL shall redirect to the tab that shows the same, e.g. `/{owner}/{repo}/pull/42` to `/{owner}/{repo}/pulls`, `/commits` and `/pulse` to `/activity`, and `/tags` to `/releases`, and any other to the overview. Other paths of the form `/orgs/{org}/…` shall redirect to `/{org}`, and paths of the form `/users/{user}/…` to `/{user}`. A user's dashboard with any other `tab` shall switch to `/{user}`, and an organization's at `/{org}?tab=repositories` to `/orgs/{org}/repositories`. `/{user}/repositories` shall open the repository of that name if the user has one, and otherwise the user's Repositories tab. Replacing `github.host` with BuhTig's host in any GitHub link therefore opens the matching dashboard. | Should |
 | FR-NAV-03 | BuhTig's own pages shall live under the reserved prefix `/-/` (e.g., `/-/settings`, `/-/about`, `/-/privacy`, `/-/health`). This prefix cannot collide with GitHub account names, which never start with a hyphen. | Must |
 | FR-NAV-04 | Canonical URLs shall use names exactly as GitHub returns them. Other letter cases shall redirect to the canonical form. | Should |
 | FR-NAV-05 | When GitHub reports that a repository was renamed or transferred, BuhTig shall follow the redirect and switch the browser to the new canonical URL. | Should |
@@ -454,6 +456,8 @@ Motion is part of BuhTig's character, but it must feel fast and stay out of the 
 | `database.max_connections` | No | `10` | Maximum number of open database connections. |
 | `github.client_id` | Yes | — | Client ID of BuhTig's GitHub OAuth registration (A-04). |
 | `github.client_secret` | Yes | — | Client secret of that registration (sensitive). |
+| `github.host` | No | `github.com` | The GitHub host that BuhTig reads from and signs users in through: github.com, or a GitHub Enterprise Server's host name (CON-09). |
+| `github.api_url` | No | `https://api.github.com` for github.com, else `https://{github.host}/api/v3` | Base URL of GitHub's REST API on that host, over HTTPS (IF-05). |
 | `github.proxy_url` | No | none | Outbound proxy for requests to GitHub, if the network requires one. |
 | `security.encryption_key` | Yes | — | Random secret of at least 256 bits, used to encrypt stored GitHub credentials (sensitive; see DR-03). |
 | `access.mode` | No | `public` | `public` or `private` (§4.7). |
@@ -471,7 +475,7 @@ Motion is part of BuhTig's character, but it must feel fast and stay out of the 
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-DB-01 | All persistent state (users, sessions, credentials, cache, history, pins, and schema version) shall be stored in the one PostgreSQL database given in the config file. BuhTig shall keep no persistent state anywhere else, such as local files or other databases. | Must |
+| FR-DB-01 | All persistent state (users, sessions, credentials, cache, history, pins, schema version, and GitHub host) shall be stored in the one PostgreSQL database given in the config file. BuhTig shall keep no persistent state anywhere else, such as local files or other databases. | Must |
 | FR-DB-02 | On every start, before accepting requests, BuhTig shall automatically bring the schema in line with the ORM data model. No manual step, separate tool, or separate job shall be needed. | Must |
 | FR-DB-03 | Auto-migration shall be idempotent: starting a version whose schema is already up to date shall change nothing. | Must |
 | FR-DB-04 | Auto-migration shall not destroy user data. It may add tables, columns, and indexes, but shall not drop or rename tables or columns holding users, credentials, history, or pins. Cache tables may be emptied and rebuilt. | Must |
@@ -481,6 +485,7 @@ Motion is part of BuhTig's character, but it must feel fast and stay out of the 
 | FR-DB-08 | In-app housekeeping shall run at least hourly. It shall delete expired sessions, cache entries past retention (FR-DATA-12), and history beyond 20 entries per user. | Must |
 | FR-DB-09 | If the database becomes unreachable while BuhTig is running, BuhTig shall show a friendly error page and report itself unhealthy (FR-OPS-01). It shall recover automatically, without a restart, when the database returns. | Must |
 | FR-DB-10 | If the database given in the config file does not exist, BuhTig shall create it at startup, before migrating, owned by the configured role. If several BuhTig processes start at once, they shall create it once between them, and all shall start. If BuhTig cannot create it, it shall log why, exit with a non-zero status, and serve no requests. | Should |
+| FR-DB-11 | A database shall hold data from one GitHub host, since GitHub's user IDs and names mean something on one host alone (CON-09). BuhTig shall record `github.host` when it first migrates a database, or github.com for a database that an earlier release migrated. If `github.host` is another host at a later start, BuhTig shall refuse to start with a clear message that names `github.host`, and change nothing. | Must |
 
 ### 4.13 Operations
 
@@ -521,6 +526,7 @@ The physical design (tables, columns, types, and indexes) follows from the ORM e
 | History entry | A recently viewed dashboard | User, resource kind and name, last viewed at | The 20 newest per user |
 | Pin | A pinned dashboard | User, resource kind and name, position | Unpinned (at most 12 per user) |
 | Schema version | Migration bookkeeping | Version, applied at | Permanent |
+| GitHub host | The GitHub host the data is from (FR-DB-11) | Host, recorded at | Permanent |
 
 ### 5.2 Data rules
 
@@ -574,7 +580,7 @@ The design targets one instance with up to 10,000 users, up to 100,000 cache ent
 | NFR-SEC-03 | All text from GitHub (names, descriptions, commit messages, issue titles, topics) is untrusted and shall be displayed as escaped plain text. In this release, BuhTig shall not render HTML or Markdown from GitHub, and it shall only link to `http` and `https` URLs. | Must |
 | NFR-SEC-04 | The return URL after sign-in shall be restricted to relative BuhTig paths, so it cannot be used as an open redirect. | Must |
 | NFR-SEC-05 | Credentials shall be decrypted only to call GitHub. They shall never be sent to the browser or written to logs (FR-DATA-01, FR-OPS-04). | Must |
-| NFR-SEC-06 | A Content Security Policy shall restrict pages to scripts and styles from BuhTig's own origin, so there are no third-party scripts, trackers, or ads. Images may also load from GitHub's avatar host. | Should |
+| NFR-SEC-06 | A Content Security Policy shall restrict pages to scripts and styles from BuhTig's own origin, so there are no third-party scripts, trackers, or ads. Images may also load from the avatar host of `github.host`: `avatars.githubusercontent.com` for github.com, and a GitHub Enterprise Server's own avatars on it. | Should |
 | NFR-SEC-07 | Responses shall include security headers that prevent framing by other sites, prevent MIME sniffing, and avoid leaking full URLs in the Referer header. HTTPS responses shall enable HSTS. | Should |
 | NFR-SEC-08 | Sign-in attempts and PAT validations shall be rate-limited to 10 per minute per client. | Should |
 | NFR-SEC-09 | Error pages shall never expose stack traces, SQL, internal paths, or configuration values. | Must |
@@ -630,6 +636,7 @@ These scenarios are the minimum release checks. Each should be automated where p
 | AC-12 | Alice saves a PAT and opens her own dashboard, `/alice`. Then Bob, signed in with a PAT of his own, opens `/alice`. | Alice sees her private repositories among her repositories, with Private badges. Bob sees her public repositories only. |
 | AC-13 | Alice saves a PAT that can read `owner/secret-repo` and opens `/-/compare/owner/secret-repo...owner/repo`. Then Bob, signed in without access, opens the same URL. | Alice sees both repositories side by side, with how each figure differs. Bob gets "Not found or private" for `owner/secret-repo` and receives no data from Alice's private cache. |
 | AC-14 | Public mode. Alice saves a PAT that can read `owner/secret-repo` and opens its dashboard. Then a visitor opens `/-/preview/owner/secret-repo.svg`, and `/-/preview/owner/repo.svg` both before and after another visitor opens `/owner/repo`. | The card of `owner/secret-repo` shows its name alone, as does that of `owner/repo` at first. Once a visitor has opened `/owner/repo`, its card shows its description and figures. GitHub is never asked for a card. |
+| AC-15 | `github.host` is `ghe.example.com`. A user enters `github.com/owner/repo`, then `https://ghe.example.com/owner/repo`. Then the operator removes `github.host` and restarts BuhTig. | The inline message "BuhTig supports ghe.example.com URLs only." appears, and the page does not navigate; the second input opens `/owner/repo`. BuhTig then refuses to start, naming `github.host`, and the database is unchanged. |
 
 ---
 
@@ -637,7 +644,7 @@ These scenarios are the minimum release checks. Each should be automated where p
 
 These items are not part of this release; they are candidates for later versions:
 
-- GitHub Enterprise Server and hosts other than github.com.
+- More than one GitHub host per instance, and GitHub Enterprise Server with a certificate that no public root certificate authority vouches for.
 - Any write action on GitHub.
 - Rendering READMEs or any other Markdown or HTML from GitHub.
 - Data that needs bulk crawling or elevated access, such as star history and traffic (views and clones).

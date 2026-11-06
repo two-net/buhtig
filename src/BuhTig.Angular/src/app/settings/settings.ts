@@ -46,6 +46,7 @@ import {
 } from './messages';
 import { ShortcutSettings } from './shortcuts';
 import { SaveProblem, Tokens } from './tokens';
+import { GITHUB_HOST } from '../github/host';
 
 /** FR-PAT-10: how long before a token expires the user is reminded to replace it. */
 const EXPIRY_NOTICE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -68,6 +69,8 @@ const EXPIRY_NOTICE_MS = 7 * 24 * 60 * 60 * 1000;
   templateUrl: './settings.html',
 })
 export class Settings {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   private readonly session = inject(Session);
   private readonly tokens = inject(Tokens);
   private readonly toasts = inject(Toasts);

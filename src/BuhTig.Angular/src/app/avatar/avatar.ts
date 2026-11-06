@@ -1,14 +1,6 @@
 import { Component, computed, input, linkedSignal } from '@angular/core';
 
 /**
- * Where GitHub serves the avatar of the user `login`, by their name alone. GitHub serves a
- * placeholder in place of an organization's.
- */
-export function avatarOf(login: string, size: number): string {
-  return `https://avatars.githubusercontent.com/${encodeURIComponent(login)}?s=${size * 2}`;
-}
-
-/**
  * An account's avatar, `size` pixels square, round for people and square for organizations and
  * repositories, as GitHub draws them. It loads from GitHub (FR-DATA-01). Until it has, or when
  * it cannot, as when GitHub has no such account or the browser is offline, it is a pattern drawn

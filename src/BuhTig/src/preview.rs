@@ -612,7 +612,7 @@ mod tests {
         })
         .await
         .unwrap();
-        db::migrate(&db).await.unwrap();
+        db::migrate(&db, crate::config::GITHUB_COM).await.unwrap();
         let cache = Arc::new(Cache::new(
             db,
             Arc::new(client(stub)),

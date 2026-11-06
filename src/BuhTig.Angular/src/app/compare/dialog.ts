@@ -2,16 +2,17 @@ import { Component, computed, inject, input, output, signal } from '@angular/cor
 import { Router } from '@angular/router';
 import { same } from '../dashboard/summary';
 import { Dialog } from '../dialog/dialog';
+import { GITHUB_HOST } from '../github/host';
 import { Icon } from '../icon/icon';
 import { problemMessage, resourceName } from '../search/messages';
 import { Known, parse } from '../search/parse';
 import {
-  ANOTHER_KIND,
   CANCEL,
   COMPARE,
   COMPARE_LABELS,
-  COMPARE_PLACEHOLDERS,
+  anotherKind,
   compareHeading,
+  comparePlaceholder,
   sameResource,
 } from './messages';
 import { Compared, comparePath } from './route';
@@ -40,7 +41,7 @@ let count = 0;
           autocomplete="off"
           autocapitalize="off"
           spellcheck="false"
-          [placeholder]="COMPARE_PLACEHOLDERS[kind()]"
+          [placeholder]="placeholder()"
           [value]="draft()"
           [attr.aria-invalid]="problem() ? 'true' : null"
           [attr.aria-describedby]="problem() ? id + '-problem' : null"
@@ -59,6 +60,7 @@ let count = 0;
 })
 export class CompareDialog {
   private readonly router = inject(Router);
+  private readonly host = inject(GITHUB_HOST);
 
   /** The dashboard's resource, which the other is compared with. */
   readonly from = input.required<Known>();
@@ -76,17 +78,18 @@ export class CompareDialog {
     this.from().kind === 'repository' ? 'repository' : 'account',
   );
   protected readonly heading = computed(() => compareHeading(resourceName(this.from())));
+  protected readonly placeholder = computed(() => comparePlaceholder(this.kind(), this.host));
 
   protected submit(event: Event): void {
     event.preventDefault();
-    const parsed = parse(this.draft());
+    const parsed = parse(this.draft(), this.host);
     if (!parsed.ok) {
-      this.problem.set(problemMessage(parsed.problem));
+      this.problem.set(problemMessage(parsed.problem, this.host));
       return;
     }
     const other = parsed.resource;
     if ((other.kind === 'repository' ? 'repository' : 'account') !== this.kind()) {
-      this.problem.set(ANOTHER_KIND[this.kind()]);
+      this.problem.set(anotherKind(this.kind(), this.host));
       return;
     }
     if (same(this.from(), other)) {
@@ -99,5 +102,4 @@ export class CompareDialog {
   protected readonly CANCEL = CANCEL;
   protected readonly COMPARE = COMPARE;
   protected readonly COMPARE_LABELS = COMPARE_LABELS;
-  protected readonly COMPARE_PLACEHOLDERS = COMPARE_PLACEHOLDERS;
 }

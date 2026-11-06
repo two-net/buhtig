@@ -23,23 +23,26 @@ export function resourceName(resource: Resource): string {
 /** The input's label, for assistive technology. */
 export const LABEL = 'GitHub repository, organization or user URL';
 
-/** What the input says while it is empty, by where it is. */
-export const PLACEHOLDERS = {
-  hero: 'github.com/owner/repo or github.com/owner',
-  narrow: 'Repository, organization or user URL',
-  header: 'Type / to open a dashboard',
-} as const;
+/** What the input says while it is empty, by where it is, with GitHub at `host`. */
+export function placeholders(host: string) {
+  return {
+    hero: `${host}/owner/repo or ${host}/owner`,
+    narrow: 'Repository, organization or user URL',
+    header: 'Type / to open a dashboard',
+  } as const;
+}
 
 export const SHOW_DASHBOARD = 'Show dashboard';
 
-export function problemMessage(problem: CommandProblem): string {
+/** Why the input names nothing, and what to enter instead, with GitHub at `host`. */
+export function problemMessage(problem: CommandProblem, host: string): string {
   switch (problem.kind) {
     case 'empty':
       return 'Paste a GitHub repository, organization or user URL.';
     case 'not-github':
-      return 'BuhTig supports github.com URLs only.';
+      return `BuhTig supports ${host} URLs only.`;
     case 'unrecognized':
-      return 'Enter a repository, organization or user URL, such as github.com/owner/repo or github.com/owner.';
+      return `Enter a repository, organization or user URL, such as ${host}/owner/repo or ${host}/owner.`;
     case 'bad-account':
       return `“${problem.name}” is not a GitHub account name. Account names are up to 39 letters, digits and hyphens, and do not start with a hyphen.`;
     case 'bad-repository':

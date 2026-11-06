@@ -9,6 +9,7 @@ import { OPEN_ON_GITHUB, SHARE_CARD, UPDATED } from './messages';
 import { Pin } from './pin';
 import { Refresh } from './refresh';
 import { ShareCard } from './share-card';
+import { GITHUB_HOST } from '../github/host';
 
 /**
  * What a dashboard's head offers beside its resource: when its data was fetched (FR-DATA-06),
@@ -36,7 +37,7 @@ import { ShareCard } from './share-card';
           <app-icon name="copy" />{{ SHARE_CARD }}
         </button>
       }
-      <a class="btn sm" [href]="'https://github.com' + path()">
+      <a class="btn sm" [href]="'https://' + gitHub + path()">
         <app-icon name="external" />{{ OPEN_ON_GITHUB }}
       </a>
     </div>
@@ -50,6 +51,8 @@ import { ShareCard } from './share-card';
   styles: ':host { display: contents; }',
 })
 export class HeadActions {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   /** The dashboard's resource, with the names as GitHub spells them. */
   readonly resource = input.required<Known>();
   /** The resource's path on GitHub, such as `/owner/repo`. */

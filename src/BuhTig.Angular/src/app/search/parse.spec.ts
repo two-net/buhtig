@@ -1,4 +1,5 @@
-import { Parsed, Problem, Resource, dashboardPath, isUnfinished, parse } from './parse';
+import { GITHUB_COM } from '../github/host';
+import { Parsed, Problem, Resource, dashboardPath, isUnfinished, parse, parseName } from './parse';
 
 function repository(owner: string, repo: string): Parsed {
   return { ok: true, resource: { kind: 'repository', owner, repo } };
@@ -21,10 +22,10 @@ function problem(problem: Problem): Parsed {
   return { ok: false, problem };
 }
 
-/** Checks that each input parses to what `expected` says. */
-function expectEach(inputs: string[], expected: Parsed): void {
+/** Checks that each input parses to what `expected` says, on GitHub at `host`. */
+function expectEach(inputs: string[], expected: Parsed, host = GITHUB_COM): void {
   for (const input of inputs) {
-    expect(parse(input), input).toEqual(expected);
+    expect(parse(input, host), input).toEqual(expected);
   }
 }
 
@@ -196,21 +197,25 @@ describe('parse', () => {
 
     it('rejects account names that GitHub never allowed', () => {
       for (const name of ['-org', 'a'.repeat(40), 'ac me', 'acmé', 'a+b']) {
-        expect(parse(`https://github.com/${name}/repo`), name).toEqual(
+        expect(parse(`https://github.com/${name}/repo`, GITHUB_COM), name).toEqual(
           problem({ kind: 'bad-account', name }),
         );
       }
-      expect(parse('https://github.com/a.b/repo')).toEqual(
+      expect(parse('https://github.com/a.b/repo', GITHUB_COM)).toEqual(
         problem({ kind: 'bad-account', name: 'a.b' }),
       );
-      expect(parse('-org')).toEqual(problem({ kind: 'bad-account', name: '-org' }));
-      expect(parse('github.com/orgs/-org')).toEqual(problem({ kind: 'bad-account', name: '-org' }));
-      expect(parse('users/-mona')).toEqual(problem({ kind: 'bad-account', name: '-mona' }));
+      expect(parse('-org', GITHUB_COM)).toEqual(problem({ kind: 'bad-account', name: '-org' }));
+      expect(parse('github.com/orgs/-org', GITHUB_COM)).toEqual(
+        problem({ kind: 'bad-account', name: '-org' }),
+      );
+      expect(parse('users/-mona', GITHUB_COM)).toEqual(
+        problem({ kind: 'bad-account', name: '-mona' }),
+      );
     });
 
     it('rejects repository names that GitHub never allowed', () => {
       for (const name of ['.', '..', 'r'.repeat(101), 're po', 'repo!', '.git']) {
-        expect(parse(`https://github.com/owner/${name}`), name).toEqual(
+        expect(parse(`https://github.com/owner/${name}`, GITHUB_COM), name).toEqual(
           problem({ kind: 'bad-repository', name }),
         );
       }
@@ -284,13 +289,81 @@ describe('isUnfinished', () => {
       'https://github.com/users',
       'users/',
     ]) {
-      expect(isUnfinished(input), input).toBe(true);
+      expect(isUnfinished(input, GITHUB_COM), input).toBe(true);
     }
   });
 
   it('does not hold once the input has gone wrong or names something', () => {
     for (const input of ['gitlab.com/', 'github.com/owner', 'ftp://', 'github.com/-x', 'acme/']) {
-      expect(isUnfinished(input), input).toBe(false);
+      expect(isUnfinished(input, GITHUB_COM), input).toBe(false);
+    }
+  });
+});
+
+// CON-09, FR-SRCH-05: every form of Table 4-1 on a GitHub Enterprise Server's host, and none on
+// github.com's.
+describe('parse on GitHub Enterprise Server', () => {
+  const GHES = 'ghe.example.com';
+
+  it('recognizes every form on its host', () => {
+    expectEach(
+      [
+        'https://ghe.example.com/owner/repo',
+        'HTTP://www.GHE.example.com/owner/repo.git/',
+        'ghe.example.com/owner/repo/pull/42?diff=split',
+        'https://ghe.example.com:8443/owner/repo',
+        'git@ghe.example.com:owner/repo.git',
+        'ssh://git@ghe.example.com/owner/repo.git',
+        'owner/repo',
+      ],
+      repository('owner', 'repo'),
+      GHES,
+    );
+    expectEach(
+      ['https://ghe.example.com/orgs/acme/people', 'ghe.example.com/orgs/acme'],
+      organization('acme'),
+      GHES,
+    );
+    expectEach(['ghe.example.com/users/mona/projects'], user('mona'), GHES);
+    expectEach(['ghe.example.com/acme', 'acme'], account('acme'), GHES);
+  });
+
+  it('rejects github.com and every other host', () => {
+    expectEach(
+      [
+        'https://github.com/owner/repo',
+        'github.com/owner/repo',
+        'git@github.com:owner/repo.git',
+        'https://api.ghe.example.com/repos/owner/repo',
+        'ghe.example.com.evil.example/owner/repo',
+        'https://ghe.example.com@example.com/owner/repo',
+      ],
+      problem({ kind: 'not-github' }),
+      GHES,
+    );
+  });
+
+  it('holds what is being typed as unfinished on its host alone', () => {
+    for (const input of [
+      'https://ghe.ex',
+      'ghe.example.com/',
+      'git@ghe.example.com:',
+      'ghe.example.com/orgs/',
+    ]) {
+      expect(isUnfinished(input, GHES), input).toBe(true);
+    }
+    for (const input of ['https://github.com/', 'github.com/orgs/']) {
+      expect(isUnfinished(input, GHES), input).toBe(false);
+    }
+  });
+});
+
+describe('parseName', () => {
+  it("takes BuhTig's own names, and no URL on any host", () => {
+    expect(parseName('owner/repo')).toEqual(repository('owner', 'repo'));
+    expect(parseName('acme')).toEqual(account('acme'));
+    for (const name of ['github.com/owner/repo', 'https://ghe.example.com/owner/repo']) {
+      expect(parseName(name), name).toEqual(problem({ kind: 'not-github' }));
     }
   });
 });

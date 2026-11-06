@@ -92,7 +92,7 @@ pub async fn summary(
         return status(StatusCode::BAD_REQUEST);
     }
     let result = read(&cache, &viewer, &org).await;
-    if let Some(denied) = denied(&viewer, &result) {
+    if let Some(denied) = denied(&viewer, &result, cache.github_host()) {
         return denied;
     }
     let cached = match data(result) {
@@ -363,7 +363,12 @@ async fn member_list(cache: &Cache, viewer: &Viewer, org: &str) -> Result<Value,
     } else {
         listed
     };
-    let members: Vec<Value> = list.items.iter().filter_map(member).collect();
+    let host = cache.github_host();
+    let members: Vec<Value> = list
+        .items
+        .iter()
+        .filter_map(|item| member(item, host))
+        .collect();
     Ok(json!({ "count": count, "members": members }))
 }
 
@@ -607,11 +612,11 @@ fn row(repository: &Value) -> Option<Value> {
 }
 
 /// A member as the members widget shows them, unless GitHub left out their login.
-fn member(member: &Value) -> Option<Value> {
+fn member(member: &Value, host: &str) -> Option<Value> {
     Some(json!({
         "login": text(member, "login")?,
         "avatar_url": link(member.get("avatar_url"), &["https"]),
-        "url": page(member.get("html_url")),
+        "url": page(member.get("html_url"), host),
     }))
 }
 
@@ -821,7 +826,7 @@ mod tests {
         })
         .await
         .unwrap();
-        db::migrate(&db).await.unwrap();
+        db::migrate(&db, crate::config::GITHUB_COM).await.unwrap();
         Arc::new(Cache::new(
             db,
             Arc::new(client(stub)),

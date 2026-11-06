@@ -33,19 +33,17 @@ export const COMPARE_LABELS: Record<Compared, string> = {
   account: 'Organization or user URL or name',
 };
 
-/** FR-CMP-02: what the dialog's input says while it is empty. */
-export const COMPARE_PLACEHOLDERS: Record<Compared, string> = {
-  repository: 'github.com/owner/repo',
-  account: 'github.com/owner',
-};
+/** FR-CMP-02: what the dialog's input says while it is empty, with GitHub at `host`. */
+export function comparePlaceholder(kind: Compared, host: string): string {
+  return kind === 'repository' ? `${host}/owner/repo` : `${host}/owner`;
+}
 
-/** FR-CMP-02: a resource of another kind than the one compared. */
-export const ANOTHER_KIND: Record<Compared, string> = {
-  repository:
-    'Enter a repository, such as github.com/owner/repo. A repository compares with another repository.',
-  account:
-    'Enter an organization or a user, such as github.com/owner. An account compares with another account.',
-};
+/** FR-CMP-02: a resource of another kind than the one compared, with GitHub at `host`. */
+export function anotherKind(kind: Compared, host: string): string {
+  return kind === 'repository'
+    ? `Enter a repository, such as ${host}/owner/repo. A repository compares with another repository.`
+    : `Enter an organization or a user, such as ${host}/owner. An account compares with another account.`;
+}
 
 /** FR-CMP-02: the resource itself, which there is no comparing with. */
 export function sameResource(name: string): string {

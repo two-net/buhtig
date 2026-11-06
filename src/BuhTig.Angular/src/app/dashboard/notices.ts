@@ -18,6 +18,7 @@ import {
   tokenExpires,
 } from './messages';
 import { Denied, Stale } from './resources';
+import { GITHUB_HOST } from '../github/host';
 
 /** FR-PAT-10: how long before a token expires the user is reminded to replace it. */
 const EXPIRY_NOTICE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -75,7 +76,7 @@ const EXPIRY_NOTICE_MS = 7 * 24 * 60 * 60 * 1000;
             @if (denied.url; as url) {
               <a [href]="url">{{ AUTHORIZE_SSO }}</a>
             } @else {
-              <a href="https://github.com/settings/tokens">{{ AUTHORIZE_TOKEN }}</a>
+              <a [href]="'https://' + gitHub + '/settings/tokens'">{{ AUTHORIZE_TOKEN }}</a>
             }
           } @else {
             {{ TOKEN_REFUSED }} <a routerLink="/-/settings">{{ REPLACE_TOKEN }}</a>
@@ -87,6 +88,8 @@ const EXPIRY_NOTICE_MS = 7 * 24 * 60 * 60 * 1000;
   styles: ':host { display: block; }',
 })
 export class Notices {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   private readonly session = inject(Session);
   private readonly clock = inject(Clock);
   private readonly router = inject(Router);

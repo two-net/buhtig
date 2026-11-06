@@ -48,6 +48,7 @@ import {
   truncated,
 } from './messages';
 import { RepositoryCard, RepositoryRow } from './repository-row';
+import { GITHUB_HOST } from '../github/host';
 
 /**
  * An organization's stat cards (FR-ORG-02), over the repositories the viewer may see: how many
@@ -196,6 +197,8 @@ export class OrganizationPulse {
   templateUrl: './overview.html',
 })
 export class OrganizationOverview {
+  /** `github.host`, where GitHub's own pages are. */
+  protected readonly gitHub = inject(GITHUB_HOST);
   private readonly data = inject(AccountData);
 
   private readonly statsLoader = this.data.stats();

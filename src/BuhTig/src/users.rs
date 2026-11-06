@@ -61,7 +61,7 @@ pub async fn summary(
         return status(StatusCode::BAD_REQUEST);
     }
     let result = read(&cache, &viewer, &name).await;
-    if let Some(denied) = denied(&viewer, &result) {
+    if let Some(denied) = denied(&viewer, &result, cache.github_host()) {
         return denied;
     }
     let cached = match data(result) {
@@ -430,7 +430,7 @@ mod tests {
         })
         .await
         .unwrap();
-        db::migrate(&db).await.unwrap();
+        db::migrate(&db, crate::config::GITHUB_COM).await.unwrap();
         let cache = Arc::new(Cache::new(
             db.clone(),
             Arc::new(client(stub)),

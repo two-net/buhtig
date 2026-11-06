@@ -38,9 +38,19 @@ url = "postgres://buhtig:CHANGE-ME@localhost:5432/buhtig"
 
 [github]
 # Client ID and client secret of BuhTig's GitHub OAuth app. Register the app
-# with the callback URL {server.public_url}/-/auth/callback.
+# on the GitHub host below, with the callback URL
+# {server.public_url}/-/auth/callback.
 client_id = "CHANGE-ME"
 client_secret = "CHANGE-ME"
+# The GitHub host that BuhTig reads from and signs users in through: github.com,
+# or a GitHub Enterprise Server's host name, without https://. Its certificate
+# must chain to a public root, as BuhTig trusts only those. A database keeps
+# the host it was first used with: BuhTig refuses to start with another.
+# host = "github.com"
+# GitHub's REST API on that host. By default, https://api.github.com for
+# github.com and https://{host}/api/v3 for any other host. GitHub Enterprise
+# Cloud with data residency needs its own, https://api.{subdomain}.ghe.com.
+# api_url = "https://api.github.com"
 # Outbound proxy for requests to GitHub, with its user name and password in
 # the URL if it needs them. By default there is none, and BuhTig ignores
 # HTTPS_PROXY and the other proxy variables either way. BuhTig trusts only the

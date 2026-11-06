@@ -18,6 +18,9 @@ use sea_orm::sqlx::postgres::PgConnectOptions;
 use toml::{Table, Value};
 use url::Url;
 
+/// The default `github.host`.
+pub const GITHUB_COM: &str = "github.com";
+
 const MINUTE: u64 = 60;
 const HOUR: u64 = 60 * MINUTE;
 const DAY: u64 = 24 * HOUR;
@@ -52,6 +55,13 @@ pub struct DatabaseConfig {
 pub struct GithubConfig {
     pub client_id: String,
     pub client_secret: Secret<String>,
+    /// The GitHub host that BuhTig reads from and signs users in through: `github.com`, or a
+    /// GitHub Enterprise host. A lowercase DNS name, without a port.
+    pub host: String,
+    /// The base of GitHub's REST API on `host`, without a trailing slash in its path, such
+    /// as `https://api.github.com` or `https://github.example.com/api/v3`. Always HTTPS
+    /// (IF-05).
+    pub api_url: Url,
     /// Redacted as well, because a proxy URL may carry the proxy's credentials.
     pub proxy_url: Option<Secret<Url>>,
 }
@@ -215,6 +225,8 @@ impl Config {
         let mut github = Section::take(&mut root, "github");
         let client_id = github.required("client_id", non_empty);
         let client_secret = github.required("client_secret", |value| non_empty(value).map(Secret));
+        let host = github.optional("host", GITHUB_COM.to_owned(), github_host);
+        let api_url = github.optional("api_url", None, |value| api_url(value).map(Some));
         let proxy_url = github.optional("proxy_url", None, |value| proxy_url(value).map(Some));
 
         let mut security = Section::take(&mut root, "security");
@@ -280,6 +292,8 @@ impl Config {
                 github: GithubConfig {
                     client_id,
                     client_secret,
+                    api_url: api_url.unwrap_or_else(|| default_api_url(&host)),
+                    host,
                     proxy_url,
                 },
                 security: SecurityConfig { encryption_key },
@@ -594,6 +608,48 @@ fn database_url(value: Value) -> Result<Secret<Url>, String> {
     Ok(Secret(url))
 }
 
+/// A host name alone, so that a URL, a port or an IP address is not mistaken for one. It
+/// is lowercased, as hosts are compared without regard to case.
+fn github_host(value: Value) -> Result<String, String> {
+    match url::Host::parse(&string(value)?) {
+        Ok(url::Host::Domain(name)) if name.split('.').all(|label| !label.is_empty()) => Ok(name),
+        _ => Err(
+            "must be a host name such as github.example.com, without https://, a port or a path"
+                .to_owned(),
+        ),
+    }
+}
+
+/// IF-05: GitHub is only ever asked over HTTPS. A path is kept, as GitHub Enterprise
+/// Server serves its API under `/api/v3`, but not a trailing slash, so that API paths can
+/// be appended to it.
+fn api_url(value: Value) -> Result<Url, String> {
+    const PROBLEM: &str = "must be an https:// URL such as https://github.example.com/api/v3";
+    let mut url = Url::parse(&string(value)?)
+        .ok()
+        .filter(|url| url.scheme() == "https" && url.has_host())
+        .ok_or_else(|| PROBLEM.to_owned())?;
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("must not contain a user name or password".to_owned());
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        return Err("must not contain a query or fragment".to_owned());
+    }
+    let path = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&path);
+    Ok(url)
+}
+
+/// GitHub's API on github.com, and GitHub Enterprise Server's on any other host.
+fn default_api_url(host: &str) -> Url {
+    let url = if host == GITHUB_COM {
+        "https://api.github.com".to_owned()
+    } else {
+        format!("https://{host}/api/v3")
+    };
+    Url::parse(&url).expect("a validated host makes a URL")
+}
+
 fn proxy_url(value: Value) -> Result<Secret<Url>, String> {
     Url::parse(&string(value)?)
         .ok()
@@ -692,13 +748,15 @@ mod tests {
     ];
 
     /// Every key in Table 4-3.
-    const KEYS: [&str; 18] = [
+    const KEYS: [&str; 20] = [
         "server.public_url",
         "server.listen",
         "database.url",
         "database.max_connections",
         "github.client_id",
         "github.client_secret",
+        "github.host",
+        "github.api_url",
         "github.proxy_url",
         "security.encryption_key",
         "access.mode",
@@ -763,6 +821,8 @@ mod tests {
         assert_eq!(config.database.max_connections, 10);
         assert_eq!(config.github.client_id, "Iv1.client-id");
         assert_eq!(config.github.client_secret.expose(), "github-client-secret");
+        assert_eq!(config.github.host, "github.com");
+        assert_eq!(config.github.api_url.as_str(), "https://api.github.com/");
         assert_eq!(config.github.proxy_url, None);
         assert_eq!(
             config.security.encryption_key.expose(),
@@ -872,6 +932,19 @@ mod tests {
             ("database.max_connections", 10.5.into(), "must be a whole number"),
             ("github.client_id", "".into(), "must not be empty"),
             ("github.client_secret", "  ".into(), "must not be empty"),
+            ("github.host", "https://github.example.com".into(), "must be a host name"),
+            ("github.host", "github.example.com/".into(), "must be a host name"),
+            ("github.host", "github.example.com:8443".into(), "must be a host name"),
+            ("github.host", "me@github.example.com".into(), "must be a host name"),
+            ("github.host", "10.0.0.5".into(), "must be a host name"),
+            ("github.host", "github.example.com.".into(), "must be a host name"),
+            ("github.host", "".into(), "must be a host name"),
+            ("github.host", 1.into(), "must be a string"),
+            ("github.api_url", "http://github.example.com/api/v3".into(), "must be an https:// URL"),
+            ("github.api_url", "github.example.com/api/v3".into(), "must be an https:// URL"),
+            ("github.api_url", "https://me:pw@github.example.com/api/v3".into(), "user name"),
+            ("github.api_url", "https://github.example.com/api/v3?a=1".into(), "query"),
+            ("github.api_url", "https://github.example.com/api/v3#v3".into(), "fragment"),
             ("github.proxy_url", "socks5://proxy:1080".into(), "must be an http:// or https://"),
             ("github.proxy_url", "proxy:3128".into(), "must be an http:// or https://"),
             ("security.encryption_key", "too-short".into(), "at least 32 random bytes"),
@@ -918,6 +991,12 @@ mod tests {
             "postgresql:///buhtig?host=/run/postgresql",
         );
         let table = set(table, "database.max_connections", 1);
+        let table = set(table, "github.host", "GitHub.Example.com");
+        let table = set(
+            table,
+            "github.api_url",
+            "https://api.github.example.com:8443/v3/",
+        );
         let table = set(
             table,
             "github.proxy_url",
@@ -940,6 +1019,11 @@ mod tests {
         assert_eq!(config.server.public_url.as_str(), "http://localhost:8080/");
         assert_eq!(config.server.listen, "[::]:80".parse().unwrap());
         assert_eq!(config.database.max_connections, 1);
+        assert_eq!(config.github.host, "github.example.com");
+        assert_eq!(
+            config.github.api_url.as_str(),
+            "https://api.github.example.com:8443/v3",
+        );
         assert_eq!(
             config.github.proxy_url.unwrap().expose().as_str(),
             "http://user:pw@proxy.example.com:3128/",
@@ -962,6 +1046,29 @@ mod tests {
         assert_eq!(config.limits.visitor_fetches_per_hour, 0);
         assert!(!config.ui.animations);
         assert_eq!(config.log.level, LogLevel::Debug);
+    }
+
+    /// A GitHub Enterprise Server host alone gets that server's API, unless `api_url` names
+    /// another, as GitHub Enterprise Cloud's `api.` hosts need.
+    #[test]
+    fn api_url_follows_the_host() {
+        let ghes = parse(set(minimal(), "github.host", "github.example.com")).unwrap();
+        assert_eq!(
+            ghes.github.api_url.as_str(),
+            "https://github.example.com/api/v3"
+        );
+
+        let table = set(minimal(), "github.host", "octocorp.ghe.com");
+        let table = set(table, "github.api_url", "https://api.octocorp.ghe.com");
+        let cloud = parse(table).unwrap();
+        assert_eq!(cloud.github.host, "octocorp.ghe.com");
+        assert_eq!(
+            cloud.github.api_url.as_str(),
+            "https://api.octocorp.ghe.com/"
+        );
+
+        let invalid = issues(set(minimal(), "github.host", "https://github.example.com"));
+        assert_eq!(invalid.len(), 1, "{invalid:?}");
     }
 
     fn database_url(value: &str) -> Url {

@@ -88,12 +88,12 @@ export function tabsNamed(kind: Resource['kind'], typed: string): Tab[] {
 }
 
 /**
- * The resource that `input` names, in any form of Table 4-1, and the tab of its dashboard that
- * the words after it name, if any (FR-SRCH-13), or why it names none.
+ * The resource that `input` names, in any form of Table 4-1 on GitHub at `host`, and the tab of
+ * its dashboard that the words after it name, if any (FR-SRCH-13), or why it names none.
  */
-export function parseCommand(input: string): Command {
+export function parseCommand(input: string, host: string): Command {
   const [target, ...rest] = input.trim().split(/\s+/);
-  const parsed = parse(target);
+  const parsed = parse(target, host);
   if (!parsed.ok || rest.length === 0) {
     return parsed;
   }

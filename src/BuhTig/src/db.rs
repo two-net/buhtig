@@ -17,8 +17,8 @@ use sea_orm::{
 use semver::Version;
 use tracing::info;
 
-use crate::config::DatabaseConfig;
-use crate::entity::{self, schema_version};
+use crate::config::{DatabaseConfig, GITHUB_COM};
+use crate::entity::{self, github_host, schema_version};
 
 /// OI-04: PostgreSQL 15, the oldest major version the PostgreSQL project still supports
 /// at release, in the server's `server_version_num` form.
@@ -60,6 +60,12 @@ pub enum Error {
         app: Version,
     },
     UnknownSchemaVersion(String),
+    /// The database holds data from the GitHub host `database`, not from `configured`
+    /// (FR-DB-11).
+    OtherGitHubHost {
+        database: String,
+        configured: String,
+    },
     Migrate(DbErr),
 }
 
@@ -92,6 +98,14 @@ impl fmt::Display for Error {
                 f,
                 "the database schema records BuhTig version {version:?}, which is not a \
                  version number"
+            ),
+            Error::OtherGitHubHost {
+                database,
+                configured,
+            } => write!(
+                f,
+                "the database holds data from {database}, but github.host is {configured}; \
+                 use a new database for another GitHub host"
             ),
             Error::Migrate(error) => write!(f, "database migration failed: {error}"),
         }
@@ -214,15 +228,16 @@ fn has_code(error: &sea_orm::sqlx::Error, code: &str) -> bool {
         .is_some_and(|actual| actual == code)
 }
 
-/// Brings the schema in line with the entities (FR-DB-02). It runs in one transaction,
-/// so a failure leaves the schema as it was (FR-DB-05).
+/// Brings the schema in line with the entities (FR-DB-02), for data from the GitHub host
+/// `github_host` alone (FR-DB-11). It runs in one transaction, so a failure leaves the
+/// schema as it was (FR-DB-05).
 ///
 /// Schema sync adds the tables, columns, indexes and foreign keys that are missing, and
 /// never drops or alters a table or column. So running it on an up-to-date schema
 /// changes nothing (FR-DB-03), and it keeps all data (FR-DB-04). It does drop unique
 /// keys that the entities no longer declare; see [`entity`] for what that means for
 /// changes to them.
-pub async fn migrate(db: &DatabaseConnection) -> Result<Migration, Error> {
+pub async fn migrate(db: &DatabaseConnection, github_host: &str) -> Result<Migration, Error> {
     let app = app_version();
     // READ COMMITTED, whatever the database's default: a process that waited for the
     // lock must then see the schema that the other one committed.
@@ -241,6 +256,20 @@ pub async fn migrate(db: &DatabaseConnection) -> Result<Migration, Error> {
     let migration = plan(recorded.iter().map(|row| row.version.as_str()), &app)?;
 
     entity::schema(db.get_schema_builder()).sync(&txn).await?;
+    let hosts = github_host::Entity::find().all(&txn).await?;
+    let known = check_github_host(
+        hosts.iter().map(|row| row.host.as_str()),
+        &migration,
+        github_host,
+    )?;
+    if !known {
+        github_host::ActiveModel {
+            host: Set(github_host.to_owned()),
+            recorded_at: Set(ChronoUtc::now()),
+        }
+        .insert(&txn)
+        .await?;
+    }
     if !matches!(migration, Migration::UpToDate { .. }) {
         schema_version::ActiveModel {
             version: Set(app.to_string()),
@@ -309,6 +338,35 @@ fn plan<'a>(
             database: newest,
             app,
         }),
+    }
+}
+
+/// Whether the database holds data from the GitHub host `configured`, and so may be used
+/// (FR-DB-11): `Ok(true)` if it records that host, `Ok(false)` if it is to record it.
+///
+/// A database that records no host yet is a new one, which is for `configured`, or one
+/// from an earlier release, which read from github.com alone.
+fn check_github_host<'a>(
+    recorded: impl IntoIterator<Item = &'a str>,
+    migration: &Migration,
+    configured: &str,
+) -> Result<bool, Error> {
+    let mut recorded = recorded.into_iter().peekable();
+    let known = recorded.peek().is_some();
+    let hosts: Vec<&str> = match migration {
+        _ if known => recorded.collect(),
+        Migration::Created { .. } => vec![configured],
+        Migration::Upgraded { .. } | Migration::UpToDate { .. } => vec![GITHUB_COM],
+    };
+    match hosts
+        .into_iter()
+        .find(|host| !host.eq_ignore_ascii_case(configured))
+    {
+        Some(other) => Err(Error::OtherGitHubHost {
+            database: other.to_owned(),
+            configured: configured.to_owned(),
+        }),
+        None => Ok(known),
     }
 }
 
@@ -406,6 +464,47 @@ mod tests {
             plan(["0.1.0", "next"], &version("0.2.0")),
             Err(Error::UnknownSchemaVersion(version)) if version == "next"
         ));
+    }
+
+    const GHES: &str = "ghe.example.com";
+
+    #[test]
+    fn a_new_database_records_the_configured_github_host() {
+        let created = plan([], &version("0.2.0")).unwrap();
+        // Not known yet, so recorded now.
+        assert!(!check_github_host([], &created, GHES).unwrap());
+        assert!(!check_github_host([], &created, GITHUB_COM).unwrap());
+    }
+
+    #[test]
+    fn a_database_from_an_earlier_release_is_github_coms() {
+        for migration in [
+            plan(["0.1.0"], &version("0.2.0")).unwrap(),
+            plan(["0.2.0"], &version("0.2.0")).unwrap(),
+        ] {
+            assert!(!check_github_host([], &migration, GITHUB_COM).unwrap());
+            assert_eq!(
+                check_github_host([], &migration, GHES)
+                    .unwrap_err()
+                    .to_string(),
+                "the database holds data from github.com, but github.host is \
+                 ghe.example.com; use a new database for another GitHub host"
+            );
+        }
+    }
+
+    #[test]
+    fn a_database_keeps_its_github_host() {
+        let up_to_date = plan(["0.2.0"], &version("0.2.0")).unwrap();
+        assert!(check_github_host([GHES], &up_to_date, GHES).unwrap());
+        assert!(check_github_host([GHES], &up_to_date, "GHE.example.com").unwrap());
+        assert!(matches!(
+            check_github_host([GHES], &up_to_date, GITHUB_COM),
+            Err(Error::OtherGitHubHost { database, configured })
+                if database == GHES && configured == GITHUB_COM
+        ));
+        let created = plan([], &version("0.2.0")).unwrap();
+        assert!(check_github_host([GITHUB_COM], &created, GHES).is_err());
     }
 
     #[test]
