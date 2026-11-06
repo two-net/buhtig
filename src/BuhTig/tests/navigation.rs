@@ -94,6 +94,10 @@ fn pages_beneath_a_dashboard_redirect_to_its_matching_tab() {
         "/owner/repo?tab=x",
         "/owner/repo/issues?q=bug",
         "/-/about",
+        // A comparison, of two repositories or two accounts (FR-CMP-01), is the app's to show.
+        "/-/compare/owner/repo...other/repo",
+        "/-/compare/Owner/next.js...other/repo",
+        "/-/compare/acme...umbrella",
         "/-/x/y/z",
     ] {
         let response = running.get(path);

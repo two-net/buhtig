@@ -1,11 +1,12 @@
 import { Component, computed, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Avatar } from '../avatar/avatar';
-import { ColumnChart, Tick } from '../chart/columns';
+import { ColumnChart } from '../chart/columns';
+import { yearTicks } from '../chart/ticks';
 import { Bar, BarChart } from '../chart/hbars';
 import { ChartTable } from '../chart/table';
 import { AccountData } from '../dashboard/data';
-import { LastPush, LanguageCount, ListedRepository, YearCount } from '../dashboard/resources';
+import { LastPush, LanguageCount, ListedRepository } from '../dashboard/resources';
 import { accountTabUrl } from '../dashboard/account-tabs';
 import { organizationTabPath } from '../dashboard/tabs';
 import { CompactNumber } from '../format/compact-number';
@@ -354,16 +355,6 @@ function table(
 /** How many repositories have a primary language, those of `languages` and the `other`. */
 function total(languages: LanguageCount[], other: number): number {
   return languages.reduce((total, language) => total + language.repositories, other);
-}
-
-/** The labels of the years, short when there are many, every other one minor when more. */
-function yearTicks(years: YearCount[]): Tick[] {
-  const many = years.length > 6;
-  return years.map(({ year }, at) => ({
-    at,
-    label: many ? `’${String(year).slice(-2)}` : String(year),
-    minor: years.length > 8 && at % 2 === 1,
-  }));
 }
 
 /** The 8 topics of the most of `repositories`, most first, then by name. */

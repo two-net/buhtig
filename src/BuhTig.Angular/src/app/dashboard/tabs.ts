@@ -119,12 +119,16 @@ export function accountMatcher(segments: UrlSegment[]): UrlMatchResult | null {
 
 /**
  * Which dashboard `url` is of, whatever its tab and the letter case of its names, such as
- * `repository:owner/repo` or `account:name`, of an organization or a user, or `undefined` for a
- * page that is no dashboard's.
+ * `repository:owner/repo` or `account:name`, of an organization or a user, or
+ * `compare:a/b...c/d` for a comparison (FR-CMP-01), or `undefined` for a page that is no
+ * dashboard's.
  */
 export function dashboardOf(url: string): string | undefined {
   const segments = url.split(/[?#]/)[0].split('/').filter(Boolean);
   const [first, second] = segments;
+  if (first === '-' && second === 'compare' && segments.length > 2) {
+    return `compare:${segments.slice(2).join('/').toLowerCase()}`;
+  }
   if (first === undefined || first === '-') {
     return undefined;
   }

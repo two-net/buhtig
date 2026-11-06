@@ -58,6 +58,11 @@ export const routes: Routes = [
         loadComponent: () => import('./sign-in/failed').then((module) => module.SignInFailed),
         title: TITLES.signInFailed,
       },
+      // Two repositories, or two accounts, side by side (FR-CMP-01).
+      {
+        path: 'compare',
+        loadChildren: () => import('./compare/routes').then((module) => module.COMPARE_ROUTES),
+      },
       { path: '**', loadComponent: notFound, title: TITLES.notFound },
     ],
   },

@@ -1,8 +1,8 @@
 # BuhTig
 
-BuhTig turns a GitHub repository, organization or user URL into an animated dashboard. It is
-one application plus one PostgreSQL database, configured by one file. What it must do is
-in [SRS.md](SRS.md).
+BuhTig turns a GitHub repository, organization or user URL into an animated dashboard, and
+puts two of them side by side at `/-/compare/{a}...{b}`. It is one application plus one
+PostgreSQL database, configured by one file. What it must do is in [SRS.md](SRS.md).
 
 - `src/BuhTig`: the server (Rust). It serves the UI, talks to GitHub and PostgreSQL.
 - `src/BuhTig.Angular`: the UI (Angular). It is built into the server, not deployed on

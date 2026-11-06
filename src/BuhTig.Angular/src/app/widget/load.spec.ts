@@ -1,9 +1,9 @@
 import { HttpClient, HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { signal } from '@angular/core';
+import { WritableSignal, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { map } from 'rxjs';
-import { Computing, Load, Loader, RECHECK_MS, emptyWhen, failureOf, load } from './load';
+import { Computing, Load, Loader, RECHECK_MS, both, emptyWhen, failureOf, load } from './load';
 
 describe('load', () => {
   const repo = signal('acme/widget');
@@ -185,5 +185,49 @@ describe('emptyWhen', () => {
     const { retry, loader } = source();
     emptyWhen(loader, () => false).retry();
     expect(retry).toHaveBeenCalledOnce();
+  });
+});
+
+describe('both', () => {
+  /** A loader whose state the test sets, and which counts its retries. */
+  function source(): { state: WritableSignal<Load<number>>; loader: Loader<number> } {
+    const state = signal<Load<number>>({ status: 'loading' });
+    return { state, loader: { state: state.asReadonly(), retry: vi.fn() } };
+  }
+
+  it('is there once both are, with the data of each in order', () => {
+    const first = source();
+    const second = source();
+    const pair = both(first.loader, second.loader);
+    expect(pair.state()).toEqual({ status: 'loading' });
+    first.state.set({ status: 'ready', data: 1 });
+    expect(pair.state()).toEqual({ status: 'loading' });
+    second.state.set({ status: 'ready', data: 2 });
+    expect(pair.state()).toEqual({ status: 'ready', data: [1, 2] });
+  });
+
+  it('fails if either fails, else is computed by GitHub, on its way or empty if either is', () => {
+    const first = source();
+    const second = source();
+    const pair = both(first.loader, second.loader);
+    second.state.set({ status: 'error', failure: 'held' });
+    first.state.set({ status: 'computing' });
+    expect(pair.state()).toEqual({ status: 'error', failure: 'held' });
+    second.state.set({ status: 'loading' });
+    expect(pair.state()).toEqual({ status: 'computing' });
+    first.state.set({ status: 'empty' });
+    expect(pair.state()).toEqual({ status: 'loading' });
+    second.state.set({ status: 'ready', data: 2 });
+    expect(pair.state()).toEqual({ status: 'empty' });
+  });
+
+  it('tries again what failed, and only that', () => {
+    const first = source();
+    const second = source();
+    first.state.set({ status: 'ready', data: 1 });
+    second.state.set({ status: 'error', failure: 'github' });
+    both(first.loader, second.loader).retry();
+    expect(first.loader.retry).not.toHaveBeenCalled();
+    expect(second.loader.retry).toHaveBeenCalledOnce();
   });
 });

@@ -29,6 +29,14 @@ const compactFormat = once(
   (locale?: string) =>
     new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }),
 );
+const signedCompactFormat = once(
+  (locale?: string) =>
+    new Intl.NumberFormat(locale, {
+      notation: 'compact',
+      maximumFractionDigits: 1,
+      signDisplay: 'exceptZero',
+    }),
+);
 const numberFormat = once((locale?: string) => new Intl.NumberFormat(locale));
 const relativeFormat = once(
   (locale?: string) => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }),
@@ -82,6 +90,14 @@ const DURATION_UNITS: [unit: string, seconds: number, below: number][] = [
 /** A number in short, such as "12.3K" for 12,345. */
 export function compactNumber(value: number, locale?: string): string {
   return compactFormat(locale).format(value);
+}
+
+/**
+ * A difference in short, with its sign, such as "+12.3K" for 12,345 or "-42" for -42, and "0"
+ * for none.
+ */
+export function signedCompactNumber(value: number, locale?: string): string {
+  return signedCompactFormat(locale).format(value);
 }
 
 /** A number in full, such as "12,345". */

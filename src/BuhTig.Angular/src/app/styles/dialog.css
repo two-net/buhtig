@@ -1,0 +1,64 @@
+/* Dialogs, and the messages of the fields they and Settings have, with the code of the pages
+   that show them. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--backdrop);
+  animation: fade 0.18s;
+}
+.dialog {
+  width: min(440px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  border-radius: 12px;
+  background: var(--bg);
+  box-shadow: var(--shadow-float);
+  animation: pop 0.22s var(--ease);
+}
+.dialog h2 {
+  padding: 16px;
+  border-bottom: 1px solid var(--border-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+.dialog .body {
+  padding: 16px;
+}
+.dialog p {
+  margin: 0 0 16px;
+  color: var(--fg-muted);
+}
+.dialog .acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid var(--border-muted);
+}
+/* A dialog's form, such as what to compare a dashboard's resource with (FR-CMP-02). */
+.dialog label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.dialog .input {
+  width: 100%;
+}
+.dialog .field-msg {
+  margin: 8px 0 0;
+  color: var(--fg-danger);
+}
+.field-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+.field-msg.err {
+  color: var(--fg-danger);
+}

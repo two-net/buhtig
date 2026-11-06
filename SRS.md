@@ -107,6 +107,7 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 
 - **Search:** one box that takes a repository, organization or user URL (§4.1, §4.2).
 - **Dashboards:** animated views of a repository (§4.3), or of an organization or a user (§4.4).
+- **Comparison:** two repositories, or two organizations or users, side by side (§4.14).
 - **Accounts:** sign-in with GitHub (§4.5) and an optional personal access token (§4.6).
 - **Access:** public and private access rules and modes (§4.7).
 - **Personal shortcuts:** history and pinned dashboards (§4.8).
@@ -221,7 +222,7 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | UI-01 | Every screen shall have one obvious primary action, generous whitespace, and a restrained palette. | Must |
 | UI-02 | A visitor's home page shall center the BuhTig wordmark, the search box, and a primary "Show dashboard" button, with "Surprise me" (FR-SRCH-10) and repositories to try (FR-SRCH-11) below. A signed-in user's home page shall show the search box with their shortcuts beside it (FR-SRCH-08). The top-right corner shall hold "Sign in" or, when signed in, the user's avatar with a menu (Home, Settings, Sign out) that says whether BuhTig has a personal access token of theirs. | Must |
 | UI-03 | The dashboard header shall show the wordmark (linking home), breadcrumbs of the resource, the search box pre-filled with the current resource, and "Sign in" or the avatar menu. Below it, the dashboard's tabs shall show how many items each has, once known. | Must |
-| UI-04 | Page titles shall be "BuhTig" on the home page and "{owner}/{repo} · BuhTig", "{org} · BuhTig" or "{user} · BuhTig" on dashboards. | Must |
+| UI-04 | Page titles shall be "BuhTig" on the home page and "{owner}/{repo} · BuhTig", "{org} · BuhTig" or "{user} · BuhTig" on dashboards, and "{first} vs {second} · BuhTig" on comparisons (§4.14). | Must |
 | UI-05 | Dashboard widgets shall sit in a main column with a sidebar, which collapses to one column below 1012 px. | Must |
 | UI-06 | Large numbers shall be shown compactly (e.g., 12.3k) and dates relatively (e.g., "3 days ago"). Exact values shall appear on hover and focus. All numbers and dates shall be formatted for the browser's locale. | Must |
 | UI-07 | Light and dark themes shall follow the operating system's preference. | Should |
@@ -485,6 +486,18 @@ Motion is part of BuhTig's character, but it must feel fast and stay out of the 
 | FR-OPS-04 | At the level set by `log.level`, BuhTig shall log startup (version, access mode, migration result), errors, and one line per request (method, path, status, duration). Logs shall never contain credentials, session identifiers, or OAuth codes. | Must |
 | FR-OPS-05 | On shutdown, BuhTig shall stop accepting requests and let in-flight ones finish, waiting up to 10 seconds. | Should |
 
+### 4.14 Comparison
+
+A comparison shows two repositories, or two accounts, side by side, so that their figures can be read against each other. It is a page of BuhTig's own, not a dashboard: it reads the same data as the two dashboards, under the same rules.
+
+| ID | Requirement | Priority |
+|---|---|---|
+| FR-CMP-01 | A comparison shall have a stable, shareable URL: `/-/compare/{owner1}/{repo1}...{owner2}/{repo2}` for two repositories and `/-/compare/{account1}...{account2}` for two accounts, each an organization or a user, of the same kind or not. Once BuhTig knows how GitHub spells both names, the browser shall switch to the URL that spells them so, as FR-NAV-04 says, and follow renamed or transferred repositories, as FR-NAV-05 says. Any other path under `/-/compare/`, such as a repository and an account, shall show the "Page not found" page. | Should |
+| FR-CMP-02 | The heads of repository, organization and user dashboards shall offer "Compare with…", which asks for another resource in any form of Table 4-1 and opens the comparison of the two. It shall reject, with an inline message and no navigation, input that names no resource, a resource of the other kind (a repository for an account, or an account for a repository), and the dashboard's own resource. | Should |
+| FR-CMP-03 | Stat cards shall show each figure of both: for two repositories, stars, forks, watchers, open issues, open pull requests and the latest release with its age (FR-REPO-02); for two accounts, repositories, stars, forks, open issues and pull requests, and the most-used primary language (FR-ORG-02, FR-USER-02). Each card shall mark which has more and by how much, or the newer release and by how much newer, or that both are the same, with an icon and text and not by color alone (NFR-UX-05), and shall say the same in a sentence to assistive technology. Of an account with more repositories than `limits.org_repositories`, it shall say so, as FR-ORG-08 does. | Should |
+| FR-CMP-04 | Charts shall show both side by side, each against one scale shared by both: for two repositories, commits per week over the last 52 weeks (FR-REPO-03) and languages by share of the code (FR-REPO-04); for two accounts, repositories per primary language (FR-ORG-04), and repositories by last push and created per year (FR-ORG-06). A language shall have the same color on both sides. Each chart shall have one summary sentence about both and its data as a table with a column for each (NFR-UX-04). | Should |
+| FR-CMP-05 | A comparison shall read each resource from the same endpoints and cache as its dashboard, with the viewer's own credentials and cache scope (FR-DATA-04, FR-ACC-06), and each side shall count as a load of its own dashboard (FR-DATA-10). If either resource is not found or private, the comparison shall show the page of FR-ACC-05 for it and nothing of either. Each side shall say when its data was fetched (FR-DATA-06), and when it is saved data (FR-DATA-05). Comparisons shall not be recorded in history nor pinned (§4.8), and have no refresh of their own. | Should |
+
 ---
 
 ## 5. Data requirements
@@ -609,6 +622,7 @@ These scenarios are the minimum release checks. Each should be automated where p
 | AC-10 | A user enters `gitlab.com/owner/repo`. | The inline message "BuhTig supports github.com URLs only." appears, and the page does not navigate. |
 | AC-11 | Alice removes her PAT. | Her private cache is deleted at once. Her private dashboards now show "Not found or private" with an add-token prompt. |
 | AC-12 | Alice saves a PAT and opens her own dashboard, `/alice`. Then Bob, signed in with a PAT of his own, opens `/alice`. | Alice sees her private repositories among her repositories, with Private badges. Bob sees her public repositories only. |
+| AC-13 | Alice saves a PAT that can read `owner/secret-repo` and opens `/-/compare/owner/secret-repo...owner/repo`. Then Bob, signed in without access, opens the same URL. | Alice sees both repositories side by side, with how each figure differs. Bob gets "Not found or private" for `owner/secret-repo` and receives no data from Alice's private cache. |
 
 ---
 
@@ -621,7 +635,7 @@ These items are not part of this release; they are candidates for later versions
 - Rendering READMEs or any other Markdown or HTML from GitHub.
 - Data that needs bulk crawling or elevated access, such as star history and traffic (views and clones).
 - Real-time updates through webhooks, notifications, and email.
-- Custom dashboard layouts, comparing resources side by side, and exporting data or images.
+- Custom dashboard layouts, comparing more than two resources at once, and exporting data or images.
 - An administration UI, teams, and sharing private dashboards with other users.
 - Native mobile apps and a public API.
 - Horizontal scaling, partitioning, external caches, and queues. These are excluded by design (CON-05, CON-06).

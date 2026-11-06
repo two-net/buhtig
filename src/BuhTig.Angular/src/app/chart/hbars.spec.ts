@@ -10,7 +10,12 @@ class Page {}
 
 @Component({
   imports: [BarChart],
-  template: `<app-bar-chart [bars]="bars()" [unit]="unit()" summary="Top contributors" />`,
+  template: `<app-bar-chart
+    [bars]="bars()"
+    [unit]="unit()"
+    [max]="max()"
+    summary="Top contributors"
+  />`,
 })
 class Host {
   readonly bars = signal<Bar[]>([
@@ -25,6 +30,7 @@ class Host {
     { label: 'Other', value: 0 },
   ]);
   readonly unit = signal('commits');
+  readonly max = signal(0);
 }
 
 describe('BarChart', () => {
@@ -72,6 +78,20 @@ describe('BarChart', () => {
     );
     // One after another (FR-ANIM-08).
     expect(fills().map((fill) => fill.style.getPropertyValue('--i'))).toEqual(['0', '1', '2']);
+  });
+
+  it('draws bars against a figure given for the scale, as charts side by side share one', async () => {
+    fixture.componentInstance.max.set(24_690);
+    await fixture.whenStable();
+    expect(fills().map((fill) => fill.style.getPropertyValue('--w'))).toEqual([
+      '0.5000',
+      '0.2430',
+      '0.0000',
+    ]);
+    // A figure below the longest leaves the bars as they are.
+    fixture.componentInstance.max.set(10);
+    await fixture.whenStable();
+    expect(fills()[0].style.getPropertyValue('--w')).toBe('1.0000');
   });
 
   it("colors each bar in the chart's first color, unless it has its own", () => {

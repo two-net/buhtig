@@ -12,6 +12,7 @@ import { READ_WITH_KEYS } from './messages';
     [unit]="unit()"
     [belowUnit]="belowUnit()"
     [caps]="caps()"
+    [max]="max()"
     summary="5,042 commits in 4 weeks. The busiest was the week of Oct 12, with 4,200."
   />`,
 })
@@ -31,6 +32,7 @@ class Host {
   readonly unit = signal('commits');
   readonly belowUnit = signal('');
   readonly caps = signal(false);
+  readonly max = signal(0);
 }
 
 describe('niceMax', () => {
@@ -97,6 +99,16 @@ describe('ColumnChart', () => {
       ['2.5K', '50%', false],
       ['5K', '100%', false],
     ]);
+  });
+
+  it('reaches a figure given for the scale, as charts side by side share one', async () => {
+    await set((host) => host.max.set(8_400));
+    // The top is 10,000, a round figure above 8,400, though the tallest is 4,200.
+    expect(heights()).toEqual(['12.34%', '42.00%', '0.00%', '0.08%']);
+    expect(gridlines().map(([label]) => label)).toEqual(['0', '5K', '10K']);
+    // A figure below the tallest leaves the scale as it is.
+    await set((host) => host.max.set(10));
+    expect(heights()).toEqual(['24.68%', '84.00%', '0.00%', '0.16%']);
   });
 
   it('leaves out a halfway gridline that would not be a whole figure', async () => {

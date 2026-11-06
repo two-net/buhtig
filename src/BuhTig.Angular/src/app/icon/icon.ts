@@ -83,6 +83,8 @@ const ICONS = {
   question: [C(12, 12, 8.5), 'M9.6 9.6a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.4M12 16.8v.2'],
   home: ['M4 10.5L12 4l8 6.5V20h-5.5v-6h-5v6H4z'],
   pulse: ['M3 12h4l2.5-6 5 12 2.5-6h4'],
+  compare: ['M4 8h14M14 4l4 4-4 4M20 16H6M10 12l-4 4 4 4'],
+  equal: ['M6 9.5h12M6 14.5h12'],
 } satisfies Record<string, string[]>;
 
 export type IconName = keyof typeof ICONS;

@@ -63,6 +63,10 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         ),
         ("/acme", "/-/sign-in?return_to=%2Facme"),
         ("/-/settings", "/-/sign-in?return_to=%2F-%2Fsettings"),
+        (
+            "/-/compare/owner/repo...other/repo",
+            "/-/sign-in?return_to=%2F-%2Fcompare%2Fowner%2Frepo...other%2Frepo",
+        ),
     ] {
         let response = running.get(path);
         assert_status(&response, 303);

@@ -1,0 +1,53 @@
+@let shownNames = names();
+<app-dashboard-styles />
+<app-compare-styles />
+<app-tip />
+<app-header [crumbs]="crumbs()" />
+<main id="main" class="page" tabindex="-1" [attr.aria-busy]="busy()">
+  @if (problem(); as problem) {
+    @switch (problem.kind) {
+      @case ('invalid') {
+        <app-not-found-or-private [name]="problem.name" [kind]="kind()" [invalid]="true" />
+      }
+      @case ('not-found') {
+        <app-not-found-or-private [name]="problem.name" [kind]="kind()" />
+      }
+      @case ('failure') {
+        <app-failure [failure]="problem.failure" (retry)="retry()" />
+      }
+    }
+  } @else {
+    <div class="container">
+      <!-- Spaces in the text itself, which assistive technology reads the names apart by. -->
+      <h1 class="cmp-title">
+        {{ shownNames[0] }} <span class="vs">{{ VS }}</span> {{ shownNames[1] }}
+      </h1>
+      <div class="cmp-heads">
+        <app-compare-head [summary]="firstSummary()" [name]="shownNames[0]" />
+        <app-compare-head
+          [summary]="secondSummary()"
+          [name]="shownNames[1]"
+          [tokenNotices]="false"
+        />
+      </div>
+      @if (shown()) {
+        <div class="stack-v cmp-body">
+          @if (kind() === 'repository') {
+            <app-compare-stats />
+            <app-compare-activity />
+            <app-compare-languages />
+          } @else {
+            <app-compare-stats />
+            <app-compare-languages />
+            <div class="grid-2">
+              <app-compare-last-push />
+              <app-compare-created />
+            </div>
+          }
+        </div>
+      } @else if (busy()) {
+        <span class="sr">{{ LOADING }}</span>
+      }
+    </div>
+  }
+</main>

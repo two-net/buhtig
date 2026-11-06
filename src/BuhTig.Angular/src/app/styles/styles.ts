@@ -16,6 +16,7 @@ import { Component, ViewEncapsulation } from '@angular/core';
     './diverging.css',
     './lists.css',
     './sidebar.css',
+    './dialog.css',
   ],
   encapsulation: ViewEncapsulation.None,
 })
@@ -34,7 +35,16 @@ export class HomeStyles {}
 @Component({
   selector: 'app-page-styles',
   template: '',
-  styleUrls: ['./pages.css', './notice.css'],
+  styleUrls: ['./pages.css', './notice.css', './dialog.css'],
   encapsulation: ViewEncapsulation.None,
 })
 export class PageStyles {}
+
+/** The styles of a comparison of two repositories or two accounts, beside a dashboard's. */
+@Component({
+  selector: 'app-compare-styles',
+  template: '',
+  styleUrls: ['./compare.css'],
+  encapsulation: ViewEncapsulation.None,
+})
+export class CompareStyles {}

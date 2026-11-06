@@ -240,8 +240,20 @@ describe('dashboardOf', () => {
     expect(dashboardOf('/acme/widget')).not.toBe(dashboardOf('/acme/gadget'));
   });
 
+  it('tells which two resources a comparison is of, whatever the letter case (FR-CMP-01)', () => {
+    expect(dashboardOf('/-/compare/acme/widget...acme/gadget')).toBe(
+      'compare:acme/widget...acme/gadget',
+    );
+    expect(dashboardOf('/-/compare/Acme/Widget...ACME/gadget')).toBe(
+      dashboardOf('/-/compare/acme/widget...acme/gadget'),
+    );
+    expect(dashboardOf('/-/compare/acme...umbrella')).not.toBe(
+      dashboardOf('/-/compare/acme...initech'),
+    );
+  });
+
   it("tells of no dashboard for the home page and BuhTig's own pages", () => {
-    for (const url of ['/', '', '/?q=1', '/-/about', '/-/settings', '/-']) {
+    for (const url of ['/', '', '/?q=1', '/-/about', '/-/settings', '/-', '/-/compare']) {
       expect(dashboardOf(url), url).toBeUndefined();
     }
   });

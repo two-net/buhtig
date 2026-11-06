@@ -1,0 +1,211 @@
+/* A comparison of two repositories or two accounts, with its code, beside a dashboard's styles. */
+.cmp-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 16px 0 12px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 30px;
+  overflow-wrap: anywhere;
+}
+.cmp-title .vs {
+  color: var(--fg-muted);
+  font-size: 14px;
+  font-weight: 400;
+}
+/* The two heads side by side, one above the other below 1012 px (UI-05). */
+.cmp-heads {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+  align-items: start;
+}
+@media (max-width: 1012px) {
+  .cmp-heads {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.cmp-side {
+  display: block;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.cmp-side app-notices .notice {
+  margin-bottom: 12px;
+}
+.cmp-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.cmp-name {
+  color: var(--fg);
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.cmp-desc {
+  margin-top: 8px;
+  color: var(--fg-muted);
+}
+.cmp-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.cmp-head-skel {
+  --sh: 72px;
+}
+.cmp-body {
+  margin-top: 24px;
+}
+
+/* Stat cards of both, each with how they differ (FR-CMP-03). */
+.cmp-stats-wrap {
+  overflow: hidden;
+}
+.cmp-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  margin: 0 -1px -1px 0;
+}
+.cmp-stat {
+  min-width: 0;
+  padding: 14px 16px;
+  border-right: 1px solid var(--border-muted);
+  border-bottom: 1px solid var(--border-muted);
+}
+.cmp-stat dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.cmp-stat dt app-icon {
+  --icon: 14px;
+}
+.cmp-stat dd {
+  margin: 0;
+}
+.cmp-vals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+  margin-top: 4px;
+}
+.cmp-val {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+.cmp-val + .cmp-val {
+  padding-left: 12px;
+  border-left: 1px solid var(--border-muted);
+}
+.cmp-val .val {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmp-val .val.txt {
+  font-size: 14px;
+  line-height: 28px;
+}
+.cmp-val .val a {
+  color: inherit;
+}
+.cmp-val .sub {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* How much more one has, by its figure, as a pill with an arrow and a sign: not by color alone
+   (NFR-UX-05). */
+/* It wraps rather than be cut short, as "5.8 months newer" may in a narrow card. */
+.cmp-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 0 8px 0 4px;
+  border-radius: 999px;
+  background: var(--neutral-muted);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+  white-space: nowrap;
+}
+/* A longer one, such as "5.8 months newer", takes the card's width, from the side of the one
+   ahead. */
+.cmp-vals > .cmp-delta.wide {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+.cmp-vals > .cmp-delta.wide.second {
+  justify-self: end;
+}
+.cmp-delta app-icon {
+  --icon: 14px;
+}
+.cmp-delta.same {
+  margin-top: 6px;
+  color: var(--fg-muted);
+}
+
+/* Charts of both side by side, against one scale (FR-CMP-04), one above the other when
+   narrow. */
+.cmp-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+}
+@media (max-width: 860px) {
+  .cmp-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.grid-2 .cmp-pair {
+  grid-template-columns: minmax(0, 1fr);
+}
+.cmp-fig {
+  min-width: 0;
+  margin: 0;
+}
+.cmp-fig figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 8px;
+  margin-bottom: 8px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.cmp-fig-name {
+  overflow: hidden;
+  color: var(--fg);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

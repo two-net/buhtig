@@ -96,16 +96,6 @@
   flex: 1;
   min-width: 220px;
 }
-.field-msg {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: 13px;
-}
-.field-msg.err {
-  color: var(--fg-danger);
-}
 .kv {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
@@ -209,46 +199,6 @@
     padding: 20px 16px;
   }
 }
-.backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 140;
-  display: grid;
-  place-items: center;
-  padding: 16px;
-  background: var(--backdrop);
-  animation: fade 0.18s;
-}
-.dialog {
-  width: min(440px, 100%);
-  max-height: calc(100vh - 32px);
-  overflow: auto;
-  border-radius: 12px;
-  background: var(--bg);
-  box-shadow: var(--shadow-float);
-  animation: pop 0.22s var(--ease);
-}
-.dialog h2 {
-  padding: 16px;
-  border-bottom: 1px solid var(--border-muted);
-  font-size: 14px;
-  font-weight: 600;
-}
-.dialog .body {
-  padding: 16px;
-}
-.dialog p {
-  margin: 0 0 16px;
-  color: var(--fg-muted);
-}
-.dialog .acts {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 16px;
-  border-top: 1px solid var(--border-muted);
-}
-
 .help.manage {
   margin-top: 16px;
 }

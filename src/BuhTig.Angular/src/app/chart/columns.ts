@@ -109,6 +109,11 @@ export class ColumnChart {
   readonly height = input(180);
   /** Whether each column's figure shows above its bar. */
   readonly caps = input(false);
+  /**
+   * A figure the scale reaches at least, so that charts side by side, such as two repositories'
+   * in a comparison, share one scale. The tallest bar's, if higher, otherwise.
+   */
+  readonly max = input(0);
 
   /** The column pointed at, by its index, if any, and whether the keyboard points at it. */
   protected readonly active = signal<number | undefined>(undefined);
@@ -121,9 +126,9 @@ export class ColumnChart {
     this.columns().some((column) => column.below !== undefined),
   );
 
-  /** The top of the chart: a round figure at least as high as the tallest bar. */
+  /** The top of the chart: a round figure at least as high as the tallest bar, and `max`. */
   private readonly top = computed(() =>
-    niceMax(Math.max(0, ...this.columns().flatMap((c) => [c.value, c.below ?? 0]))),
+    niceMax(Math.max(this.max(), ...this.columns().flatMap((c) => [c.value, c.below ?? 0]))),
   );
 
   /**

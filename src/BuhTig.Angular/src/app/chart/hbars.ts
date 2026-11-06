@@ -91,10 +91,15 @@ export class BarChart {
   readonly unit = input('');
   /** What the chart shows, as assistive technology names it. */
   readonly summary = input.required<string>();
+  /**
+   * A figure a bar as long as the chart is wide stands for at least, so that charts side by
+   * side, such as two accounts' in a comparison, share one scale. The longest bar's, if higher.
+   */
+  readonly max = input(0);
 
   protected readonly shown = computed((): ShownBar[] => {
     const bars = this.bars();
-    const longest = Math.max(1, ...bars.map((bar) => bar.value));
+    const longest = Math.max(1, this.max(), ...bars.map((bar) => bar.value));
     return bars.map((bar) => ({
       ...bar,
       color: bar.color ?? 'var(--s1)',

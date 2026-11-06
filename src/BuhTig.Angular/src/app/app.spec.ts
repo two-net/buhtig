@@ -61,9 +61,15 @@ describe('routes', () => {
     const pages = routes
       .flatMap((route): Route[] => [route, ...(route.children ?? [])])
       .filter((route) => route.children === undefined);
-    expect(pages.filter((route) => route.loadComponent === undefined)).toEqual([
-      { path: '', component: Home, title: 'BuhTig' },
-    ]);
+    expect(
+      pages.filter(
+        (route) => route.loadComponent === undefined && route.loadChildren === undefined,
+      ),
+    ).toEqual([{ path: '', component: Home, title: 'BuhTig' }]);
+    // A comparison's routes come with its code, as it is first opened (FR-CMP-01).
+    expect(
+      pages.filter((route) => route.loadChildren !== undefined).map((route) => route.path),
+    ).toEqual(['compare']);
     // Page not found too, below /-/ and anywhere else.
     expect(pages.filter((route) => route.path === '**')).toHaveLength(2);
     expect(pages.every((route) => route.path === '' || route.component === undefined)).toBe(true);

@@ -1,8 +1,9 @@
 import { Component, computed, inject, input } from '@angular/core';
-import { Column, ColumnChart, Tick } from '../chart/columns';
+import { Column, ColumnChart } from '../chart/columns';
+import { monthTicks } from '../chart/ticks';
 import { ChartTable } from '../chart/table';
 import { RepositoryData } from '../dashboard/data';
-import { exactNumber, monthLabel, weekDate } from '../format/format';
+import { exactNumber, weekDate } from '../format/format';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
 import {
@@ -79,19 +80,5 @@ export class RepositoryActivity {
             .map((week) => ({ label: weekDate(week.start), values: [exactNumber(week.commits)] })),
         }
       : undefined;
-  });
-}
-
-/**
- * The months under a chart of `weeks`, where each starts, all but each quarter's first minor,
- * as of commit activity and code frequency.
- */
-export function monthTicks(weeks: readonly { start: Date }[]): Tick[] {
-  return weeks.flatMap((week, index) => {
-    const before = weeks[index - 1];
-    const month = week.start.getUTCMonth();
-    return before !== undefined && before.start.getUTCMonth() !== month
-      ? [{ at: index, label: monthLabel(week.start), minor: month % 3 !== 0 }]
-      : [];
   });
 }

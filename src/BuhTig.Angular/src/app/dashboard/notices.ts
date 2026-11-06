@@ -33,7 +33,7 @@ const EXPIRY_NOTICE_MS = 7 * 24 * 60 * 60 * 1000;
   selector: 'app-notices',
   imports: [Icon, RouterLink],
   template: `
-    @switch (token()) {
+    @switch (tokenNotices() ? token() : undefined) {
       @case ('invalid') {
         <div class="notice crit" role="alert">
           <app-icon name="alert" />
@@ -95,6 +95,11 @@ export class Notices {
   /** When the data shown was fetched from GitHub. */
   readonly fetchedAt = input<Date | undefined>(undefined);
   readonly denied = input<Denied | undefined>(undefined);
+  /**
+   * Whether it says what there is to say of the user's token, as it does unless another says so
+   * on the same page, as of the second of two resources compared side by side.
+   */
+  readonly tokenNotices = input(true);
 
   /** What to tell the user of their token, if anything. */
   protected readonly token = computed(() => {

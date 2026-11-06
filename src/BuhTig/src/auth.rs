@@ -371,6 +371,15 @@ mod tests {
             (Some("/owner/repo"), "/owner/repo"),
             (Some("/org"), "/org"),
             (Some("/-/about"), "/-/about"),
+            // A comparison, whose `...` is no step up (FR-CMP-01).
+            (
+                Some("/-/compare/owner/repo...other/repo"),
+                "/-/compare/owner/repo...other/repo",
+            ),
+            (
+                Some("/-/compare/acme...umbrella"),
+                "/-/compare/acme...umbrella",
+            ),
             (Some("/?q=owner%2Frepo"), "/?q=owner%2Frepo"),
             (Some("/owner/../org"), "/org"),
             (

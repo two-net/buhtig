@@ -46,6 +46,37 @@ export function emptyWhen<T>(loader: Loader<T>, isEmpty: (data: T) => boolean): 
 }
 
 /**
+ * The data of `first` and `second` together, for a widget that shows both, as a comparison of
+ * two repositories does: failed if either failed, else still being computed by GitHub if either
+ * is, else on its way if either is, else empty if either is, and there once both are. Trying
+ * again tries again what failed.
+ */
+export function both<A, B>(first: Loader<A>, second: Loader<B>): Loader<[A, B]> {
+  return {
+    state: computed((): Load<[A, B]> => {
+      const a = first.state();
+      const b = second.state();
+      for (const status of ['error', 'computing', 'loading', 'empty'] as const) {
+        const either = a.status === status ? a : b.status === status ? b : undefined;
+        if (either !== undefined) {
+          return either as Load<never>;
+        }
+      }
+      return a.status === 'ready' && b.status === 'ready'
+        ? { status: 'ready', data: [a.data, b.data] }
+        : { status: 'loading' };
+    }),
+    retry: () => {
+      for (const loader of [first, second]) {
+        if (loader.state().status === 'error') {
+          loader.retry();
+        }
+      }
+    },
+  };
+}
+
+/**
  * What a widget's request fails with while GitHub is still computing its data, as it computes a
  * repository's statistics. The widget then asks again (FR-REPO-10).
  */

@@ -5,7 +5,7 @@ import { RepositoryData } from '../dashboard/data';
 import { exactNumber, weekDate } from '../format/format';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
-import { monthTicks } from './activity';
+import { monthTicks } from '../chart/ticks';
 import {
   ADDITIONS,
   CODE_FREQUENCY,

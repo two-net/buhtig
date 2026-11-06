@@ -8,6 +8,7 @@ import {
   monthLabel,
   percent,
   relativeTime,
+  signedCompactNumber,
   timeUntil,
   weekDate,
 } from './format';
@@ -28,6 +29,16 @@ describe('format', () => {
       '12.345',
       '1,2 Mio.',
     ]);
+  });
+
+  it('shows differences in short, with their sign, for the locale', () => {
+    expect([12_345, -42, 0, 999].map((n) => plain(signedCompactNumber(n, 'en-US')))).toEqual([
+      '+12.3K',
+      '-42',
+      '0',
+      '+999',
+    ]);
+    expect(plain(signedCompactNumber(1_234_567, 'de-DE'))).toBe('+1,2 Mio.');
   });
 
   it('makes each format once for each locale, as a figure counting up uses it on every frame', () => {

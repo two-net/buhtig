@@ -473,6 +473,15 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
             "/-/sign-in?return_to=%2Forgs%2Focto%2Fpeople",
         ),
         ("/-/settings", "/-/sign-in?return_to=%2F-%2Fsettings"),
+        // A comparison needs signing in as each of its resources' dashboards does (FR-CMP-05).
+        (
+            "/-/compare/octo/public...octo/inner",
+            "/-/sign-in?return_to=%2F-%2Fcompare%2Focto%2Fpublic...octo%2Finner",
+        ),
+        (
+            "/-/compare/octo...hubot",
+            "/-/sign-in?return_to=%2F-%2Fcompare%2Focto...hubot",
+        ),
     ] {
         let answer = served.get(&VISITOR, page).await;
         assert_eq!(

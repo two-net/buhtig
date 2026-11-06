@@ -377,6 +377,8 @@ mod tests {
             "/-/about",
             "/-/settings/x/y",
             "/-/auth/callback",
+            "/-/compare/owner/repo...other/repo",
+            "/-/compare/acme...umbrella",
         ] {
             assert_eq!(redirect(path), None, "{path}");
         }
