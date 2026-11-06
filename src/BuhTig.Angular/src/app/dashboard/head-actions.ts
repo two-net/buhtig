@@ -1,7 +1,7 @@
 import { Component, input, output } from '@angular/core';
 import { RelativeTime } from '../format/relative-time';
 import { Icon } from '../icon/icon';
-import { Resource } from '../search/parse';
+import { Known } from '../search/parse';
 import { OPEN_ON_GITHUB, UPDATED } from './messages';
 import { Pin } from './pin';
 import { Refresh } from './refresh';
@@ -31,7 +31,7 @@ import { Refresh } from './refresh';
 })
 export class HeadActions {
   /** The dashboard's resource, with the names as GitHub spells them. */
-  readonly resource = input.required<Resource>();
+  readonly resource = input.required<Known>();
   /** The resource's path on GitHub, such as `/owner/repo`. */
   readonly path = input.required<string>();
   readonly fetchedAt = input<Date | undefined>(undefined);

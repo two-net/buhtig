@@ -1,9 +1,10 @@
 import { UrlMatchResult, UrlSegment } from '@angular/router';
+import { USER_TABS, accountTabUrl, urlOf } from './account-tabs';
 import {
   ORGANIZATION_TABS,
   REPOSITORY_TABS,
+  accountMatcher,
   dashboardOf,
-  organizationMatcher,
   organizationTabPath,
   repositoryMatcher,
   repositoryTabPath,
@@ -87,25 +88,33 @@ describe('repositoryMatcher (FR-NAV-01, FR-NAV-02)', () => {
   });
 });
 
-describe('organizationMatcher (FR-NAV-01, FR-NAV-02)', () => {
-  it("matches an organization's dashboard, as its overview", () => {
-    expect(match(organizationMatcher, '/angular')).toEqual({ org: 'angular', tab: 'overview' });
+describe('accountMatcher (FR-NAV-01, FR-NAV-02)', () => {
+  it("matches an account's dashboard, an organization's or a user's, as its overview", () => {
+    expect(match(accountMatcher, '/angular')).toEqual({ name: 'angular', kind: 'account' });
   });
 
-  it('matches its repositories and people at the paths of the matching pages on GitHub', () => {
-    expect(match(organizationMatcher, '/orgs/angular/repositories')).toEqual({
-      org: 'angular',
+  it("leaves a user's tab to the query, as GitHub has it, such as /{user}?tab=repositories", () => {
+    // The router gives a matcher the path alone: the query is no path parameter.
+    expect(match(accountMatcher, '/mona')).not.toHaveProperty('tab');
+  });
+
+  it("matches an organization's repositories and people at the paths of the matching pages on GitHub", () => {
+    expect(match(accountMatcher, '/orgs/angular/repositories')).toEqual({
+      name: 'angular',
+      kind: 'organization',
       tab: 'repositories',
     });
-    expect(match(organizationMatcher, '/orgs/Angular/people')).toEqual({
-      org: 'Angular',
+    expect(match(accountMatcher, '/orgs/Angular/people')).toEqual({
+      name: 'Angular',
+      kind: 'organization',
       tab: 'people',
     });
   });
 
   it('takes the letter case of /orgs and the tab as GitHub does, which is none', () => {
-    expect(match(organizationMatcher, '/ORGS/acme/People')).toEqual({
-      org: 'acme',
+    expect(match(accountMatcher, '/ORGS/acme/People')).toEqual({
+      name: 'acme',
+      kind: 'organization',
       tab: 'people',
     });
   });
@@ -119,8 +128,9 @@ describe('organizationMatcher (FR-NAV-01, FR-NAV-02)', () => {
       '/orgs/angular/teams',
       '/orgs/angular/people/x',
       '/users/angular/people',
+      '/mona/repositories',
     ]) {
-      expect(match(organizationMatcher, path), path).toBeNull();
+      expect(match(accountMatcher, path), path).toBeNull();
     }
   });
 });
@@ -140,6 +150,7 @@ describe("a dashboard's tabs", () => {
       'Repositories',
       'People',
     ]);
+    expect(USER_TABS.map(({ label }) => label)).toEqual(['Overview', 'Repositories']);
   });
 
   it("are at the paths of a repository's pages on GitHub", () => {
@@ -161,13 +172,33 @@ describe("a dashboard's tabs", () => {
     ]);
   });
 
+  it("are at the URLs of an account's pages on GitHub, of its kind (FR-NAV-01)", () => {
+    expect(ORGANIZATION_TABS.map(({ tab }) => accountTabUrl('acme', 'organization', tab))).toEqual([
+      { link: '/acme' },
+      { link: '/orgs/acme/repositories' },
+      { link: '/orgs/acme/people' },
+    ]);
+    expect(USER_TABS.map(({ tab }) => urlOf(accountTabUrl('mona', 'user', tab)))).toEqual([
+      '/mona',
+      '/mona?tab=repositories',
+    ]);
+    // A user has no people: that is their overview.
+    expect(accountTabUrl('mona', 'user', 'people')).toEqual({ link: '/mona' });
+    // An account of a kind not known yet has a user's, which lead to an organization's too.
+    expect(accountTabUrl('acme', undefined, 'repositories')).toEqual({
+      link: '/acme',
+      query: { tab: 'repositories' },
+    });
+  });
+
   it('are matched back to themselves at their paths', () => {
     for (const { tab } of REPOSITORY_TABS) {
       expect(match(repositoryMatcher, repositoryTabPath('acme/widget', tab))?.['tab']).toBe(tab);
-      expect(match(organizationMatcher, repositoryTabPath('acme/widget', tab))).toBeNull();
+      expect(match(accountMatcher, repositoryTabPath('acme/widget', tab))).toBeNull();
     }
     for (const { tab } of ORGANIZATION_TABS) {
-      expect(match(organizationMatcher, organizationTabPath('acme', tab))?.['tab']).toBe(tab);
+      const matched = match(accountMatcher, organizationTabPath('acme', tab));
+      expect(matched?.['tab'] ?? 'overview').toBe(tab);
       expect(match(repositoryMatcher, organizationTabPath('acme', tab))).toBeNull();
     }
   });
@@ -187,9 +218,15 @@ describe('dashboardOf', () => {
     }
   });
 
-  it('tells which organization a URL is of, whatever its tab', () => {
-    for (const url of ['/acme', '/orgs/acme/repositories', '/orgs/acme/people', '/acme?q=1']) {
-      expect(dashboardOf(url), url).toBe('organization:acme');
+  it('tells which account a URL is of, an organization or a user, whatever its tab', () => {
+    for (const url of [
+      '/acme',
+      '/orgs/acme/repositories',
+      '/orgs/acme/people',
+      '/acme?q=1',
+      '/acme?tab=repositories',
+    ]) {
+      expect(dashboardOf(url), url).toBe('account:acme');
     }
   });
 
@@ -209,8 +246,8 @@ describe('dashboardOf', () => {
     }
   });
 
-  it('takes /orgs alone as the organization of that name, as the routes do', () => {
-    expect(dashboardOf('/orgs')).toBe('organization:orgs');
-    expect(match(organizationMatcher, '/orgs')).toEqual({ org: 'orgs', tab: 'overview' });
+  it('takes /orgs alone as the account of that name, as the routes do', () => {
+    expect(dashboardOf('/orgs')).toBe('account:orgs');
+    expect(match(accountMatcher, '/orgs')).toEqual({ name: 'orgs', kind: 'account' });
   });
 });

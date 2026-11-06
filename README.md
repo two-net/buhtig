@@ -1,6 +1,6 @@
 # BuhTig
 
-BuhTig turns a GitHub repository or organization URL into an animated dashboard. It is
+BuhTig turns a GitHub repository, organization or user URL into an animated dashboard. It is
 one application plus one PostgreSQL database, configured by one file. What it must do is
 in [SRS.md](SRS.md).
 
@@ -127,7 +127,7 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   that, BuhTig asks them to wait a minute.
 - **Personal access tokens:** a signed-in user may save one personal access token in
   Settings, so that their dashboards include the private repositories and organization
-  data it can see. No one needs one. BuhTig asks GitHub about each token before it saves
+  data it can see, and their own dashboard their private repositories. No one needs one. BuhTig asks GitHub about each token before it saves
   it, and saves it only if it is valid and belongs to the signed-in user. Each client may
   have 10 tokens checked a minute. Tokens are stored encrypted with
   `security.encryption_key`, and are never shown or logged. When the key changes, users are
@@ -150,7 +150,7 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   among their authorized OAuth apps on GitHub until they revoke it there, which Settings
   links to, since BuhTig changes nothing on GitHub.
 - **Access:** in public mode, the default, anyone may open the home page and the
-  dashboards of public repositories and organizations, with public data only. Settings,
+  dashboards of public repositories, organizations and users, with public data only. Settings,
   shortcuts and refreshing a dashboard need sign-in. With `access.mode = "private"`,
   every page needs sign-in but the sign-in page, the About and Privacy pages and
   `/-/health`: a visitor is sent to sign in, and then back to the page they opened. In
@@ -173,6 +173,14 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   `cache.ttl`, and a visitor's sparklines count as one load of the organization's
   dashboard. A repository's contributors and releases past one page are counted with one
   more request each.
+- **Users:** a user's dashboard shows their profile and, as an organization's does, up to
+  `limits.org_repositories` of the repositories they own, with the same table, sparklines
+  and charts. GitHub lists a user's private repositories to that user alone, so they appear
+  only on a user's own dashboard, once they have saved a personal access token: BuhTig reads
+  them with that token alone, at a GitHub path that names no one, and keeps them only in
+  that user's cache. Everyone else sees a user's public repositories. Since `/{name}` may
+  be an organization's or a user's, its dashboard first asks GitHub which, an answer
+  cached like the rest, which a user's dashboard reads its profile from.
 - **Cache:** BuhTig keeps the GitHub data it shows in the database, and serves it for
   `cache.ttl` before it asks GitHub again. While GitHub is unreachable or rate-limited,
   dashboards show the latest data they have, with its age. Data fetched with a user's
@@ -197,10 +205,12 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   year when `server.public_url` is `https`. Don't add a policy of your own in the proxy:
   each page has a nonce of its own, which BuhTig's policy names. Errors give their status
   and nothing of how BuhTig works.
-- **URLs:** dashboards live at `/{owner}/{repo}` and `/{org}`, as on GitHub, and their tabs
-  at the paths of the matching pages on GitHub: `/{owner}/{repo}/activity`, `/issues`,
-  `/pulls`, `/graphs/contributors` and `/releases`, and `/orgs/{org}/repositories` and
-  `/orgs/{org}/people`. So replacing `github.com` with BuhTig's host in a GitHub link opens
+- **URLs:** dashboards live at `/{owner}/{repo}`, and at `/{name}` for an organization or a
+  user, as on GitHub, and their tabs at the paths of the matching pages on GitHub:
+  `/{owner}/{repo}/activity`, `/issues`, `/pulls`, `/graphs/contributors` and `/releases`,
+  `/orgs/{org}/repositories` and `/orgs/{org}/people`, and `/{user}?tab=repositories`.
+  `/users/{user}/…` leads to the user's dashboard, and `/{user}/repositories` to their
+  Repositories tab, unless they have a repository of that name. So replacing `github.com` with BuhTig's host in a GitHub link opens
   the matching tab: deeper paths redirect to the tab that shows the same, such as
   `/{owner}/{repo}/pull/42` to `/pulls` and `/commits` to `/activity`, or else to the
   dashboard. A
@@ -208,7 +218,8 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   renamed or transferred. BuhTig's own pages are under `/-/`. What is under `/-/api/` serves
   BuhTig's UI only; it is not a supported API and may change in any release.
 - **Link previews:** in public mode, a link to a dashboard or one of its tabs unfurls in
-  chat tools with the repository's or organization's name and its description on GitHub, if
+  chat tools with the repository's, organization's or user's name and its description, or
+  the user's bio, on GitHub, if
   someone opened the dashboard within `cache.ttl`. Previews show only public data from the
   shared cache, and BuhTig never asks GitHub for one. In private mode, links have no preview.
 - **Motion:** the UI animates, but keeps still for anyone whose browser asks for reduced

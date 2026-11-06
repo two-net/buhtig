@@ -17,7 +17,7 @@ use url::Url;
 use crate::accounts::is_account_name;
 use crate::cache::Cache;
 use crate::github;
-use crate::navigation::{self, Dashboard};
+use crate::navigation::{self, Dashboard, Tab};
 use crate::repositories::is_repository_name;
 
 /// The most characters of a description that a preview shows.
@@ -28,6 +28,9 @@ const REPOSITORY: &str = "A dashboard of the GitHub repository";
 
 /// What a preview says of an organization that does not describe itself, before its name.
 const ORGANIZATION: &str = "A dashboard of the GitHub organization";
+
+/// What a preview says of a user who does not describe themselves, before their login.
+const USER: &str = "A dashboard of the GitHub user";
 
 pub struct Previews {
     cache: Arc<Cache>,
@@ -56,7 +59,7 @@ impl Previews {
     /// The names are GitHub's, from what it returned, so a repository that was renamed or
     /// transferred is previewed under its new name (FR-NAV-05).
     pub async fn of(&self, path: &str) -> Option<Preview> {
-        let (dashboard, tab) = navigation::dashboard_at(path)?;
+        let (dashboard, mut tab) = navigation::dashboard_at(path)?;
         let own = dashboard.path();
         let (name, description, undescribed) = match dashboard {
             Dashboard::Repository { owner, repo } => {
@@ -71,26 +74,30 @@ impl Previews {
                     })?;
                 (name.to_owned(), text(&data, "description"), REPOSITORY)
             }
-            Dashboard::Organization { org } => {
-                // What the dashboard reads, or else what the search box read before it
-                // opened the dashboard (FR-SRCH-06).
-                let (data, about) = match self.read(&own, ["orgs", org]).await {
-                    Some(data) => (data, "description"),
+            Dashboard::Account { name } => {
+                // What an organization's dashboard reads, or else what an account's reads
+                // first, which a user's dashboard reads too (FR-SRCH-06).
+                let (data, about, undescribed) = match self.read(&own, ["orgs", name]).await {
+                    Some(data) => (data, "description", ORGANIZATION),
                     None => {
-                        let data = self.read(&own, ["users", org]).await?;
-                        // Users have no dashboards (FR-SRCH-06).
-                        if data.get("type").and_then(Value::as_str) != Some("Organization") {
-                            return None;
-                        }
+                        let data = self.read(&own, ["users", name]).await?;
                         // GitHub gives an organization's description as its `bio` here.
-                        (data, "bio")
+                        match data.get("type").and_then(Value::as_str) {
+                            Some("Organization") => (data, "bio", ORGANIZATION),
+                            Some("User") => {
+                                // A user's tabs are all at their own path, as on GitHub.
+                                tab = Tab::Overview;
+                                (data, "bio", USER)
+                            }
+                            _ => return None,
+                        }
                     }
                 };
                 let login = data
                     .get("login")
                     .and_then(Value::as_str)
                     .filter(|login| is_account_name(login))?;
-                (login.to_owned(), text(&data, about), ORGANIZATION)
+                (login.to_owned(), text(&data, about), undescribed)
             }
         };
         let url = self.public_url.join(&tab.path(&format!("/{name}"))).ok()?;
@@ -256,6 +263,12 @@ mod tests {
                     &[],
                     r#"{"login": "octocat", "type": "User", "bio": "A cat."}"#,
                 ),
+                "/users/quiet" => answer(
+                    200,
+                    &[],
+                    r#"{"login": "Quiet", "type": "User", "bio": null}"#,
+                ),
+                "/users/robot" => answer(200, &[], r#"{"login": "robot", "type": "Bot"}"#),
                 _ => answer(404, &[], r#"{"message": "Not Found"}"#),
             }
         })
@@ -356,18 +369,30 @@ mod tests {
         );
     }
 
-    /// As the search box reads them, before it opens their dashboards.
+    /// As an account's dashboard reads them first, before it knows which kind it is.
     #[tokio::test]
-    async fn organizations_are_previewed_and_users_are_not() {
+    async fn organizations_and_users_are_previewed() {
         let stub = github();
         let (previews, cache) = previews(&stub, Duration::from_secs(15 * 60)).await;
-        view(&cache, "/acme", &["users", "acme"]).await;
-        view(&cache, "/octocat", &["users", "octocat"]).await;
+        for name in ["acme", "octocat", "quiet", "robot"] {
+            view(&cache, &format!("/{name}"), &["users", name]).await;
+        }
         assert_eq!(
             previews.of("/acme").await,
             preview("Acme", "We make widgets.")
         );
-        assert_eq!(previews.of("/octocat").await, None);
+        assert_eq!(previews.of("/octocat").await, preview("octocat", "A cat."));
+        assert_eq!(
+            previews.of("/quiet").await,
+            preview("Quiet", "A dashboard of the GitHub user Quiet.")
+        );
+        // A user's tabs are at their own path: an organization's paths lead there.
+        assert_eq!(
+            previews.of("/orgs/octocat/repositories").await,
+            preview("octocat", "A cat.")
+        );
+        // Neither an organization nor a user.
+        assert_eq!(previews.of("/robot").await, None);
     }
 
     #[tokio::test]

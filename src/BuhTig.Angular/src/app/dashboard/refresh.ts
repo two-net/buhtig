@@ -1,6 +1,6 @@
 import { Component, DestroyRef, computed, inject, input, output, signal } from '@angular/core';
 import { Icon } from '../icon/icon';
-import { Resource } from '../search/parse';
+import { Known } from '../search/parse';
 import { Session } from '../session/session';
 import { Toasts } from '../toast/toasts';
 import { REFRESH, REFRESH_FAILED, refreshIn } from './messages';
@@ -39,7 +39,7 @@ export class Refresh {
   private readonly toasts = inject(Toasts);
 
   /** The dashboard's resource, as the URL names it. */
-  readonly resource = input.required<Resource>();
+  readonly resource = input.required<Known>();
   /** Says that the server has refreshed the dashboard, which now asks for its data again. */
   readonly refreshed = output();
 

@@ -2,8 +2,8 @@
 
 export const HEADLINE = 'Every GitHub repository, at a glance';
 export const LEDE =
-  'Paste a repository or organization URL to see its activity, languages, contributors, issues ' +
-  'and releases on one animated dashboard.';
+  'Paste a repository, organization or user URL to see its activity, languages, contributors, ' +
+  'issues and releases on one animated dashboard.';
 export const TRY = 'Try';
 /** What BuhTig shows, in three. */
 export const FEATURES = [
@@ -14,8 +14,8 @@ export const FEATURES = [
   },
   {
     icon: 'org',
-    title: 'Organization insights',
-    text: 'Every repository in an organization with its stars, languages and latest pushes, sortable and searchable.',
+    title: 'Organization and user insights',
+    text: 'Every repository of an organization or a user with its stars, languages and latest pushes, sortable and searchable.',
   },
   {
     icon: 'lock',

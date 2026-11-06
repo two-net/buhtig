@@ -43,7 +43,7 @@ const MEMBERS: usize = 24;
 /// What is kept of each of an organization's repositories: what its dashboard shows of them
 /// (FR-ORG-02 to FR-ORG-06), so that a large organization's list is small to cache and to
 /// read. `private` and `visibility` tell which are private or internal (FR-ORG-09).
-const REPOSITORY_FIELDS: [&str; 14] = [
+pub(crate) const REPOSITORY_FIELDS: [&str; 14] = [
     "name",
     "full_name",
     "description",
@@ -166,12 +166,15 @@ pub async fn repositories(
     Path(org): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &org).await {
-        Ok(list) => {
-            let rows: Vec<Value> = list.items.iter().filter_map(row).collect();
-            respond(json!({ "repositories": rows }))
-        }
+        Ok(list) => respond(table(&list)),
         Err(code) => status(code),
     }
+}
+
+/// The repository table's rows, from the account's repositories, in their order.
+pub(crate) fn table(list: &List) -> Value {
+    let rows: Vec<Value> = list.items.iter().filter_map(row).collect();
+    json!({ "repositories": rows })
 }
 
 /// `/-/api/organizations/{org}/languages`: how many of the organization's repositories have
@@ -436,8 +439,9 @@ async fn read(cache: &Cache, viewer: &Viewer, org: &str) -> Result<Outcome<Value
     cache.get(viewer, &format!("/{org}"), &path).await
 }
 
-/// The organization's login, as GitHub spells it, if it can be an account's.
-fn login(organization: &Value) -> Option<&str> {
+/// The account's login, as GitHub spells it, if it can be an account's: an
+/// organization's or a user's.
+pub(crate) fn login(organization: &Value) -> Option<&str> {
     organization
         .get("login")
         .and_then(Value::as_str)
@@ -445,7 +449,7 @@ fn login(organization: &Value) -> Option<&str> {
 }
 
 /// The stat cards' figures, from the organization's repositories.
-fn figures(list: &List) -> Value {
+pub(crate) fn figures(list: &List) -> Value {
     let repositories: Vec<&Value> = list.items.iter().filter(|item| item.is_object()).collect();
     let sum = |key| {
         repositories.iter().fold(0u64, |sum, repository| {
@@ -496,7 +500,7 @@ fn language_counts<'a>(repositories: impl IntoIterator<Item = &'a Value>) -> Vec
 
 /// The languages chart's figures, from the organization's repositories: the 8 languages of
 /// the most repositories, and how many repositories the rest have together.
-fn language_chart(list: &List) -> Value {
+pub(crate) fn language_chart(list: &List) -> Value {
     let mut counts = language_counts(&list.items);
     let other: usize = counts.iter().skip(LANGUAGES).map(|(_, count)| count).sum();
     counts.truncate(LANGUAGES);
@@ -508,7 +512,7 @@ fn language_chart(list: &List) -> Value {
 }
 
 /// The repositories that the top-repositories chart shows, with their stars.
-fn top(list: &List) -> Value {
+pub(crate) fn top(list: &List) -> Value {
     let mut starred: Vec<(&str, u64)> = list
         .items
         .iter()
@@ -531,7 +535,7 @@ fn top(list: &List) -> Value {
 
 /// How many repositories were last pushed to in each period before `now`. One pushed to
 /// after `now`, as by a clock ahead of BuhTig's, was pushed to within the first.
-fn pushes(list: &List, now: DateTimeUtc) -> Value {
+pub(crate) fn pushes(list: &List, now: DateTimeUtc) -> Value {
     let mut periods = [0u64; PERIODS.len() + 1];
     for pushed in list.items.iter().filter_map(|item| time(item, "pushed_at")) {
         let age = now - pushed;
@@ -551,7 +555,7 @@ fn pushes(list: &List, now: DateTimeUtc) -> Value {
 
 /// How many repositories were created in each year, from the year of the first to that of
 /// `now`, or to that of the last if it is later, as by a clock ahead of BuhTig's.
-fn years(list: &List, now: DateTimeUtc) -> Value {
+pub(crate) fn years(list: &List, now: DateTimeUtc) -> Value {
     let mut counts: BTreeMap<i32, u64> = BTreeMap::new();
     for created in list
         .items
@@ -573,7 +577,7 @@ fn years(list: &List, now: DateTimeUtc) -> Value {
 }
 
 /// The time of `data`'s member `key`, if it tells one.
-fn time(data: &Value, key: &str) -> Option<DateTimeUtc> {
+pub(crate) fn time(data: &Value, key: &str) -> Option<DateTimeUtc> {
     text(data, key)?.parse().ok()
 }
 
@@ -614,7 +618,7 @@ fn member(member: &Value) -> Option<Value> {
 /// The website that GitHub gives, as a URL to link to: as it is, if it is an `http` or
 /// `https` one, or with `https://` before it, if it names no scheme, as `acme.example` does
 /// (NFR-SEC-03).
-fn website(value: Option<&Value>) -> Option<String> {
+pub(crate) fn website(value: Option<&Value>) -> Option<String> {
     let blog = value?.as_str()?.trim();
     match Url::parse(blog) {
         Err(url::ParseError::RelativeUrlWithoutBase) if !blog.is_empty() => {
@@ -1717,6 +1721,7 @@ mod tests {
         // Whoever asks, as GitHub answers their own credential.
         let token_user = Viewer::TokenUser {
             user_id: 1,
+            github_id: 1,
             credential_id: 1,
             pat: Secret::new("pat".to_owned()),
             sign_in: Secret::new("sign-in".to_owned()),
@@ -1838,6 +1843,7 @@ mod tests {
         };
         let token_user = Viewer::TokenUser {
             user_id: 1,
+            github_id: 1,
             credential_id: 1,
             pat: Secret::new("pat".to_owned()),
             sign_in: Secret::new("sign-in".to_owned()),

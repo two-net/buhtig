@@ -1,10 +1,11 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { WritableSignal, signal } from '@angular/core';
+import { NEVER } from 'rxjs';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import type { Mock } from 'vitest';
-import { OrganizationData } from '../dashboard/data';
+import { AccountData } from '../dashboard/data';
 import {
   LanguageCounts,
   LastPush,
@@ -28,6 +29,7 @@ import {
   createdDescription,
   hiddenCount,
   languagesDescription,
+  privateCount,
   pushedLast,
   repositoryCount,
   topRepositoriesDescription,
@@ -47,6 +49,7 @@ function stub<T>(): Stub<T> {
 
 /** What the organization's dashboard would know of `acme`, part by part. */
 class Data {
+  readonly type = signal<'organization' | 'user' | undefined>('organization');
   readonly login = signal('acme');
   readonly displayName = signal('Acme Corp');
   readonly loaders = {
@@ -68,6 +71,7 @@ class Data {
   readonly languageColor = signal((language: string) =>
     language === 'TypeScript' ? 'var(--s1)' : language === 'Rust' ? 'var(--s2)' : 'var(--s-other)',
   );
+  readonly activity = () => NEVER;
 }
 
 const STATS: OrganizationStats = {
@@ -125,7 +129,7 @@ describe('OrganizationOverview', () => {
         provideRouter([]),
         provideHttpClient(),
         provideHttpClientTesting(),
-        { provide: OrganizationData, useValue: data },
+        { provide: AccountData, useValue: data },
       ],
     });
     http = TestBed.inject(HttpTestingController);
@@ -465,6 +469,41 @@ describe('OrganizationOverview', () => {
     });
   });
 
+  describe("a user's", () => {
+    beforeEach(async () => {
+      data.type.set('user');
+      data.login.set('mona');
+      await fixture.whenStable();
+    });
+
+    it('stat cards have no members, a user having none (FR-USER-02)', async () => {
+      await ready('stats', STATS);
+      expect(stats().map(([of]) => of)).toEqual([
+        'Repositories',
+        'Total stars',
+        'Total forks',
+        'Open issues and PRs',
+        'Top language',
+      ]);
+    });
+
+    it('stat cards say how many of the repositories are private, which only the user sees (FR-USER-06)', async () => {
+      await ready('stats', { ...STATS, private: 3 });
+      expect(stats()[0]).toEqual(['Repositories', '312', privateCount(3)]);
+      expect(privateCount(3)).toBe('3 private');
+    });
+
+    it('lead to all of the repositories, at the query of their tab (FR-NAV-01)', () => {
+      const link = section('recent-heading')!.querySelector('.Box-header a')!;
+      expect(link.getAttribute('href')).toBe('/mona?tab=repositories');
+    });
+
+    it('side has no people, and says it is about the user', () => {
+      expect(section('people-heading')).toBeNull();
+      expect(side().getAttribute('aria-label')).toBe('About this user');
+    });
+  });
+
   describe('people', () => {
     const people = () => section('people-heading')!;
     const members = (count: number) =>
@@ -475,6 +514,7 @@ describe('OrganizationOverview', () => {
       }));
 
     it('shows up to 18 of the members, each leading to their profile (FR-ORG-07)', async () => {
+      expect(side().getAttribute('aria-label')).toBe('About this organization');
       const heading = people().querySelector('h2 a')!;
       expect([heading.textContent?.trim(), heading.getAttribute('href')]).toEqual([
         'People',

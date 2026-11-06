@@ -4,6 +4,7 @@
 //! its rules apart; these check that the parts, put together, keep them.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use axum::http::Request;
@@ -33,20 +34,34 @@ const APP: &str = "Basic Y2xpZW50LWlkOmNsaWVudC1zZWNyZXQ=";
 /// GitHub as these tests meet it: the organization Octo, with a public repository, a
 /// private one and an internal one. Only Hubot's PAT finds the last two, or lists them
 /// among Octo's repositories. `octo/leaky` is private too, yet GitHub gives it to any
-/// credential, as it might to one with more access than BuhTig asks for. Anything else is
-/// not found.
-fn github() -> Arc<Stub> {
-    Stub::new(|request: &Request<_>| {
+/// credential, as it might to one with more access than BuhTig asks for.
+///
+/// The users Mona and Hubot each have a public repository, and Hubot a private one too,
+/// which GitHub lists to Hubot's PAT alone, at `/user/repos`. There, any other credential
+/// gets a list of public repositories, as GitHub lists the sign-in credential's user's, so
+/// that one read without the PAT would be seen in the shared cache. Once `revoked`, GitHub
+/// rejects Hubot's PAT. Anything else is not found.
+fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
+    Stub::new(move |request: &Request<_>| {
         let pat = request
             .headers()
             .get(AUTHORIZATION)
             .is_some_and(|value| value == format!("Bearer {HUBOTS_PAT}").as_str());
+        if pat && revoked.load(Ordering::Relaxed) {
+            return answer(401, &[], r#"{"message": "Bad credentials"}"#);
+        }
         let visible: &[&str] = if pat {
             &["public", "secret", "inner"]
         } else {
             &["public"]
         };
         match request.uri().path() {
+            "/users/mona" => answer(200, &[], r#"{"login": "mona", "id": 1, "type": "User"}"#),
+            "/users/hubot" => answer(200, &[], r#"{"login": "hubot", "id": 2, "type": "User"}"#),
+            "/users/mona/repos" => answer(200, &[], &json!([owned("mona", "widget")]).to_string()),
+            "/users/hubot/repos" => answer(200, &[], &json!([owned("hubot", "tools")]).to_string()),
+            "/user/repos" if pat => answer(200, &[], &json!([owned("hubot", "diary")]).to_string()),
+            "/user/repos" => answer(200, &[], &json!([owned("mona", "widget")]).to_string()),
             "/user" if pat => answer(
                 200,
                 &[("x-oauth-scopes", "repo, read:org")],
@@ -90,12 +105,28 @@ fn repository(name: &str) -> Value {
     })
 }
 
+/// The user `login`'s repository `name`, as GitHub gives it: `diary` is private, and pushed
+/// to more recently than the others.
+fn owned(login: &str, name: &str) -> Value {
+    let private = name == "diary";
+    json!({
+        "name": name,
+        "full_name": format!("{login}/{name}"),
+        "owner": {"login": login},
+        "private": private,
+        "visibility": if private { "private" } else { "public" },
+        "pushed_at": if private { "2026-10-05T00:00:00Z" } else { "2026-10-01T00:00:00Z" },
+    })
+}
+
 /// BuhTig in `mode`, served as `main` serves it, over a database of its own and in front
 /// of [`github`].
 struct Served {
     origin: String,
     database: String,
     stub: Arc<Stub>,
+    /// Whether GitHub rejects Hubot's PAT, as once it is revoked.
+    revoked: Arc<AtomicBool>,
     /// Sessions in the same database, to sign users in as GitHub's callback would.
     sessions: Sessions,
     http: reqwest::Client,
@@ -146,7 +177,8 @@ async fn serve(mode: &str) -> Served {
     let db = db::connect(&config.database).await.unwrap();
     db::migrate(&db).await.unwrap();
 
-    let stub = github();
+    let revoked = Arc::new(AtomicBool::new(false));
+    let stub = github(revoked.clone());
     let app = crate::app(&config, &db, Arc::new(client(&stub)));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -185,6 +217,7 @@ async fn serve(mode: &str) -> Served {
         origin,
         database,
         stub,
+        revoked,
         sessions,
         http,
     }
@@ -289,6 +322,31 @@ impl Served {
             .collect()
     }
 
+    /// The names of the user `login`'s repositories that BuhTig lists to `viewer`, with
+    /// their visibility.
+    async fn users_repositories(&self, viewer: &Viewer, login: &str) -> Vec<(String, String)> {
+        let listed = self
+            .get(viewer, &format!("/-/api/users/{login}/repositories"))
+            .await;
+        assert_eq!(listed.status, 200, "{listed:?}");
+        listed.json()["repositories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|repository| {
+                (
+                    repository["name"].as_str().unwrap().to_owned(),
+                    repository["visibility"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// Makes GitHub reject Hubot's PAT from now on, as once Hubot revokes it.
+    fn revoke(&self) {
+        self.revoked.store(true, Ordering::Relaxed);
+    }
+
     /// The credentials that the requests to GitHub for `path` carried, in order.
     fn credentials_for(&self, path: &str) -> Vec<String> {
         self.stub
@@ -325,7 +383,7 @@ fn body_for(method: &Method) -> Option<Value> {
 }
 
 /// What only signed-in users may ask for or do (FR-ACC-02), whatever the mode.
-const SIGNED_IN_ONLY: [(Method, &str); 8] = [
+const SIGNED_IN_ONLY: [(Method, &str); 11] = [
     (Method::GET, "/-/api/shortcuts"),
     (Method::DELETE, "/-/api/history"),
     (Method::PUT, "/-/api/pins"),
@@ -334,6 +392,9 @@ const SIGNED_IN_ONLY: [(Method, &str); 8] = [
     (Method::POST, "/-/api/repositories/octo/public/refresh"),
     (Method::POST, "/-/api/repositories/octo/public/view"),
     (Method::PUT, "/-/api/organizations/octo/pin"),
+    (Method::POST, "/-/api/users/hubot/refresh"),
+    (Method::POST, "/-/api/users/hubot/view"),
+    (Method::PUT, "/-/api/users/hubot/pin"),
 ];
 
 /// FR-ACC-02, FR-ACC-04 and FR-DATA-02: in public mode, visitors see public dashboards,
@@ -349,6 +410,7 @@ async fn visitors_in_public_mode_see_public_data_only() {
         "/octo/public/issues",
         "/octo",
         "/orgs/octo/people",
+        "/hubot",
         "/-/settings",
     ] {
         let answer = served.get(&VISITOR, page).await;
@@ -364,6 +426,10 @@ async fn visitors_in_public_mode_see_public_data_only() {
     assert_eq!(
         served.octos_repositories(&VISITOR).await,
         [("public".to_owned(), "public".to_owned())]
+    );
+    assert_eq!(
+        served.users_repositories(&VISITOR, "hubot").await,
+        [("tools".to_owned(), "public".to_owned())]
     );
     for repo in ["secret", "inner"] {
         let path = format!("/-/api/repositories/octo/{repo}");
@@ -399,6 +465,10 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
         ),
         ("/octo", "/-/sign-in?return_to=%2Focto"),
         (
+            "/hubot?tab=repositories",
+            "/-/sign-in?return_to=%2Fhubot%3Ftab%3Drepositories",
+        ),
+        (
             "/orgs/octo/people",
             "/-/sign-in?return_to=%2Forgs%2Focto%2Fpeople",
         ),
@@ -418,7 +488,10 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
         "/-/api/organizations/octo/repositories",
         "/-/api/organizations/octo/repositories/public/commit-activity",
         "/-/api/accounts/octo",
-        "/-/api/users/octo/repositories",
+        "/-/api/users/hubot",
+        "/-/api/users/hubot/stats",
+        "/-/api/users/hubot/repositories",
+        "/-/api/users/hubot/repositories/tools/commit-activity",
         "/-/api/surprise",
         "/-/api/recent",
     ] {
@@ -482,6 +555,7 @@ async fn signed_in_users_see_public_data_and_keep_shortcuts_in_either_mode() {
         for (method, path) in [
             (Method::POST, "/-/api/repositories/octo/public/view"),
             (Method::PUT, "/-/api/organizations/octo/pin"),
+            (Method::PUT, "/-/api/users/hubot/pin"),
             (Method::GET, "/-/api/shortcuts"),
             (Method::POST, "/-/api/repositories/octo/public/refresh"),
             (Method::DELETE, "/-/api/history"),
@@ -495,6 +569,10 @@ async fn signed_in_users_see_public_data_and_keep_shortcuts_in_either_mode() {
         let shortcuts = served.get(&mona, "/-/api/shortcuts").await;
         assert!(
             shortcuts.body.contains(r#""octo""#),
+            "{mode}: {shortcuts:?}"
+        );
+        assert!(
+            shortcuts.body.contains(r#"{"kind":"user","name":"hubot"}"#),
             "{mode}: {shortcuts:?}"
         );
         assert_eq!(
@@ -664,6 +742,11 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
             "/-/api/repositories/octo/secret",
             "/-/api/repositories/octo/inner",
             "/-/api/repositories/octo/missing",
+            "/-/api/accounts/hubot",
+            "/-/api/users/hubot",
+            "/-/api/users/hubot/stats",
+            "/-/api/users/hubot/repositories",
+            "/-/api/users/mona/repositories",
         ] {
             served.get(viewer, path).await;
         }
@@ -683,6 +766,14 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
         "0|0|t",
         "the shared cache is empty, holds something private, or belongs to someone"
     );
+    // Nor anything about one viewer alone, which GitHub gives at paths that name no one.
+    assert_eq!(
+        served.psql(
+            "SELECT count(*) FROM cache_entries \
+             WHERE scope = 'shared' AND resource_key LIKE '/user/%'"
+        ),
+        "0"
+    );
     let hubot = served.psql("SELECT id FROM users WHERE login = 'hubot'");
     let pat = served.psql(&format!(
         "SELECT id FROM credentials WHERE user_id = {hubot} AND kind = 'pat'"
@@ -693,5 +784,71 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
              WHERE scope <> 'shared' GROUP BY scope, user_id, credential_id"
         )),
         format!("user:{hubot}|{hubot}|{pat}|t")
+    );
+}
+
+/// FR-USER-06, FR-ACC-06: a token user's own dashboard lists their private repositories
+/// too, which GitHub lists to their PAT alone. No one else's does, not even theirs to
+/// someone else, and what they read about themselves is in their private cache alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_users_private_repositories_are_listed_to_them_alone() {
+    let served = serve("public").await;
+    let mona = served.mona().await;
+    let hubot = served.hubot().await;
+    let pair = |name: &str, visibility: &str| (name.to_owned(), visibility.to_owned());
+
+    assert_eq!(
+        served.users_repositories(&hubot, "hubot").await,
+        [pair("diary", "private"), pair("tools", "public")]
+    );
+    let stats = served.get(&hubot, "/-/api/users/hubot/stats").await;
+    assert_eq!(stats.json()["private"], 1, "{stats:?}");
+    for viewer in [&VISITOR, &mona] {
+        assert_eq!(
+            served.users_repositories(viewer, "hubot").await,
+            [pair("tools", "public")]
+        );
+    }
+    // Hubot's PAT lists Hubot's own private repositories, and no one else's.
+    assert_eq!(
+        served.users_repositories(&hubot, "mona").await,
+        [pair("widget", "public")]
+    );
+    assert_eq!(
+        served.credentials_for("/user/repos"),
+        [format!("Bearer {HUBOTS_PAT}")]
+    );
+    let hubot = served.psql("SELECT id FROM users WHERE login = 'hubot'");
+    assert_eq!(
+        served.psql("SELECT scope FROM cache_entries WHERE resource_key LIKE '/user/%'"),
+        format!("user:{hubot}")
+    );
+}
+
+/// FR-PAT-07, FR-DATA-04: once GitHub rejects a token user's PAT, their own dashboard
+/// lists what anyone's does. What GitHub lists about them alone is never read with their
+/// sign-in credential instead, which would put it in the shared cache, for anyone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_rejected_pat_never_lists_its_users_repositories_to_anyone() {
+    let served = serve("public").await;
+    let hubot = served.hubot().await;
+    served.revoke();
+
+    assert_eq!(
+        served.users_repositories(&hubot, "hubot").await,
+        [("tools".to_owned(), "public".to_owned())]
+    );
+    assert_eq!(
+        served.credentials_for("/user/repos"),
+        [format!("Bearer {HUBOTS_PAT}")]
+    );
+    assert_eq!(
+        served.psql("SELECT count(*) FROM cache_entries WHERE resource_key LIKE '/user/%'"),
+        "0"
+    );
+    // The PAT is marked invalid, for Hubot to replace.
+    assert_eq!(
+        served.psql("SELECT status FROM credentials WHERE kind = 'pat'"),
+        "invalid"
     );
 }

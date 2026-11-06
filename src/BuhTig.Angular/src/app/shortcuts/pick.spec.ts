@@ -16,6 +16,10 @@ function organization(name: string): Shortcut {
   return { kind: 'organization', name };
 }
 
+function user(name: string): Shortcut {
+  return { kind: 'user', name };
+}
+
 /** `shortcut`, as the home page lists it, pinned or not. */
 function picked(shortcut: Shortcut, pinned: boolean): Picked {
   return { ...shortcut, pinned };
@@ -39,10 +43,15 @@ describe('pick', () => {
     ).toEqual([picked(repository('Owner/Repo'), true), picked(organization('acme'), false)]);
   });
 
-  it('tells a repository from an organization', () => {
+  it('tells a repository from an organization, and from a user', () => {
     expect(pick([organization('acme')], [repository('acme/acme')])).toEqual([
       picked(organization('acme'), true),
       picked(repository('acme/acme'), false),
+    ]);
+    expect(pick([user('mona')], [repository('mona/mona'), user('octocat')])).toEqual([
+      picked(user('mona'), true),
+      picked(repository('mona/mona'), false),
+      picked(user('octocat'), false),
     ]);
   });
 
@@ -76,6 +85,7 @@ describe('sameDashboard', () => {
     expect(sameDashboard(organization('acme'), organization('ACME'))).toBe(true);
     expect(sameDashboard(repository('owner/repo'), repository('owner/other'))).toBe(false);
     expect(sameDashboard(organization('acme'), repository('acme'))).toBe(false);
+    expect(sameDashboard(user('Mona'), user('mona'))).toBe(true);
   });
 });
 
@@ -91,5 +101,7 @@ describe('shortcutOf and resourceOf', () => {
       repo: 're.po',
     });
     expect(resourceOf(organization('acme'))).toEqual({ kind: 'organization', org: 'acme' });
+    expect(shortcutOf({ kind: 'user', login: 'mona' })).toEqual(user('mona'));
+    expect(resourceOf(user('mona'))).toEqual({ kind: 'user', login: 'mona' });
   });
 });

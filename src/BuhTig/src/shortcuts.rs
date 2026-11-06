@@ -40,19 +40,23 @@ use crate::repositories;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dashboard {
     kind: ResourceKind,
-    /// `owner/repo` or `org`.
+    /// `owner/repo`, `org` or `login`.
     name: String,
 }
 
 impl Dashboard {
-    /// The dashboard that a route's path names, `{owner}/{repo}` or `{org}`, if those can be
-    /// GitHub's names (FR-SRCH-04).
+    /// The dashboard that a route's path names, `{owner}/{repo}`, `{org}` or a user's
+    /// `{login}`, if those can be GitHub's names (FR-SRCH-04).
     fn at(params: &HashMap<String, String>) -> Option<Dashboard> {
-        match (params.get("owner"), params.get("repo"), params.get("org")) {
-            (Some(owner), Some(repo), None) => {
+        let param = |name| params.get(name);
+        match (param("owner"), param("repo"), param("org"), param("login")) {
+            (Some(owner), Some(repo), None, None) => {
                 Dashboard::named(ResourceKind::Repository, format!("{owner}/{repo}"))
             }
-            (None, None, Some(org)) => Dashboard::named(ResourceKind::Organization, org.clone()),
+            (None, None, Some(org), None) => {
+                Dashboard::named(ResourceKind::Organization, org.clone())
+            }
+            (None, None, None, Some(login)) => Dashboard::named(ResourceKind::User, login.clone()),
             _ => None,
         }
     }
@@ -62,6 +66,7 @@ impl Dashboard {
         let kind = match value.get("kind")?.as_str()? {
             "repository" => ResourceKind::Repository,
             "organization" => ResourceKind::Organization,
+            "user" => ResourceKind::User,
             _ => return None,
         };
         Dashboard::named(kind, value.get("name")?.as_str()?.to_owned())
@@ -71,7 +76,7 @@ impl Dashboard {
     fn named(kind: ResourceKind, name: String) -> Option<Dashboard> {
         let valid = match kind {
             ResourceKind::Repository => repositories::names(&name).is_some(),
-            ResourceKind::Organization => is_account_name(&name),
+            ResourceKind::Organization | ResourceKind::User => is_account_name(&name),
         };
         valid.then_some(Dashboard { kind, name })
     }
@@ -440,6 +445,7 @@ fn item(kind: ResourceKind, name: &str) -> Value {
     let kind = match kind {
         ResourceKind::Repository => "repository",
         ResourceKind::Organization => "organization",
+        ResourceKind::User => "user",
     };
     json!({ "kind": kind, "name": name })
 }
@@ -492,6 +498,10 @@ mod tests {
 
     fn organization(name: &str) -> Dashboard {
         Dashboard::named(ResourceKind::Organization, name.to_owned()).unwrap()
+    }
+
+    fn user(name: &str) -> Dashboard {
+        Dashboard::named(ResourceKind::User, name.to_owned()).unwrap()
     }
 
     /// Shortcuts kept in a database of their own, and the IDs of its two users, Mona and
@@ -555,6 +565,7 @@ mod tests {
         match kind {
             ResourceKind::Repository => format!("repository:{name}"),
             ResourceKind::Organization => format!("organization:{name}"),
+            ResourceKind::User => format!("user:{name}"),
         }
     }
 
@@ -574,12 +585,18 @@ mod tests {
             Dashboard::at(&params(&[("org", "acme")])),
             Some(organization("acme"))
         );
+        assert_eq!(
+            Dashboard::at(&params(&[("login", "Mona")])),
+            Some(user("Mona"))
+        );
         for pairs in [
             &[("owner", "-owner"), ("repo", "repo")][..],
             &[("owner", "owner"), ("repo", "..")],
             &[("owner", "owner"), ("repo", "re/po")],
             &[("org", "ac.me")],
             &[("org", "")],
+            &[("login", "mo.na")],
+            &[("org", "acme"), ("login", "mona")],
             &[],
         ] {
             assert_eq!(Dashboard::at(&params(pairs)), None, "{pairs:?}");
@@ -593,10 +610,15 @@ mod tests {
             Dashboard::from_json(&json!({ "kind": "organization", "name": "acme" })),
             Some(organization("acme"))
         );
+        assert_eq!(
+            Dashboard::from_json(&json!({ "kind": "user", "name": "mona" })),
+            Some(user("mona"))
+        );
         for value in [
             json!({ "kind": "repository", "name": "acme" }),
             json!({ "kind": "organization", "name": "owner/repo" }),
-            json!({ "kind": "user", "name": "mona" }),
+            json!({ "kind": "user", "name": "owner/repo" }),
+            json!({ "kind": "bot", "name": "mona" }),
             json!({ "kind": "repository" }),
             json!({ "name": "owner/repo" }),
             json!("owner/repo"),

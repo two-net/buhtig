@@ -18,7 +18,7 @@
             <app-avatar
               [name]="item.name.split('/')[0]"
               [size]="16"
-              [round]="item.kind === 'repository'"
+              [round]="item.kind !== 'organization'"
             />
             <span>{{ item.name }}</span>
             @if (item.pinned) {

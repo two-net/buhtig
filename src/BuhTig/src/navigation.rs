@@ -1,15 +1,19 @@
 //! Dashboards' URLs (SRS §4.2). A dashboard's path is its resource's on GitHub:
-//! `/{owner}/{repo}` for a repository and `/{org}` for an organization (FR-NAV-01). Each of
-//! its tabs is a page of its own, at the path of GitHub's page about the same: a
-//! repository's `/{owner}/{repo}/activity`, `/issues`, `/pulls`, `/graphs/contributors` and
-//! `/releases`, and an organization's `/orgs/{org}/repositories` and `/orgs/{org}/people`.
-//! The dashboard's own path is its overview. The paths of GitHub's other pages about them
-//! lead to the tab that shows the most of what they show, or else to the overview, so that
+//! `/{owner}/{repo}` for a repository and `/{name}` for an account, an organization or a
+//! user (FR-NAV-01). Each of its tabs is a page of its own, at the path of GitHub's page
+//! about the same: a repository's `/{owner}/{repo}/activity`, `/issues`, `/pulls`,
+//! `/graphs/contributors` and `/releases`, and an organization's `/orgs/{org}/repositories`
+//! and `/orgs/{org}/people`. A user's repositories are at `/{user}?tab=repositories`, as on
+//! GitHub: the query is the dashboard's to read, and the path is the overview's. The
+//! dashboard's own path is its overview. The paths of GitHub's other pages about them lead
+//! to the tab that shows the most of what they show, or else to the overview, so that
 //! replacing `github.com` with BuhTig's host in a GitHub link opens the matching page
 //! (FR-NAV-02).
 //!
-//! Only the path is looked at here, never GitHub. A dashboard switches its URL to the
-//! names as GitHub spells them once it knows them (FR-NAV-04, FR-NAV-05).
+//! Only the path is looked at here, never GitHub, so whether an account is an
+//! organization or a user is not known here. A dashboard switches its URL to the names as
+//! GitHub spells them, and to the tab of its kind, once it knows them (FR-NAV-04,
+//! FR-NAV-05).
 
 use crate::accounts::is_account_name;
 use crate::repositories::is_repository_name;
@@ -17,17 +21,23 @@ use crate::repositories::is_repository_name;
 /// A dashboard, by the names in its path, in their case.
 #[derive(Debug, PartialEq)]
 pub enum Dashboard<'a> {
-    Repository { owner: &'a str, repo: &'a str },
-    Organization { org: &'a str },
+    Repository {
+        owner: &'a str,
+        repo: &'a str,
+    },
+    /// An account's: an organization's or a user's, which GitHub alone can tell apart.
+    Account {
+        name: &'a str,
+    },
 }
 
 impl Dashboard<'_> {
-    /// The dashboard's own path, such as `/owner/repo` or `/org`, with the names as they
+    /// The dashboard's own path, such as `/owner/repo` or `/name`, with the names as they
     /// are.
     pub fn path(&self) -> String {
         match self {
             Dashboard::Repository { owner, repo } => format!("/{owner}/{repo}"),
-            Dashboard::Organization { org } => format!("/{org}"),
+            Dashboard::Account { name } => format!("/{name}"),
         }
     }
 }
@@ -81,8 +91,8 @@ pub fn dashboard_at(path: &str) -> Option<(Dashboard<'_>, Tab)> {
 
 /// The page that `path` leads to when it is not that page's own path, such as
 /// `/owner/repo/pulls` for `/owner/repo/pull/42`, `/owner/repo` for
-/// `/owner/repo/tree/main`, `/org` for `/orgs/org/teams`, or `/owner/repo/issues` for
-/// `/owner/repo/Issues/` (FR-NAV-02). `None` for a tab's own path, and for any path that
+/// `/owner/repo/tree/main`, `/org` for `/orgs/org/teams`, `/user` for
+/// `/users/user/projects/1`, or `/owner/repo/issues` for `/owner/repo/Issues/` (FR-NAV-02). `None` for a tab's own path, and for any path that
 /// does not begin with names that can be GitHub's, such as BuhTig's own pages under `/-/`
 /// (FR-NAV-03).
 ///
@@ -116,13 +126,20 @@ fn page(path: &str) -> Option<(Dashboard<'_>, Tab)> {
             [tab] if tab.eq_ignore_ascii_case("people") => Tab::People,
             _ => Tab::Overview,
         };
-        return Some((Dashboard::Organization { org }, tab));
+        return Some((Dashboard::Account { name: org }, tab));
+    }
+    // GitHub's pages about a user beneath `/users/{user}`, such as their projects, lead to
+    // the user's overview. GitHub keeps `users`, as `orgs`, from being an account's name.
+    if first.eq_ignore_ascii_case("users")
+        && let Some(user) = second
+    {
+        return is_account_name(user).then_some((Dashboard::Account { name: user }, Tab::Overview));
     }
     if !is_account_name(first) {
         return None;
     }
     let Some(repo) = second else {
-        return Some((Dashboard::Organization { org: first }, Tab::Overview));
+        return Some((Dashboard::Account { name: first }, Tab::Overview));
     };
     // GitHub's URLs to clone a repository end in `.git`.
     let repo = repo.strip_suffix(".git").unwrap_or(repo);
@@ -271,6 +288,30 @@ mod tests {
     }
 
     #[test]
+    fn users_paths_lead_to_the_user() {
+        for (path, user) in [
+            ("/users/mona", "/mona"),
+            ("/users/mona/", "/mona"),
+            ("/users/mona/projects/1", "/mona"),
+            ("/USERS/Mona/packages", "/Mona"),
+            ("/Users/Mona/", "/Mona"),
+        ] {
+            assert_eq!(redirect(path).as_deref(), Some(user), "{path}");
+            assert_eq!(dashboard_at(path), None, "{path}");
+        }
+        // As GitHub, which shows its users at `/{user}`, and their repositories at
+        // `/{user}?tab=repositories`, whose path is the overview's.
+        assert_eq!(
+            dashboard_at("/mona"),
+            Some((Dashboard::Account { name: "mona" }, Tab::Overview))
+        );
+        for path in ["/users/evil.example", "/users/-mona/x", "/users/mo%20na"] {
+            assert_eq!(redirect(path), None, "{path}");
+            assert_eq!(dashboard_at(path), None, "{path}");
+        }
+    }
+
+    #[test]
     fn organizations_tabs_are_spelled_in_lowercase() {
         for (path, tab) in [
             ("/ORGS/acme/people", "/orgs/acme/people"),
@@ -317,8 +358,12 @@ mod tests {
             "/orgs/Acme/people",
             "/vercel/next.js",
             "/owner/.github",
-            // An account's name, as far as BuhTig can tell.
+            // A repository named so, which the dashboard of a user without one leads to
+            // their repositories' tab.
+            "/mona/repositories",
+            // Accounts' names, as far as BuhTig can tell.
             "/orgs",
+            "/users",
         ] {
             assert_eq!(redirect(path), None, "{path}");
         }
@@ -349,7 +394,7 @@ mod tests {
         );
         assert_eq!(
             dashboard_at("/acme"),
-            Some((Dashboard::Organization { org: "acme" }, Tab::Overview))
+            Some((Dashboard::Account { name: "acme" }, Tab::Overview))
         );
         for path in [
             "/",
@@ -393,7 +438,7 @@ mod tests {
         ] {
             assert_eq!(
                 dashboard_at(path),
-                Some((Dashboard::Organization { org: "Acme" }, tab)),
+                Some((Dashboard::Account { name: "Acme" }, tab)),
                 "{path}"
             );
             assert_eq!(tab.path("/Acme"), path);

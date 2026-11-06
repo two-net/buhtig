@@ -1,23 +1,31 @@
 // What the search box says, kept apart from its logic so that it can be translated
 // (NFR-UX-07). Each message says what is wrong and what to do instead (NFR-UX-06).
 
-import { Problem, Resource } from './parse';
+import { Problem, Resource, dashboardPath } from './parse';
 
-/** FR-SRCH-09: what kind of resource the input names, shown as the user types. */
-export const KINDS = { repository: 'Repository', organization: 'Organization' } as const;
+/**
+ * FR-SRCH-09: what kind of resource the input names, shown as the user types. An account named
+ * alone may be an organization or a user, which GitHub tells once its dashboard opens.
+ */
+export const KINDS = {
+  repository: 'Repository',
+  organization: 'Organization',
+  user: 'User',
+  account: 'Account',
+} as const;
 
 /** FR-SRCH-09: the name of the resource that the input names, such as "owner/repo". */
 export function resourceName(resource: Resource): string {
-  return resource.kind === 'repository' ? `${resource.owner}/${resource.repo}` : resource.org;
+  return dashboardPath(resource).slice(1);
 }
 
 /** The input's label, for assistive technology. */
-export const LABEL = 'GitHub repository or organization URL';
+export const LABEL = 'GitHub repository, organization or user URL';
 
 /** What the input says while it is empty, by where it is. */
 export const PLACEHOLDERS = {
-  hero: 'github.com/owner/repo or github.com/org',
-  narrow: 'Repository or organization URL',
+  hero: 'github.com/owner/repo or github.com/owner',
+  narrow: 'Repository, organization or user URL',
   header: 'Type / to open a dashboard',
 } as const;
 
@@ -26,11 +34,11 @@ export const SHOW_DASHBOARD = 'Show dashboard';
 export function problemMessage(problem: Problem): string {
   switch (problem.kind) {
     case 'empty':
-      return 'Paste a GitHub repository or organization URL.';
+      return 'Paste a GitHub repository, organization or user URL.';
     case 'not-github':
       return 'BuhTig supports github.com URLs only.';
     case 'unrecognized':
-      return 'Enter a repository or organization URL, such as github.com/owner/repo or github.com/org.';
+      return 'Enter a repository, organization or user URL, such as github.com/owner/repo or github.com/owner.';
     case 'bad-account':
       return `“${problem.name}” is not a GitHub account name. Account names are up to 39 letters, digits and hyphens, and do not start with a hyphen.`;
     case 'bad-repository':

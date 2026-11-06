@@ -11,7 +11,7 @@ import {
 import { NEVER } from 'rxjs';
 import { RouterLink } from '@angular/router';
 import { Sparkline } from '../chart/sparkline';
-import { OrganizationData } from '../dashboard/data';
+import { AccountData } from '../dashboard/data';
 import { ListedRepository, Resources } from '../dashboard/resources';
 import { CompactNumber } from '../format/compact-number';
 import { exactNumber } from '../format/format';
@@ -27,8 +27,8 @@ const WEEKS = 26;
 /**
  * A repository's commits per week over the last 26 weeks, as a sparkline beside its row. It
  * loads only once the row comes into view, so that a page of repositories asks GitHub for no
- * more than the user sees, and counts as a load of the organization's dashboard
- * (FR-DATA-10). While GitHub computes it, it waits, and asks again (FR-REPO-10).
+ * more than the user sees, and counts as a load of its owner's dashboard, an organization's or
+ * a user's (FR-DATA-10). While GitHub computes it, it waits, and asks again (FR-REPO-10).
  */
 @Component({
   selector: 'app-repository-sparkline',
@@ -51,8 +51,9 @@ const WEEKS = 26;
 })
 export class RepositorySparkline {
   private readonly resources = inject(Resources);
+  private readonly data = inject(AccountData);
 
-  readonly org = input.required<string>();
+  /** The repository's name, without its owner's. */
   readonly repo = input.required<string>();
 
   /** Whether the row has come into view, after which it stays loaded. */
@@ -60,7 +61,7 @@ export class RepositorySparkline {
 
   protected readonly activity = load(() => {
     this.resources.refreshes();
-    return this.seen() ? this.resources.organizationActivity(this.org(), this.repo()) : NEVER;
+    return this.seen() ? this.data.activity(this.repo()) : NEVER;
   });
 
   protected readonly weeks = computed(() => {
@@ -97,7 +98,8 @@ export class RepositorySparkline {
 }
 
 /**
- * One of an organization's repositories, as a row of its lists (FR-ORG-03): its name, linking to
+ * One of an organization's or a user's repositories, as a row of its lists (FR-ORG-03,
+ * FR-USER-04): its name, linking to
  * its dashboard, badges for its visibility and for Archived and Fork, its description, primary
  * language, stars, forks, open issues and pull requests and when it was last pushed to, and its
  * recent commits as a sparkline.
@@ -143,12 +145,12 @@ export class RepositorySparkline {
         }
       </div>
     </div>
-    <app-repository-sparkline [org]="data.login()" [repo]="shown.name" />
+    <app-repository-sparkline [repo]="shown.name" />
   `,
   host: { class: 'repo-row' },
 })
 export class RepositoryRow {
-  protected readonly data = inject(OrganizationData);
+  protected readonly data = inject(AccountData);
 
   readonly repository = input.required<ListedRepository>();
 
@@ -190,7 +192,7 @@ export class RepositoryRow {
   host: { class: 'card' },
 })
 export class RepositoryCard {
-  protected readonly data = inject(OrganizationData);
+  protected readonly data = inject(AccountData);
 
   readonly repository = input.required<ListedRepository>();
 

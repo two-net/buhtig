@@ -1,7 +1,7 @@
 import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { OrganizationData } from '../dashboard/data';
+import { AccountData } from '../dashboard/data';
 import { Members } from '../dashboard/resources';
 import { Load } from '../widget/load';
 import { HELD } from '../widget/messages';
@@ -18,7 +18,7 @@ describe('OrganizationPeople', () => {
       imports: [OrganizationPeople],
       providers: [
         provideRouter([]),
-        { provide: OrganizationData, useValue: { members: () => ({ state, retry: () => {} }) } },
+        { provide: AccountData, useValue: { members: () => ({ state, retry: () => {} }) } },
       ],
     });
     fixture = TestBed.createComponent(OrganizationPeople);

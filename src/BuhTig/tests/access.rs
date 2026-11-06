@@ -78,6 +78,8 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         "/-/api/repositories/owner/repo",
         "/-/api/organizations/acme",
         "/-/api/accounts/acme",
+        "/-/api/users/mona",
+        "/-/api/users/mona/stats",
         "/-/api/surprise",
         "/-/api/shortcuts",
     ] {
@@ -90,6 +92,8 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         "POST /-/api/repositories/owner/repo/view",
         "PUT /-/api/organizations/acme/pin",
         "DELETE /-/api/repositories/owner/repo/pin",
+        "POST /-/api/users/mona/refresh",
+        "PUT /-/api/users/mona/pin",
         "PUT /-/api/pins",
         "DELETE /-/api/history",
         "DELETE /-/api/user",
@@ -143,7 +147,14 @@ fn public_mode_lets_visitors_view_dashboards() {
         log.iter().any(|line| line.contains("access_mode=public")),
         "{log:#?}"
     );
-    for path in ["/", "/owner/repo", "/acme", "/-/sign-in", "/-/settings"] {
+    for path in [
+        "/",
+        "/owner/repo",
+        "/acme",
+        "/mona?tab=repositories",
+        "/-/sign-in",
+        "/-/settings",
+    ] {
         let response = running.get(path);
         assert_status(&response, 200);
         assert_eq!(header(&response, "location"), None, "{path}");
@@ -155,6 +166,9 @@ fn public_mode_lets_visitors_view_dashboards() {
         "POST /-/api/organizations/acme/view",
         "PUT /-/api/repositories/owner/repo/pin",
         "DELETE /-/api/organizations/acme/pin",
+        "POST /-/api/users/mona/refresh",
+        "POST /-/api/users/mona/view",
+        "DELETE /-/api/users/mona/pin",
         "DELETE /-/api/history",
         "DELETE /-/api/user",
     ] {

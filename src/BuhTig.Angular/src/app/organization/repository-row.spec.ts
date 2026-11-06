@@ -1,9 +1,9 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { Component, signal } from '@angular/core';
+import { Component, inject, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { OrganizationData } from '../dashboard/data';
+import { AccountData } from '../dashboard/data';
 import { ListedRepository, Resources } from '../dashboard/resources';
 import { Clock } from '../format/clock';
 import { compactNumber, relativeTime } from '../format/format';
@@ -105,13 +105,19 @@ describe('RepositoryRow and RepositoryCard', () => {
         provideHttpClientTesting(),
         { provide: Clock, useValue: { now: signal(NOW) } },
         {
-          provide: OrganizationData,
-          useValue: {
-            login: signal('acme'),
-            displayName: signal('Acme'),
-            languageColor: signal((language: string) =>
-              language === 'Rust' ? 'var(--s1)' : 'var(--s-other)',
-            ),
+          provide: AccountData,
+          useFactory: () => {
+            const resources = inject(Resources);
+            return {
+              login: signal('acme'),
+              displayName: signal('Acme'),
+              languageColor: signal((language: string) =>
+                language === 'Rust' ? 'var(--s1)' : 'var(--s-other)',
+              ),
+              // As the dashboard of the organization `acme` asks for it.
+              activity: (repo: string) =>
+                resources.accountActivity({ kind: 'organization', org: 'acme' }, repo),
+            };
           },
         },
       ],

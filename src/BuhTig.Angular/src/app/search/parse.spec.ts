@@ -8,6 +8,15 @@ function organization(org: string): Parsed {
   return { ok: true, resource: { kind: 'organization', org } };
 }
 
+function user(login: string): Parsed {
+  return { ok: true, resource: { kind: 'user', login } };
+}
+
+/** An account named alone, which GitHub tells to be an organization or a user (FR-SRCH-06). */
+function account(name: string): Parsed {
+  return { ok: true, resource: { kind: 'account', name } };
+}
+
 function problem(problem: Problem): Parsed {
   return { ok: false, problem };
 }
@@ -55,8 +64,8 @@ describe('parse', () => {
       expectEach(['owner/repo'], repository('owner', 'repo'));
     });
 
-    it('https://github.com/org, github.com/org, org', () => {
-      expectEach(['https://github.com/org', 'github.com/org', 'org'], organization('org'));
+    it('https://github.com/name, github.com/name, name: an organization or a user', () => {
+      expectEach(['https://github.com/name', 'github.com/name', 'name'], account('name'));
     });
 
     it('https://github.com/orgs/org, …/orgs/org/repositories', () => {
@@ -79,6 +88,19 @@ describe('parse', () => {
         organization('org'),
       );
     });
+
+    it('https://github.com/users/user, …/users/user/projects/1', () => {
+      expectEach(
+        [
+          'https://github.com/users/mona',
+          'https://github.com/users/mona/projects/1',
+          'github.com/Users/mona/',
+          'git@github.com:users/mona',
+          'users/mona',
+        ],
+        user('mona'),
+      );
+    });
   });
 
   // FR-SRCH-02.
@@ -88,7 +110,7 @@ describe('parse', () => {
         ['  owner/repo\n', ' https://github.com/owner/repo '],
         repository('owner', 'repo'),
       );
-      expectEach(['\thttps://github.com/org  '], organization('org'));
+      expectEach(['\thttps://github.com/org  '], account('org'));
     });
 
     it('the letter case of the scheme and host, but not of the names', () => {
@@ -112,7 +134,7 @@ describe('parse', () => {
         ],
         repository('owner', 'repo'),
       );
-      expectEach(['http://www.github.com/org', 'www.github.com/org'], organization('org'));
+      expectEach(['http://www.github.com/org', 'www.github.com/org'], account('org'));
     });
 
     it('trailing and doubled slashes', () => {
@@ -120,7 +142,7 @@ describe('parse', () => {
         ['github.com/owner/repo//', 'github.com//owner//repo', '/owner/repo/'],
         repository('owner', 'repo'),
       );
-      expectEach(['https://github.com/org/', 'org/'], organization('org'));
+      expectEach(['https://github.com/org/', 'org/'], account('org'));
     });
 
     it('a .git suffix', () => {
@@ -140,10 +162,8 @@ describe('parse', () => {
         ],
         repository('owner', 'repo'),
       );
-      expectEach(
-        ['https://github.com/org?tab=repositories', 'https://github.com/orgs/org#people'],
-        organization('org'),
-      );
+      expectEach(['https://github.com/orgs/org#people'], organization('org'));
+      expectEach(['https://github.com/name?tab=repositories'], account('name'));
     });
 
     it('the user and port of an SSH URL', () => {
@@ -157,8 +177,8 @@ describe('parse', () => {
   // FR-SRCH-04.
   describe('checks names', () => {
     it('accepts older names that GitHub no longer allows', () => {
-      expectEach(['old--name'], organization('old--name'));
-      expectEach(['trailing-'], organization('trailing-'));
+      expectEach(['old--name'], account('old--name'));
+      expectEach(['trailing-'], account('trailing-'));
       expectEach(['mona_emu/repo'], repository('mona_emu', 'repo'));
     });
 
@@ -185,6 +205,7 @@ describe('parse', () => {
       );
       expect(parse('-org')).toEqual(problem({ kind: 'bad-account', name: '-org' }));
       expect(parse('github.com/orgs/-org')).toEqual(problem({ kind: 'bad-account', name: '-org' }));
+      expect(parse('users/-mona')).toEqual(problem({ kind: 'bad-account', name: '-mona' }));
     });
 
     it('rejects repository names that GitHub never allowed', () => {
@@ -222,7 +243,15 @@ describe('parse', () => {
 
   it('says when github.com is named but no resource', () => {
     expectEach(
-      ['github.com', 'https://github.com/', 'https://github.com/orgs', 'github.com/orgs/', 'orgs'],
+      [
+        'github.com',
+        'https://github.com/',
+        'https://github.com/orgs',
+        'github.com/orgs/',
+        'orgs',
+        'https://github.com/users/',
+        'users',
+      ],
       problem({ kind: 'unrecognized' }),
     );
   });
@@ -252,6 +281,8 @@ describe('isUnfinished', () => {
       'git@github.com:',
       'github.com/orgs',
       ' orgs/ ',
+      'https://github.com/users',
+      'users/',
     ]) {
       expect(isUnfinished(input), input).toBe(true);
     }
@@ -268,7 +299,11 @@ describe('dashboardPath', () => {
   it('mirrors the GitHub path (FR-NAV-01)', () => {
     const repo: Resource = { kind: 'repository', owner: 'vercel', repo: 'next.js' };
     const org: Resource = { kind: 'organization', org: 'angular' };
+    const person: Resource = { kind: 'user', login: 'mona' };
+    const name: Resource = { kind: 'account', name: 'octocat' };
     expect(dashboardPath(repo)).toBe('/vercel/next.js');
     expect(dashboardPath(org)).toBe('/angular');
+    expect(dashboardPath(person)).toBe('/mona');
+    expect(dashboardPath(name)).toBe('/octocat');
   });
 });

@@ -1,11 +1,11 @@
 import { HttpClient, HttpErrorResponse, HttpStatusCode } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
-import { Observable, catchError, map, of, tap } from 'rxjs';
-import { Resource, dashboardPath, parse } from '../search/parse';
+import { Observable, catchError, map, of, switchMap, tap, throwError } from 'rxjs';
+import { Known, Owner, Resource, dashboardPath, parse } from '../search/parse';
 import { Computing, Failure, failureOf } from '../widget/load';
-import { organizationUrl, repositoryUrl, resourceUrl } from './urls';
+import { organizationUrl, repositoryUrl, resourceUrl, userUrl } from './urls';
 
-/** What a dashboard learns of its repository or organization before its widgets load. */
+/** What a dashboard learns of its repository, organization or user before its widgets load. */
 export interface Summary {
   /**
    * The dashboard's path with the names as GitHub spells them (FR-NAV-04), and with the new
@@ -13,12 +13,19 @@ export interface Summary {
    * server's answer names no such resource.
    */
   path: string | undefined;
+  /**
+   * The resource at `path`, of the kind that GitHub tells, as of an account named alone, which is
+   * an organization or a user (FR-SRCH-06). `undefined` when `path` is.
+   */
+  resource: Known | undefined;
   /** When BuhTig fetched the resource from GitHub (FR-DATA-06), unless the server says not. */
   fetchedAt: Date | undefined;
   /** What a repository's header shows, unless the resource is none, or the answer names none. */
   repository: Repository | undefined;
   /** What an organization's header shows, unless the resource is none, or the answer names none. */
   organization: Organization | undefined;
+  /** What a user's header shows, unless the resource is none, or the answer names none. */
+  user: User | undefined;
   /** Why GitHub keeps the resource from the viewer's credential, when it does (FR-PAT-08). */
   denied: Denied | undefined;
   /**
@@ -96,10 +103,36 @@ export interface Organization {
   verified: boolean;
 }
 
-/** What an organization's stat cards show (FR-ORG-02), of the repositories the viewer may see. */
+/** What a user's header shows of them (FR-USER-01). What GitHub does not say is left out. */
+export interface User {
+  /** Their login, as GitHub spells it. */
+  login: string;
+  /** An `https` URL. */
+  avatarUrl: string | undefined;
+  /** The name they go by, if they give one. */
+  displayName: string | undefined;
+  bio: string | undefined;
+  company: string | undefined;
+  location: string | undefined;
+  /** An `http` or `https` URL, the only kinds BuhTig links to (NFR-SEC-03). */
+  website: string | undefined;
+  createdAt: Date | undefined;
+  /** How many follow them on GitHub. */
+  followers: number;
+  /** How many they follow. */
+  following: number;
+}
+
+/**
+ * What an organization's or a user's stat cards show (FR-ORG-02, FR-USER-02), of the
+ * repositories the viewer may see.
+ */
 export interface OrganizationStats {
   repositories: number;
-  /** Those of the repositories that are private, which only a token user sees (FR-ORG-09). */
+  /**
+   * Those of the repositories that are private, which only a token user sees (FR-ORG-09): of a
+   * user's, only the user themselves (FR-USER-06).
+   */
   private: number;
   /** Those of the repositories that are internal, which only a token user sees (FR-ORG-09). */
   internal: number;
@@ -116,9 +149,12 @@ export interface OrganizationStats {
   truncated: boolean;
 }
 
-/** One of an organization's repositories, as its repository table lists it (FR-ORG-03). */
+/**
+ * One of an organization's or a user's repositories, as its repository table lists it
+ * (FR-ORG-03, FR-USER-04).
+ */
 export interface ListedRepository {
-  /** Its name, without the organization's, as GitHub spells it. */
+  /** Its name, without its owner's, as GitHub spells it. */
   name: string;
   /** The path of its dashboard. */
   path: string;
@@ -150,9 +186,9 @@ export interface LanguageCount {
   repositories: number;
 }
 
-/** One of the 10 repositories of an organization with the most stars (FR-ORG-05). */
+/** One of the 10 repositories of an organization or a user with the most stars (FR-ORG-05). */
 export interface TopRepository {
-  /** Its name, without the organization's, as GitHub spells it. */
+  /** Its name, without its owner's, as GitHub spells it. */
   name: string;
   /** The path of its dashboard. */
   path: string;
@@ -321,13 +357,20 @@ export interface Releases {
   count: number;
 }
 
-/** The server's answer about a repository or an organization. */
+/** The server's answer about a repository, an organization or a user. */
 interface Answer {
   name: string;
   fetched_at?: string;
   stale?: string | null;
   repository?: RepositoryAnswer;
   organization?: OrganizationAnswer;
+  user?: UserAnswer;
+}
+
+/** The server's answer about whether an account is an organization or a user (FR-SRCH-06). */
+interface AccountAnswer {
+  type: string;
+  login?: string;
 }
 
 /** The server's answer about a repository, for its header. */
@@ -364,7 +407,23 @@ interface OrganizationAnswer {
   verified?: boolean;
 }
 
-/** The server's answer about an organization, for its stat cards. */
+/** The server's answer about a user, for their header. */
+interface UserAnswer {
+  name: string;
+  fetched_at?: string;
+  stale?: string | null;
+  avatar_url?: string | null;
+  display_name?: string | null;
+  bio?: string | null;
+  company?: string | null;
+  location?: string | null;
+  website?: string | null;
+  created_at?: string | null;
+  followers?: number;
+  following?: number;
+}
+
+/** The server's answer about an organization or a user, for its stat cards. */
 interface OrganizationStatsAnswer {
   repositories: number;
   private: number;
@@ -376,7 +435,7 @@ interface OrganizationStatsAnswer {
   truncated: boolean;
 }
 
-/** The server's answer about an organization, for its repository table. */
+/** The server's answer about an organization or a user, for its repository table. */
 interface OrganizationRepositoriesAnswer {
   repositories: {
     name: string;
@@ -511,31 +570,27 @@ export class Resources {
   /**
    * What BuhTig knows of `resource`: what it is, or that GitHub says there is no such resource,
    * or keeps it from the viewer's credential, or that its name cannot be one, or why BuhTig
-   * cannot tell now.
+   * cannot tell now. An account named alone is first told to be an organization or a user, by
+   * the server, which asks GitHub once for both (FR-SRCH-06, FR-DATA-10).
    */
   summary(resource: Resource): Observable<Summary> {
-    const answer: Observable<Answer> =
-      resource.kind === 'repository'
-        ? this.http
-            .get<RepositoryAnswer>(repositoryUrl(resource.owner, resource.repo))
-            .pipe(map((repository) => ({ ...repository, repository })))
-        : this.http
-            .get<OrganizationAnswer>(organizationUrl(resource.org))
-            .pipe(map((organization) => ({ ...organization, organization })));
-    return answer.pipe(
-      map(({ name, fetched_at, stale, repository, organization }): Summary => {
-        const path = canonicalPath(name, resource.kind);
+    return this.answer(resource).pipe(
+      map(({ kind, answer }): Summary => {
+        const path = canonicalPath(answer.name, kind);
+        const known = path !== undefined ? resourceAt(path, kind) : undefined;
         return {
           path,
-          fetchedAt: date(fetched_at),
-          stale: stale === 'held' || stale === 'github' ? stale : undefined,
+          resource: known,
+          fetchedAt: date(answer.fetched_at),
+          stale: answer.stale === 'held' || answer.stale === 'github' ? answer.stale : undefined,
           failure: undefined,
           repository:
-            repository !== undefined && path !== undefined ? header(repository) : undefined,
+            answer.repository !== undefined && known ? header(answer.repository) : undefined,
           organization:
-            organization !== undefined && path !== undefined
-              ? organizationHeader(organization)
+            answer.organization !== undefined && known
+              ? organizationHeader(answer.organization)
               : undefined,
+          user: answer.user !== undefined && known ? userHeader(answer.user) : undefined,
           denied: undefined,
           notFound: false,
           invalid: false,
@@ -548,9 +603,11 @@ export class Resources {
         const invalid = status === HttpStatusCode.BadRequest;
         return of<Summary>({
           path: undefined,
+          resource: undefined,
           fetchedAt: undefined,
           repository: undefined,
           organization: undefined,
+          user: undefined,
           denied,
           notFound,
           invalid,
@@ -562,11 +619,70 @@ export class Resources {
   }
 
   /**
+   * The server's answer about `resource`, and its kind. Of an account named alone, the answer
+   * about the organization or the user that the server says it is, by the name the URL has, so
+   * that the server reads what it cached as it told. An organization's URL, such as
+   * `/orgs/{name}/people`, may name a user instead, whose answer it then is.
+   */
+  private answer(resource: Resource): Observable<{ kind: Known['kind']; answer: Answer }> {
+    switch (resource.kind) {
+      case 'repository':
+        return this.http
+          .get<RepositoryAnswer>(repositoryUrl(resource.owner, resource.repo))
+          .pipe(
+            map((repository) => ({ kind: resource.kind, answer: { ...repository, repository } })),
+          );
+      case 'organization':
+        return this.organizationAnswer(resource.org).pipe(
+          catchError((error: unknown) =>
+            error instanceof HttpErrorResponse && error.status === HttpStatusCode.NotFound
+              ? this.accountType(resource.org).pipe(
+                  switchMap((type) =>
+                    type === 'user' ? this.userAnswer(resource.org) : throwError(() => error),
+                  ),
+                )
+              : throwError(() => error),
+          ),
+        );
+      case 'user':
+        return this.userAnswer(resource.login);
+      case 'account':
+        return this.http.get<AccountAnswer>(accountUrl(resource.name)).pipe(
+          switchMap(({ type }) => {
+            switch (type) {
+              case 'organization':
+                return this.organizationAnswer(resource.name);
+              case 'user':
+                return this.userAnswer(resource.name);
+              default:
+                throw new Error(`the server says ${resource.name} is an account of no kind known`);
+            }
+          }),
+        );
+    }
+  }
+
+  private organizationAnswer(org: string): Observable<{ kind: 'organization'; answer: Answer }> {
+    return this.http.get<OrganizationAnswer>(organizationUrl(org)).pipe(
+      map((organization) => ({
+        kind: 'organization',
+        answer: { ...organization, organization },
+      })),
+    );
+  }
+
+  private userAnswer(login: string): Observable<{ kind: 'user'; answer: Answer }> {
+    return this.http
+      .get<UserAnswer>(userUrl(login))
+      .pipe(map((user) => ({ kind: 'user', answer: { ...user, user } })));
+  }
+
+  /**
    * Asks the server to fetch `resource`'s dashboard from GitHub anew, which only signed-in
    * users may, once a minute (FR-DATA-07, FR-ACC-02). Once it has, what the dashboard shows is
    * asked for again.
    */
-  refresh(resource: Resource): Observable<Refreshed> {
+  refresh(resource: Known): Observable<Refreshed> {
     return this.http.post(`${resourceUrl(resource)}/refresh`, null).pipe(
       tap(() => this.refreshCount.update((count) => count + 1)),
       map((): Refreshed => ({ status: 'refreshed' })),
@@ -603,9 +719,12 @@ export class Resources {
     );
   }
 
-  /** The figures of the stat cards of the organization `org`, which fail as it does. */
-  organizationStats(org: string): Observable<OrganizationStats> {
-    return this.http.get<OrganizationStatsAnswer>(`${organizationUrl(org)}/stats`).pipe(
+  /**
+   * The figures of the stat cards of the organization or user `owner`, which fail as it does
+   * (FR-ORG-02, FR-USER-02).
+   */
+  accountStats(owner: Owner): Observable<OrganizationStats> {
+    return this.http.get<OrganizationStatsAnswer>(`${resourceUrl(owner)}/stats`).pipe(
       map((stats) => ({
         repositories: stats.repositories,
         private: stats.private,
@@ -620,61 +739,61 @@ export class Resources {
   }
 
   /**
-   * The repositories of the organization `org` that its repository table lists, pushed to most
-   * recently first, which fail as `organizationStats` does. Any that the server gives a name no
-   * repository can have is left out.
+   * The repositories of the organization or user `owner` that its repository table lists, pushed
+   * to most recently first, which fail as `accountStats` does. Any that the server gives a name
+   * no repository can have is left out.
    */
-  organizationRepositories(org: string): Observable<ListedRepository[]> {
-    return this.http
-      .get<OrganizationRepositoriesAnswer>(`${organizationUrl(org)}/repositories`)
-      .pipe(
-        map(({ repositories }) =>
-          repositories.flatMap((repository): ListedRepository[] => {
-            const path = canonicalPath(`${org}/${repository.name}`, 'repository');
-            if (path === undefined) {
-              return [];
-            }
-            const visibility = repository.visibility;
-            return [
-              {
-                name: repository.name,
-                path,
-                description: repository.description || undefined,
-                language: repository.language || undefined,
-                stars: repository.stars,
-                forks: repository.forks,
-                openIssuesAndPullRequests: repository.open_issues_and_pull_requests,
-                pushedAt: date(repository.pushed_at),
-                fork: repository.fork === true,
-                archived: repository.archived === true,
-                visibility:
-                  visibility === 'private' || visibility === 'internal' ? visibility : 'public',
-                topics: (repository.topics ?? []).filter((topic) => typeof topic === 'string'),
-              },
-            ];
-          }),
-        ),
-      );
+  accountRepositories(owner: Owner): Observable<ListedRepository[]> {
+    const login = nameOf(owner);
+    return this.http.get<OrganizationRepositoriesAnswer>(`${resourceUrl(owner)}/repositories`).pipe(
+      map(({ repositories }) =>
+        repositories.flatMap((repository): ListedRepository[] => {
+          const path = canonicalPath(`${login}/${repository.name}`, 'repository');
+          if (path === undefined) {
+            return [];
+          }
+          const visibility = repository.visibility;
+          return [
+            {
+              name: repository.name,
+              path,
+              description: repository.description || undefined,
+              language: repository.language || undefined,
+              stars: repository.stars,
+              forks: repository.forks,
+              openIssuesAndPullRequests: repository.open_issues_and_pull_requests,
+              pushedAt: date(repository.pushed_at),
+              fork: repository.fork === true,
+              archived: repository.archived === true,
+              visibility:
+                visibility === 'private' || visibility === 'internal' ? visibility : 'public',
+              topics: (repository.topics ?? []).filter((topic) => typeof topic === 'string'),
+            },
+          ];
+        }),
+      ),
+    );
   }
 
   /**
-   * How many of the repositories of the organization `org` have each primary language, which
-   * fails as `organizationStats` does.
+   * How many of the repositories of the organization or user `owner` have each primary language,
+   * which fails as `accountStats` does.
    */
-  organizationLanguages(org: string): Observable<LanguageCounts> {
-    return this.http.get<LanguageCounts>(`${organizationUrl(org)}/languages`);
+  accountLanguages(owner: Owner): Observable<LanguageCounts> {
+    return this.http.get<LanguageCounts>(`${resourceUrl(owner)}/languages`);
   }
 
   /**
-   * The repositories of the organization `org` with the most stars, most first, which fail as
-   * `organizationStats` does. Any that the server gives a name no repository can have is left
-   * out.
+   * The repositories of the organization or user `owner` with the most stars, most first, which
+   * fail as `accountStats` does. Any that the server gives a name no repository can have is
+   * left out.
    */
-  topRepositories(org: string): Observable<TopRepository[]> {
-    return this.http.get<TopRepositoriesAnswer>(`${organizationUrl(org)}/top-repositories`).pipe(
+  topRepositories(owner: Owner): Observable<TopRepository[]> {
+    const login = nameOf(owner);
+    return this.http.get<TopRepositoriesAnswer>(`${resourceUrl(owner)}/top-repositories`).pipe(
       map(({ repositories }) =>
         repositories.flatMap(({ name, stars }): TopRepository[] => {
-          const path = canonicalPath(`${org}/${name}`, 'repository');
+          const path = canonicalPath(`${login}/${name}`, 'repository');
           return path !== undefined ? [{ name, path, stars }] : [];
         }),
       ),
@@ -682,11 +801,11 @@ export class Resources {
   }
 
   /**
-   * How many of the repositories of the organization `org` were last pushed to in each period,
-   * which fails as `organizationStats` does.
+   * How many of the repositories of the organization or user `owner` were last pushed to in each
+   * period, which fails as `accountStats` does.
    */
-  lastPush(org: string): Observable<LastPush> {
-    return this.http.get<LastPushAnswer>(`${organizationUrl(org)}/last-push`).pipe(
+  lastPush(owner: Owner): Observable<LastPush> {
+    return this.http.get<LastPushAnswer>(`${resourceUrl(owner)}/last-push`).pipe(
       map((answer) => ({
         last7Days: answer.last_7_days,
         last30Days: answer.last_30_days,
@@ -697,16 +816,19 @@ export class Resources {
   }
 
   /**
-   * How many of the repositories of the organization `org` were created in each year, oldest
-   * first, which fails as `organizationStats` does.
+   * How many of the repositories of the organization or user `owner` were created in each year,
+   * oldest first, which fails as `accountStats` does.
    */
-  createdPerYear(org: string): Observable<YearCount[]> {
+  createdPerYear(owner: Owner): Observable<YearCount[]> {
     return this.http
-      .get<CreatedPerYearAnswer>(`${organizationUrl(org)}/created-per-year`)
+      .get<CreatedPerYearAnswer>(`${resourceUrl(owner)}/created-per-year`)
       .pipe(map(({ years }) => years));
   }
 
-  /** The members of the organization `org` that the viewer may see, which fail as `organizationStats` does. */
+  /**
+   * The members of the organization `org` that the viewer may see, which fail as `accountStats`
+   * does. A user has none.
+   */
   members(org: string): Observable<Members> {
     return this.http.get<MembersAnswer>(`${organizationUrl(org)}/members`).pipe(
       map((answer) => ({
@@ -812,44 +934,25 @@ export class Resources {
   }
 
   /**
-   * The commit activity of the repository `repo` of the organization `org`, for a row of its
-   * repository list, which fails as `commitActivity` does. It counts as a load of the
-   * organization's dashboard (FR-DATA-10).
+   * The commit activity of the repository `repo` of the organization or user `owner`, for a row
+   * of its repository list, which fails as `commitActivity` does. It counts as a load of the
+   * account's dashboard (FR-DATA-10).
    */
-  organizationActivity(org: string, repo: string): Observable<CommitActivity> {
+  accountActivity(owner: Owner, repo: string): Observable<CommitActivity> {
     return this.computed<CommitActivityAnswer>(
-      `${organizationUrl(org)}/repositories/${encodeURIComponent(repo)}/commit-activity`,
+      `${resourceUrl(owner)}/repositories/${encodeURIComponent(repo)}/commit-activity`,
     ).pipe(map(activity));
   }
 
   /**
-   * Whether `name` is a user's account rather than an organization's (FR-SRCH-06), or `undefined`
-   * when BuhTig cannot tell, as when there is no such account.
+   * Whether `name` is a user's account or an organization's (FR-SRCH-06), or `undefined` when
+   * BuhTig cannot tell, as when there is no such account.
    */
   accountType(name: string): Observable<'user' | 'organization' | undefined> {
-    return this.http.get<{ type: string }>(`/-/api/accounts/${encodeURIComponent(name)}`).pipe(
+    return this.http.get<AccountAnswer>(accountUrl(name)).pipe(
       map(({ type }) => (type === 'user' || type === 'organization' ? type : undefined)),
       catchError(() => of(undefined)),
     );
-  }
-
-  /**
-   * Some of the repositories of the user `login`, `owner/repo`, those pushed to last first, to
-   * suggest in place of a dashboard of the user (FR-SRCH-06). Any that the server gives a name no
-   * repository can have is left out.
-   */
-  userRepositories(login: string): Observable<string[]> {
-    return this.http
-      .get<{
-        repositories: { name: string }[];
-      }>(`/-/api/users/${encodeURIComponent(login)}/repositories`)
-      .pipe(
-        map(({ repositories }) =>
-          repositories.flatMap(({ name }) =>
-            canonicalPath(name, 'repository') !== undefined ? [name] : [],
-          ),
-        ),
-      );
   }
 
   /**
@@ -901,15 +1004,43 @@ function deniedBy(error: unknown): Denied | undefined {
 }
 
 /**
- * The path of the dashboard of `name`, an `owner/repo` or an `org` as the server gives it, if
- * it is one of a resource of `kind`, and nothing that `parse` would make one of, such as a URL.
+ * The path of the dashboard of `name`, an `owner/repo`, or the login of an organization or a
+ * user, as the server gives it, if it is one of a resource of `kind`, and nothing that `parse`
+ * would make one of, such as a URL. `parse` takes a login alone as an account's, of either kind.
  */
-function canonicalPath(name: string, kind: Resource['kind']): string | undefined {
+function canonicalPath(name: string, kind: Known['kind']): string | undefined {
   const parsed = parse(name);
   const path = `/${name}`;
-  return parsed.ok && parsed.resource.kind === kind && dashboardPath(parsed.resource) === path
+  return parsed.ok &&
+    parsed.resource.kind === (kind === 'repository' ? 'repository' : 'account') &&
+    dashboardPath(parsed.resource) === path
     ? path
     : undefined;
+}
+
+/** The resource of `kind` whose dashboard's path is `path`, such as `/owner/repo`. */
+function resourceAt(path: string, kind: Known['kind']): Known {
+  const name = path.slice(1);
+  switch (kind) {
+    case 'organization':
+      return { kind, org: name };
+    case 'user':
+      return { kind, login: name };
+    case 'repository': {
+      const [owner, repo] = name.split('/');
+      return { kind, owner, repo };
+    }
+  }
+}
+
+/** Where the server says whether the account `name` is an organization or a user (FR-SRCH-06). */
+function accountUrl(name: string): string {
+  return `/-/api/accounts/${encodeURIComponent(name)}`;
+}
+
+/** The login of the organization or user `owner`. */
+export function nameOf(owner: Owner): string {
+  return owner.kind === 'organization' ? owner.org : owner.login;
 }
 
 function header(answer: RepositoryAnswer): Repository {
@@ -947,6 +1078,26 @@ function organizationHeader(answer: OrganizationAnswer): Organization {
     createdAt: date(answer.created_at),
     verified: answer.verified === true,
   };
+}
+
+function userHeader(answer: UserAnswer): User {
+  return {
+    login: answer.name,
+    avatarUrl: link(answer.avatar_url, ['https:']),
+    displayName: answer.display_name || undefined,
+    bio: answer.bio || undefined,
+    company: answer.company || undefined,
+    location: answer.location || undefined,
+    website: link(answer.website, ['http:', 'https:']),
+    createdAt: date(answer.created_at),
+    followers: count(answer.followers),
+    following: count(answer.following),
+  };
+}
+
+/** `value` if it is a count, or else none. */
+function count(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
 /** The time `text` tells, if it tells one. */

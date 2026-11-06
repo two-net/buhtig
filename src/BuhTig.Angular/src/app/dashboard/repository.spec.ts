@@ -359,6 +359,66 @@ describe('RepositoryDashboard', () => {
     expect(router.url).toBe('/owner/secret/issues');
   });
 
+  describe('at /{name}/repositories, without such a repository (FR-NAV-02)', () => {
+    const notFound = () => page().querySelector('app-not-found-or-private');
+
+    /** Opens `/{name}/repositories`, where GitHub has no such repository, nor says what `name` is yet. */
+    async function openMissing(name: string): Promise<void> {
+      await open(`/${name}/repositories`, `/-/api/repositories/${name}/repositories`, null, 404);
+      // It says nothing of it, not even "not found", until it knows.
+      expect(notFound()).toBeNull();
+      expect(main().querySelector('.sr')!.textContent).toBe('Loading…');
+    }
+
+    it("moves to a user's Repositories tab, at the query of GitHub's", async () => {
+      await openMissing('mona');
+      http.expectOne('/-/api/accounts/mona').flush({ type: 'user', login: 'mona' });
+      await harness.fixture.whenStable();
+      await vi.waitFor(() => expect(router.url).toBe('/mona?tab=repositories'));
+      expect(moves()).toEqual(['/mona?tab=repositories']);
+      http.expectOne('/-/api/accounts/mona').flush({ type: 'user', login: 'mona' });
+      http.match('/-/api/users/mona');
+    });
+
+    it("moves to an organization's Repositories tab, at its path", async () => {
+      await openMissing('acme');
+      http.expectOne('/-/api/accounts/acme').flush({ type: 'organization', login: 'acme' });
+      await harness.fixture.whenStable();
+      await vi.waitFor(() => expect(router.url).toBe('/orgs/acme/repositories'));
+      expect(moves()).toEqual(['/orgs/acme/repositories']);
+      http.match('/-/api/organizations/acme');
+      http.match((request) => request.url.startsWith('/-/api/organizations/acme/'));
+    });
+
+    it('shows nothing of it when GitHub has no such account either (FR-ACC-05)', async () => {
+      await openMissing('nobody');
+      http
+        .expectOne('/-/api/accounts/nobody')
+        .flush(null, { status: 404, statusText: 'Not Found' });
+      http.expectOne('/-/api/session').flush({ user: null });
+      await harness.fixture.whenStable();
+      expect(notFound()!.querySelector('h1')?.textContent).toBe(NOT_FOUND_OR_PRIVATE);
+      expect(moves()).toEqual([]);
+    });
+
+    it('shows a repository of that name when GitHub has one', async () => {
+      await open('/mona/repositories', '/-/api/repositories/mona/repositories', {
+        name: 'mona/repositories',
+      });
+      http.expectNone('/-/api/accounts/mona');
+      expect(main().querySelector('app-repository-head')).not.toBeNull();
+      expect(moves()).toEqual([]);
+    });
+
+    it('asks nothing of the account below another tab of such a repository', async () => {
+      await open('/mona/repositories/issues', '/-/api/repositories/mona/repositories', null, 404);
+      http.expectNone('/-/api/accounts/mona');
+      http.expectOne('/-/api/session').flush({ user: null });
+      await harness.fixture.whenStable();
+      expect(notFound()).not.toBeNull();
+    });
+  });
+
   it('says so of a name that cannot be one (NFR-UX-06)', async () => {
     await open('/foo/bar_', '/-/api/repositories/foo/bar_', null, 400);
     expect(page().querySelector('app-not-found-or-private h1')?.textContent).toBe(NO_SUCH_NAME);

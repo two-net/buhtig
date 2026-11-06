@@ -57,4 +57,6 @@ pub enum ResourceKind {
     Repository,
     #[sea_orm(string_value = "organization")]
     Organization,
+    #[sea_orm(string_value = "user")]
+    User,
 }

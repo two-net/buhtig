@@ -22,6 +22,7 @@ mod surprise;
 mod throttle;
 mod tokens;
 mod ui;
+mod users;
 mod visitors;
 mod web;
 

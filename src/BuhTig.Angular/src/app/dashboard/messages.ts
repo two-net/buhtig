@@ -90,30 +90,19 @@ export const ADD_TOKEN = 'Add a token';
 export const TOKEN_SETTINGS = 'Token settings';
 export const SEARCH_AGAIN = 'Search again';
 
-/** FR-SRCH-04: the heading of a dashboard whose name cannot be a repository's or organization's. */
-export const NO_SUCH_NAME = 'No such repository or organization';
+/**
+ * FR-SRCH-04: the heading of a dashboard whose name cannot be a repository's, an
+ * organization's or a user's.
+ */
+export const NO_SUCH_NAME = 'No such repository or account';
 
 /** FR-SRCH-04: a name, as of a URL typed by hand, that GitHub would never give anything. */
 export function invalidName(name: string): string {
   return (
-    `${name} can't be the name of a GitHub repository or organization. Check the address, or ` +
-    'search for one.'
+    `${name} can't be the name of a GitHub repository, organization or user. Check the ` +
+    'address, or search for one.'
   );
 }
-
-/** FR-SRCH-06: the heading of the page of an account that is a user's. */
-export function userAccount(login: string): string {
-  return `@${login} is a user account`;
-}
-
-/** FR-SRCH-06: BuhTig has dashboards for organizations, but not for users. */
-export const OPEN_A_REPOSITORY =
-  "BuhTig shows dashboards for repositories and organizations. Open one of this user's " +
-  'repositories instead:';
-
-export const NO_USER_REPOSITORIES =
-  'BuhTig shows dashboards for repositories and organizations. This user has no public ' +
-  'repositories, so enter a repository or organization instead.';
 
 /** FR-DATA-10: a visitor who may fetch no more from GitHub, with nothing saved to show. */
 export const KEEP_EXPLORING = 'Sign in to keep exploring';

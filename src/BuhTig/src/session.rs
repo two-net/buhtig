@@ -436,6 +436,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Viewer {
             })) => Ok(match pat.zip(token) {
                 Some((pat, token)) => Viewer::TokenUser {
                     user_id: user.id,
+                    github_id: user.github_id,
                     credential_id: pat.id,
                     pat: token,
                     sign_in,
@@ -1092,11 +1093,13 @@ mod tests {
         {
             Viewer::TokenUser {
                 user_id: signed_in,
+                github_id,
                 credential_id,
                 pat: token,
                 sign_in,
             } => {
                 assert_eq!((signed_in, credential_id), (user_id, pat.id));
+                assert_eq!(github_id, mona().github_id);
                 assert_eq!(
                     (token.expose().as_str(), sign_in.expose().as_str()),
                     ("ghp_mona", "gho_mona")

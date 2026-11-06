@@ -99,7 +99,7 @@ describe('Search', () => {
 
   it('asks for something to search for', async () => {
     await search('  ');
-    expect(message()).toBe('Paste a GitHub repository or organization URL.');
+    expect(message()).toBe('Paste a GitHub repository, organization or user URL.');
     expect(navigate).not.toHaveBeenCalled();
   });
 
@@ -115,10 +115,12 @@ describe('Search', () => {
     expect(message()).toBeUndefined();
   });
 
-  it("opens an organization's dashboard at once, from a name alone too (FR-SRCH-06)", async () => {
+  it("opens an organization's or a user's dashboard at once, from a name alone too (FR-SRCH-06)", async () => {
     await search('github.com/orgs/acme/repositories');
     expect(navigate).toHaveBeenLastCalledWith('/acme');
-    // Whether it is a user's, the dashboard tells.
+    await search('github.com/users/mona/projects/1');
+    expect(navigate).toHaveBeenLastCalledWith('/mona');
+    // Whether it is an organization's or a user's, the dashboard tells.
     await search('octocat');
     expect(navigate).toHaveBeenLastCalledWith('/octocat');
     expect(message()).toBeUndefined();
@@ -164,6 +166,20 @@ describe('Search', () => {
       expect(icons()).toEqual(['org']);
     });
 
+    it('shows the user the input names', async () => {
+      type('github.com/users/mona');
+      await fixture.whenStable();
+      expect(hint()).toBe('User · mona');
+      expect(icons()).toEqual(['user']);
+    });
+
+    it('shows an account named alone as one, an organization or a user as GitHub tells', async () => {
+      type('github.com/octocat');
+      await fixture.whenStable();
+      expect(hint()).toBe('Account · octocat');
+      expect(icons()).toEqual(['org']);
+    });
+
     it('shows why the input is wrong, without marking it invalid until searched for', async () => {
       type('gitlab.com/owner/repo');
       await fixture.whenStable();
@@ -192,11 +208,14 @@ describe('Search', () => {
         'git@github.com:owner/repo.git',
         'ssh://git@github.com/owner/repo',
         'github.com/orgs/acme',
+        'github.com/users/mona',
       ]) {
         for (let end = 1; end <= url.length; end++) {
           type(url.slice(0, end));
           await fixture.whenStable();
-          expect(hint(), url.slice(0, end)).toMatch(/^$|^(Repository|Organization) · /);
+          expect(hint(), url.slice(0, end)).toMatch(
+            /^$|^(Repository|Organization|User|Account) · /,
+          );
         }
       }
     });

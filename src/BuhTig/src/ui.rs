@@ -464,9 +464,9 @@ mod tests {
             )
         );
         assert_eq!(
-            dashboard_preload::<Built>("organization").as_deref(),
+            dashboard_preload::<Built>("account").as_deref(),
             Some(
-                "<link rel=\"modulepreload\" href=\"/organization-Bq3_Xy9z.js\">\n\
+                "<link rel=\"modulepreload\" href=\"/account-Bq3_Xy9z.js\">\n\
                  <link rel=\"modulepreload\" href=\"/chunk-Dkfirl0_.js\">\n"
             )
         );

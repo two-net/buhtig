@@ -1,9 +1,9 @@
-import { Resource } from '../search/parse';
+import { Known } from '../search/parse';
 
 /** A dashboard that a signed-in user pinned or viewed recently (§4.8). */
 export interface Shortcut {
-  kind: 'repository' | 'organization';
-  /** `owner/repo` or `org`, as GitHub spells it. */
+  kind: Known['kind'];
+  /** `owner/repo`, `org` or `login`, as GitHub spells it. */
   name: string;
 }
 
@@ -35,19 +35,29 @@ export function sameDashboard(a: Shortcut, b: Shortcut): boolean {
 }
 
 /** The shortcut to `resource`'s dashboard. */
-export function shortcutOf(resource: Resource): Shortcut {
-  return resource.kind === 'repository'
-    ? { kind: 'repository', name: `${resource.owner}/${resource.repo}` }
-    : { kind: 'organization', name: resource.org };
+export function shortcutOf(resource: Known): Shortcut {
+  switch (resource.kind) {
+    case 'repository':
+      return { kind: 'repository', name: `${resource.owner}/${resource.repo}` };
+    case 'organization':
+      return { kind: 'organization', name: resource.org };
+    case 'user':
+      return { kind: 'user', name: resource.login };
+  }
 }
 
 /** The resource whose dashboard `shortcut` leads to. */
-export function resourceOf({ kind, name }: Shortcut): Resource {
-  if (kind === 'organization') {
-    return { kind, org: name };
+export function resourceOf({ kind, name }: Shortcut): Known {
+  switch (kind) {
+    case 'organization':
+      return { kind, org: name };
+    case 'user':
+      return { kind, login: name };
+    case 'repository': {
+      const [owner, repo] = name.split('/');
+      return { kind, owner, repo };
+    }
   }
-  const [owner, repo] = name.split('/');
-  return { kind, owner, repo };
 }
 
 /** What tells dashboards apart. GitHub's names ignore letter case. */

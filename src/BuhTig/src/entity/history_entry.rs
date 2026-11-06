@@ -21,7 +21,7 @@ pub struct Model {
     pub user: BelongsTo<super::user::Entity>,
     #[sea_orm(unique_key = "resource")]
     pub resource_kind: ResourceKind,
-    /// `owner/repo` or `org`, as GitHub spells it.
+    /// `owner/repo`, `org` or a user's `login`, as GitHub spells it.
     #[sea_orm(unique_key = "resource")]
     pub resource_name: String,
     pub last_viewed_at: DateTimeUtc,

@@ -4,7 +4,7 @@ import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import type { Mock } from 'vitest';
-import { OrganizationData } from '../dashboard/data';
+import { AccountData } from '../dashboard/data';
 import { ListedRepository } from '../dashboard/resources';
 import { Load } from '../widget/load';
 import { FAILED } from '../widget/messages';
@@ -63,7 +63,7 @@ describe('OrganizationRepositoriesTab', () => {
         provideHttpClient(),
         provideHttpClientTesting(),
         {
-          provide: OrganizationData,
+          provide: AccountData,
           useValue: {
             login: signal('acme'),
             displayName: signal('Acme Corp'),

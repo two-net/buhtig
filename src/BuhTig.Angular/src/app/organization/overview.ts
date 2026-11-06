@@ -4,8 +4,9 @@ import { Avatar } from '../avatar/avatar';
 import { ColumnChart, Tick } from '../chart/columns';
 import { Bar, BarChart } from '../chart/hbars';
 import { ChartTable } from '../chart/table';
-import { OrganizationData } from '../dashboard/data';
+import { AccountData } from '../dashboard/data';
 import { LastPush, LanguageCount, ListedRepository, YearCount } from '../dashboard/resources';
+import { accountTabUrl } from '../dashboard/account-tabs';
 import { organizationTabPath } from '../dashboard/tabs';
 import { CompactNumber } from '../format/compact-number';
 import { exactNumber } from '../format/format';
@@ -15,6 +16,8 @@ import { emptyWhen } from '../widget/load';
 import { FAILED } from '../widget/messages';
 import { Loaded, Widget } from '../widget/widget';
 import {
+  ABOUT_ORGANIZATION,
+  ABOUT_USER,
   ALL_REPOSITORIES,
   CREATED_HEADERS,
   LANGUAGES_HEADERS,
@@ -37,6 +40,7 @@ import {
   createdIn,
   hiddenCount,
   languagesDescription,
+  privateCount,
   pushedLast,
   repositoryCount,
   topRepositoriesDescription,
@@ -48,7 +52,9 @@ import { RepositoryCard, RepositoryRow } from './repository-row';
  * An organization's stat cards (FR-ORG-02), over the repositories the viewer may see: how many
  * there are, and how many of them are private or internal (FR-ORG-09), their stars, forks, open
  * issues and pull requests, their most used primary language, and the members the viewer may
- * see. The figures count up as the box comes into view (FR-ANIM-05).
+ * see. A user's are the same but the members, which they have none of, and their private
+ * repositories, which only they see (FR-USER-02, FR-USER-06). The figures count up as the box
+ * comes into view (FR-ANIM-05).
  */
 @Component({
   selector: 'app-organization-pulse',
@@ -78,9 +84,11 @@ import { RepositoryCard, RepositoryRow } from './repository-row';
             </dd>
             <dd class="sub">
               {{
-                shown.private + shown.internal > 0
-                  ? hiddenCount(shown.private + shown.internal)
-                  : PUBLIC_ONLY
+                shown.private + shown.internal === 0
+                  ? PUBLIC_ONLY
+                  : isUser()
+                    ? privateCount(shown.private)
+                    : hiddenCount(shown.private + shown.internal)
               }}
             </dd>
           </div>
@@ -105,15 +113,17 @@ import { RepositoryCard, RepositoryRow } from './repository-row';
               <dd class="sub">{{ repositoryCount(top.repositories) }}</dd>
             }
           </div>
-          <div class="stat">
-            <dt><app-icon name="people" />Members</dt>
-            @if (members(); as members) {
-              <dd class="val"><app-compact-number [value]="members.count" [countUp]="true" /></dd>
-              <dd class="sub">{{ VISIBLE_TO_YOU }}</dd>
-            } @else {
-              <dd class="val muted">–</dd>
-            }
-          </div>
+          @if (!isUser()) {
+            <div class="stat">
+              <dt><app-icon name="people" />Members</dt>
+              @if (members(); as members) {
+                <dd class="val"><app-compact-number [value]="members.count" [countUp]="true" /></dd>
+                <dd class="sub">{{ VISIBLE_TO_YOU }}</dd>
+              } @else {
+                <dd class="val muted">–</dd>
+              }
+            </div>
+          }
         </dl>
       } @else if (failed()) {
         <div class="pad">
@@ -132,10 +142,13 @@ import { RepositoryCard, RepositoryRow } from './repository-row';
   styles: '.pulse-skel { --sh: 70px; }',
 })
 export class OrganizationPulse {
-  private readonly data = inject(OrganizationData);
+  private readonly data = inject(AccountData);
   protected readonly statsLoader = this.data.stats();
   private readonly languages = this.data.languages();
   private readonly membersLoader = this.data.members();
+
+  /** Whether the account is a user's, who has no members. */
+  protected readonly isUser = computed(() => this.data.type() === 'user');
 
   protected readonly stats = computed(() => ready(this.statsLoader.state()));
   protected readonly failed = computed(() => this.statsLoader.state().status === 'error');
@@ -147,6 +160,7 @@ export class OrganizationPulse {
 
   protected readonly pushedLast = pushedLast;
   protected readonly hiddenCount = hiddenCount;
+  protected readonly privateCount = privateCount;
   protected readonly repositoryCount = repositoryCount;
   protected readonly ALL_REPOSITORIES = ALL_REPOSITORIES;
   protected readonly PUBLIC_ONLY = PUBLIC_ONLY;
@@ -160,7 +174,7 @@ export class OrganizationPulse {
  * (FR-ORG-08), its stat cards, its 6 most-starred repositories as cards, its 10 most-starred as
  * bars (FR-ORG-05), its repositories by last push and by year created (FR-ORG-06), and the 5
  * pushed to last. Beside them, its members (FR-ORG-07), languages (FR-ORG-04) and most used
- * topics.
+ * topics. A user's is the same but the members, which they have none of (FR-USER-04).
  */
 @Component({
   selector: 'app-organization-overview',
@@ -181,7 +195,7 @@ export class OrganizationPulse {
   templateUrl: './overview.html',
 })
 export class OrganizationOverview {
-  private readonly data = inject(OrganizationData);
+  private readonly data = inject(AccountData);
 
   private readonly statsLoader = this.data.stats();
   protected readonly repositories = emptyWhen(
@@ -203,8 +217,15 @@ export class OrganizationOverview {
   private readonly languagesLoader = this.data.languages();
   private readonly membersLoader = this.data.members();
 
+  /** Whether the account is an organization's, which has members, once the dashboard knows. */
+  protected readonly isOrganization = computed(() => this.data.type() === 'organization');
+  /** What the overview is about, for assistive technology. */
+  protected readonly about = computed(() =>
+    this.data.type() === 'user' ? ABOUT_USER : ABOUT_ORGANIZATION,
+  );
+
   protected readonly allRepositories = computed(() =>
-    organizationTabPath(this.data.login(), 'repositories'),
+    accountTabUrl(this.data.login(), this.data.type(), 'repositories'),
   );
   protected readonly allPeople = computed(() => organizationTabPath(this.data.login(), 'people'));
 

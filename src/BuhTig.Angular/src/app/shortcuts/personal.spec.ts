@@ -45,7 +45,7 @@ describe('Personal', () => {
     expect(seen.value).toEqual(answer);
   });
 
-  it('records a view of a repository or an organization under its own URL (FR-PERS-01)', () => {
+  it('records a view of a repository, an organization or a user under its own URL (FR-PERS-01)', () => {
     const repository = outcome(personal.record(WIDGET));
     http
       .expectOne({ method: 'POST', url: '/-/api/repositories/acme/widget/view' })
@@ -55,6 +55,11 @@ describe('Personal', () => {
     outcome(personal.record(ACME));
     http
       .expectOne({ method: 'POST', url: '/-/api/organizations/acme/view' })
+      .flush(null, { status: 204, statusText: 'No Content' });
+
+    outcome(personal.record({ kind: 'user', name: 'mona' }));
+    http
+      .expectOne({ method: 'POST', url: '/-/api/users/mona/view' })
       .flush(null, { status: 204, statusText: 'No Content' });
   });
 
@@ -87,6 +92,11 @@ describe('Personal', () => {
       .expectOne({ method: 'DELETE', url: '/-/api/organizations/acme/pin' })
       .flush({ pins: [WIDGET] });
     expect(unpinned.value).toEqual([WIDGET]);
+
+    const mona = { kind: 'user', name: 'mona' } as const;
+    const user = outcome(personal.pin(mona));
+    http.expectOne({ method: 'PUT', url: '/-/api/users/mona/pin' }).flush({ pins: [mona] });
+    expect(user.value).toEqual([mona]);
   });
 
   it('puts the pins in the order given (FR-PERS-05)', () => {

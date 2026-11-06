@@ -3,12 +3,15 @@ import {
   Injector,
   afterNextRender,
   computed,
+  effect,
   forwardRef,
   inject,
   input,
   viewChild,
 } from '@angular/core';
-import { Observable } from 'rxjs';
+import { toObservable, toSignal } from '@angular/core/rxjs-interop';
+import { Router } from '@angular/router';
+import { Observable, map, of, switchMap } from 'rxjs';
 import { Header } from '../header/header';
 import { Tab, Tabs } from '../header/tabs';
 import { Glide } from '../motion/glide';
@@ -20,14 +23,16 @@ import { RepositoryHead } from '../repository/head';
 import { RepositoryIssuesTab } from '../repository/issues';
 import { RepositoryOverview } from '../repository/overview';
 import { RepositoryReleasesTab } from '../repository/releases';
-import { Resource } from '../search/parse';
+import { Resource, dashboardPath } from '../search/parse';
 import { Loader, load } from '../widget/load';
+import { LOADING } from '../widget/messages';
 import { RepositoryData, once, sameName } from './data';
 import { FailurePage } from './failure';
 import { NotFoundOrPrivate } from './not-found-or-private';
 import { Notices } from './notices';
 import { Resources } from './resources';
 import { followSummary } from './summary';
+import { accountTabUrl, urlOf } from './account-tabs';
 import { REPOSITORY_TABS, RepositoryTab, repositoryTabPath } from './tabs';
 
 /**
@@ -40,7 +45,8 @@ import { REPOSITORY_TABS, RepositoryTab, repositoryTabPath } from './tabs';
  *
  * When GitHub keeps the repository from the viewer's credential, it says why, and how to get
  * access (FR-PAT-08). When GitHub says there is no such repository, it shows nothing of it, and
- * says what the viewer can do (FR-ACC-05).
+ * says what the viewer can do (FR-ACC-05). But `/{name}/repositories`, when the account `name`
+ * has no repository of that name, is the account's Repositories tab, where it moves (FR-NAV-02).
  *
  * Opened from the home page, it fades in as the search box glides into its header (FR-ANIM-03).
  */
@@ -66,6 +72,7 @@ import { REPOSITORY_TABS, RepositoryTab, repositoryTabPath } from './tabs';
 })
 export class RepositoryDashboard implements RepositoryData {
   private readonly resources = inject(Resources);
+  private readonly router = inject(Router);
   private readonly injector = inject(Injector);
   private readonly header = viewChild.required(Header);
 
@@ -92,11 +99,43 @@ export class RepositoryDashboard implements RepositoryData {
     },
   );
 
-  private readonly followed = followSummary(this.resource, (path) =>
-    repositoryTabPath(path.slice(1), this.tab()),
+  private readonly followed = followSummary(this.resource, (known) =>
+    repositoryTabPath(dashboardPath(known).slice(1), this.tab()),
   );
   protected readonly summary = this.followed.summary;
   protected readonly refreshing = this.followed.refreshing;
+
+  /**
+   * What the account of `/{name}/repositories` is, once BuhTig knows, when GitHub has no such
+   * repository: a user's, whose Repositories tab is `/{user}?tab=repositories` on GitHub, or an
+   * organization's, or `unknown`. Asked for of no other path.
+   */
+  protected readonly account = toSignal(
+    toObservable(
+      computed(() =>
+        this.summary()?.notFound &&
+        this.tab() === 'overview' &&
+        this.repo().toLowerCase() === 'repositories'
+          ? this.owner()
+          : undefined,
+      ),
+    ).pipe(
+      switchMap((name) =>
+        name === undefined
+          ? of(undefined)
+          : this.resources.accountType(name).pipe(map((type) => type ?? 'unknown')),
+      ),
+    ),
+  );
+
+  /** Whether the dashboard waits to know what the account of `/{name}/repositories` is. */
+  protected readonly asking = computed(
+    () =>
+      this.summary()?.notFound === true &&
+      this.tab() === 'overview' &&
+      this.repo().toLowerCase() === 'repositories' &&
+      this.account() !== 'unknown',
+  );
 
   readonly repository = computed(() => this.summary()?.repository);
   readonly name = computed(() => this.repository()?.name ?? `${this.owner()}/${this.repo()}`);
@@ -155,11 +194,22 @@ export class RepositoryDashboard implements RepositoryData {
       // Before the first paint, so that the search box is never seen in its place too soon.
       afterNextRender(() => this.header().search().glideFrom(from));
     }
+    // `/{name}/repositories` of an account without such a repository is its Repositories tab,
+    // which takes its place in the history (FR-NAV-02).
+    effect(() => {
+      const account = this.account();
+      if (account === 'user' || account === 'organization') {
+        const url = urlOf(accountTabUrl(this.owner(), account, 'repositories'));
+        void this.router.navigateByUrl(url, { replaceUrl: true });
+      }
+    });
   }
 
   protected retry(): void {
     this.followed.retry();
   }
+
+  protected readonly LOADING = LOADING;
 
   /**
    * A part of the repository, loaded once its first tab asks for it, and again on each refresh,

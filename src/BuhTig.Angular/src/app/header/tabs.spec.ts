@@ -35,6 +35,24 @@ describe('Tabs', () => {
     ]);
   });
 
+  it("leads to a tab's query too, as a user's Repositories tab has (FR-NAV-01)", async () => {
+    fixture.componentRef.setInput('tabs', [
+      { label: 'Overview', icon: 'home', link: '/mona', current: true },
+      {
+        label: 'Repositories',
+        icon: 'repo',
+        link: '/mona',
+        query: { tab: 'repositories' },
+        current: false,
+      },
+    ] satisfies Tab[]);
+    await fixture.whenStable();
+    expect(links().map((link) => link.getAttribute('href'))).toEqual([
+      '/mona',
+      '/mona?tab=repositories',
+    ]);
+  });
+
   it('marks the tab shown as the current page', () => {
     expect(links().map((link) => link.getAttribute('aria-current'))).toEqual([null, 'page', null]);
   });

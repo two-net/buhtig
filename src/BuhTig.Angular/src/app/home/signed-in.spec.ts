@@ -74,6 +74,7 @@ describe('SignedInHome', () => {
   };
   const repository = (name: string) => ({ kind: 'repository', name });
   const organization = (name: string) => ({ kind: 'organization', name });
+  const user = (name: string) => ({ kind: 'user', name });
 
   const element = () => fixture.nativeElement as HTMLElement;
   const side = () => element().querySelector('.dash-side')!;
@@ -135,6 +136,23 @@ describe('SignedInHome', () => {
       undefined,
     ]);
     expect(empty()).toBeUndefined();
+  });
+
+  it("lists users' dashboards too, round as people's avatars are, organizations' square", async () => {
+    await session();
+    await shortcuts(
+      [user('mona')],
+      [{ ...organization('github'), viewed_at: '2026-10-22T11:00:00Z' }],
+    );
+    expect(dashboards()).toEqual([
+      ['mona', '/mona', PINNED],
+      ['github', '/github', RECENTLY_VIEWED],
+    ]);
+    expect(
+      [...side().querySelectorAll('.side-repos a .av')].map((avatar) =>
+        avatar.classList.contains('round'),
+      ),
+    ).toEqual([true, false]);
   });
 
   it(`lists at most ${MAX_SHORTCUTS} dashboards`, async () => {

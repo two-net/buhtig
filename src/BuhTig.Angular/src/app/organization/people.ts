@@ -1,6 +1,6 @@
 import { Component, inject } from '@angular/core';
 import { Avatar } from '../avatar/avatar';
-import { OrganizationData } from '../dashboard/data';
+import { AccountData } from '../dashboard/data';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
 import { NO_MEMBERS, moreMembers } from './messages';
@@ -40,7 +40,7 @@ import { NO_MEMBERS, moreMembers } from './messages';
 })
 export class OrganizationPeople {
   protected readonly members = emptyWhen(
-    inject(OrganizationData).members(),
+    inject(AccountData).members(),
     (members) => members.members.length === 0,
   );
 

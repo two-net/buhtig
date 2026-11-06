@@ -7,7 +7,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { OrganizationData } from '../dashboard/data';
+import { AccountData } from '../dashboard/data';
 import { ListedRepository } from '../dashboard/resources';
 import { exactNumber } from '../format/format';
 import { Icon } from '../icon/icon';
@@ -37,7 +37,7 @@ import {
 } from './table';
 
 /**
- * An organization's Repositories tab (FR-ORG-03): its repositories, found by name, filtered by
+ * An organization's Repositories tab (FR-ORG-03), and a user's (FR-USER-04): its repositories, found by name, filtered by
  * type and primary language, in the order the user picks, 25 to a page, each with what GitHub
  * says of it and its recent commits. Each opens its dashboard. How many match, and which page
  * shows, is announced as it changes.
@@ -62,7 +62,7 @@ import {
   `,
 })
 export class OrganizationRepositoriesTab {
-  private readonly data = inject(OrganizationData);
+  private readonly data = inject(AccountData);
   private readonly motion = inject(Motion);
   private readonly search = viewChild<ElementRef<HTMLInputElement>>('search');
 

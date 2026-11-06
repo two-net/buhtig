@@ -11,7 +11,7 @@
           let index = $index, first = $first, last = $last
         ) {
           <li>
-            <app-avatar [name]="pin.name.split('/')[0]" [round]="pin.kind === 'repository'" />
+            <app-avatar [name]="pin.name.split('/')[0]" [round]="pin.kind !== 'organization'" />
             <a class="grow" [routerLink]="'/' + pin.name">{{ pin.name }}</a>
             <button
               type="button"
@@ -57,7 +57,7 @@
           <li>
             <app-avatar
               [name]="item.shortcut.name.split('/')[0]"
-              [round]="item.shortcut.kind === 'repository'"
+              [round]="item.shortcut.kind !== 'organization'"
             />
             <a class="grow" [routerLink]="'/' + item.shortcut.name">{{ item.shortcut.name }}</a>
             @if (item.at; as at) {

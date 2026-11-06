@@ -153,8 +153,145 @@ describe('Resources', () => {
       const seen = outcome(resources.summary({ kind: 'organization', org: 'Acme' }));
       http.expectOne('/-/api/organizations/Acme').flush({ name: 'acme' });
       expect((seen.value as Summary).path).toBe('/acme');
+      expect((seen.value as Summary).resource).toEqual({ kind: 'organization', org: 'acme' });
       expect((seen.value as Summary).repository).toBeUndefined();
+      expect((seen.value as Summary).user).toBeUndefined();
       expect((seen.value as Summary).organization?.login).toBe('acme');
+    });
+
+    it("asks for a user's summary under their own URL", () => {
+      const seen = outcome(resources.summary({ kind: 'user', login: 'Mona' }));
+      http.expectOne('/-/api/users/Mona').flush({ name: 'mona', followers: 3, following: 1 });
+      expect((seen.value as Summary).path).toBe('/mona');
+      expect((seen.value as Summary).resource).toEqual({ kind: 'user', login: 'mona' });
+      expect((seen.value as Summary).organization).toBeUndefined();
+      expect((seen.value as Summary).user).toEqual(
+        expect.objectContaining({ login: 'mona', followers: 3, following: 1 }),
+      );
+    });
+
+    it('asks what an account named alone is, then for it, by the name the URL has (FR-SRCH-06)', () => {
+      const user = outcome(resources.summary({ kind: 'account', name: 'Mona' }));
+      http.expectOne('/-/api/accounts/Mona').flush({ type: 'user', login: 'mona' });
+      http
+        .expectOne('/-/api/users/Mona')
+        .flush({ name: 'mona', fetched_at: '2026-10-22T12:00:00Z' });
+      expect(user.value).toEqual(
+        expect.objectContaining({
+          path: '/mona',
+          resource: { kind: 'user', login: 'mona' },
+          fetchedAt: new Date('2026-10-22T12:00:00Z'),
+          organization: undefined,
+        }),
+      );
+      expect(user.value?.user?.login).toBe('mona');
+
+      const organization = outcome(resources.summary({ kind: 'account', name: 'acme' }));
+      http.expectOne('/-/api/accounts/acme').flush({ type: 'organization', login: 'acme' });
+      http.expectOne('/-/api/organizations/acme').flush({ name: 'acme' });
+      expect(organization.value?.resource).toEqual({ kind: 'organization', org: 'acme' });
+      expect(organization.value?.organization?.login).toBe('acme');
+    });
+
+    it('says what keeps it from telling what an account named alone is, as of any resource', () => {
+      const told = (answer: object | null, status = 200) => {
+        const seen = outcome(resources.summary({ kind: 'account', name: 'mona' }));
+        http.expectOne('/-/api/accounts/mona').flush(answer, { status, statusText: `${status}` });
+        const { notFound, invalid, failure, path } = seen.value!;
+        return [notFound, invalid, failure, path];
+      };
+      expect(told(null, 404)).toEqual([true, false, undefined, undefined]);
+      expect(told(null, 400)).toEqual([false, true, undefined, undefined]);
+      expect(told(null, 429)).toEqual([false, false, 'held', undefined]);
+      expect(told(null, 503)).toEqual([false, false, 'unavailable', undefined]);
+      expect(told(null, 502)).toEqual([false, false, 'github', undefined]);
+      // An account of no kind BuhTig knows.
+      expect(told({ type: 'bot', login: 'mona' })).toEqual([false, false, 'github', undefined]);
+    });
+
+    it("takes an organization's URL that names a user to the user, as GitHub tells", () => {
+      const user = outcome(resources.summary({ kind: 'organization', org: 'mona' }));
+      http.expectOne('/-/api/organizations/mona').flush(null, { status: 404, statusText: '404' });
+      http.expectOne('/-/api/accounts/mona').flush({ type: 'user', login: 'mona' });
+      http.expectOne('/-/api/users/mona').flush({ name: 'mona' });
+      expect(user.value?.resource).toEqual({ kind: 'user', login: 'mona' });
+
+      // Not when GitHub has no such account, nor says it is an organization after all.
+      for (const answer of [{ status: 404 }, { status: 200, type: 'organization' }]) {
+        const missing = outcome(resources.summary({ kind: 'organization', org: 'acme' }));
+        http.expectOne('/-/api/organizations/acme').flush(null, { status: 404, statusText: '404' });
+        http
+          .expectOne('/-/api/accounts/acme')
+          .flush(answer.status === 200 ? { type: answer.type } : null, {
+            status: answer.status,
+            statusText: `${answer.status}`,
+          });
+        expect([missing.value?.notFound, missing.value?.failure]).toEqual([true, undefined]);
+      }
+      // Nor asks what it is when the organization fails otherwise.
+      const failed = outcome(resources.summary({ kind: 'organization', org: 'acme' }));
+      http.expectOne('/-/api/organizations/acme').flush(null, { status: 502, statusText: '502' });
+      expect(failed.value?.failure).toBe('github');
+    });
+
+    it('keeps only what it can show safely of a user (FR-USER-01, NFR-SEC-03)', () => {
+      const seen = outcome(resources.summary({ kind: 'user', login: 'mona' }));
+      http.expectOne('/-/api/users/mona').flush({
+        name: 'mona',
+        avatar_url: 'http://avatars.example/u/1',
+        display_name: '',
+        bio: 'Builds <b>things</b>',
+        company: '@acme',
+        location: null,
+        website: 'javascript:alert(1)',
+        created_at: 'yesterday',
+        followers: -1,
+        following: 'many',
+      });
+      expect(seen.value?.user).toEqual({
+        login: 'mona',
+        avatarUrl: undefined,
+        displayName: undefined,
+        bio: 'Builds <b>things</b>',
+        company: '@acme',
+        location: undefined,
+        website: undefined,
+        createdAt: undefined,
+        followers: 0,
+        following: 0,
+      });
+      const full = outcome(resources.summary({ kind: 'user', login: 'mona' }));
+      http.expectOne('/-/api/users/mona').flush({
+        name: 'mona',
+        avatar_url: 'https://avatars.githubusercontent.com/u/1',
+        display_name: 'Mona Lisa',
+        website: 'http://mona.example/',
+        created_at: '2011-01-25T18:44:36Z',
+        followers: 1_234,
+        following: 5,
+      });
+      expect(full.value?.user).toEqual(
+        expect.objectContaining({
+          avatarUrl: 'https://avatars.githubusercontent.com/u/1',
+          displayName: 'Mona Lisa',
+          website: 'http://mona.example/',
+          createdAt: new Date('2011-01-25T18:44:36Z'),
+          followers: 1_234,
+          following: 5,
+        }),
+      );
+    });
+
+    it('shows nothing of an answer that names no such account', () => {
+      for (const name of ['mona/rocket', '../evil', 'orgs', 'github.com/mona']) {
+        const seen = outcome(resources.summary({ kind: 'user', login: 'mona' }));
+        http.expectOne('/-/api/users/mona').flush({ name });
+        expect([seen.value?.path, seen.value?.resource, seen.value?.user], name).toEqual([
+          undefined,
+          undefined,
+          undefined,
+        ]);
+      }
     });
   });
 
@@ -430,18 +567,79 @@ describe('Resources', () => {
     expect(seen.value?.releases.map((release) => release.target)).toEqual([undefined, undefined]);
   });
 
-  it("gives an organization's repository's commit activity, or Computing", () => {
-    const seen = outcome(resources.organizationActivity('acme', 'widget'));
+  it("gives an organization's or a user's repository's commit activity, or Computing", () => {
+    const seen = outcome(
+      resources.accountActivity({ kind: 'organization', org: 'acme' }, 'widget'),
+    );
     http
       .expectOne('/-/api/organizations/acme/repositories/widget/commit-activity')
       .flush({ weeks: [{ week: '2026-10-18', commits: 2 }] });
     expect(seen.value?.total).toBe(2);
 
-    const computing = outcome(resources.organizationActivity('acme', 'widget'));
+    const computing = outcome(resources.accountActivity({ kind: 'user', login: 'mona' }, 'rocket'));
     http
-      .expectOne('/-/api/organizations/acme/repositories/widget/commit-activity')
+      .expectOne('/-/api/users/mona/repositories/rocket/commit-activity')
       .flush(null, { status: 202, statusText: 'Accepted' });
     expect(computing.error).toBeInstanceOf(Computing);
+  });
+
+  it("asks for each part of a user's dashboard under their own URL, as of an organization's (FR-USER-02 to FR-USER-04)", () => {
+    const mona = { kind: 'user', login: 'mona' } as const;
+    const stats = outcome(resources.accountStats(mona));
+    http.expectOne('/-/api/users/mona/stats').flush({
+      repositories: 3,
+      private: 1,
+      internal: 0,
+      stars: 5,
+      forks: 2,
+      open_issues_and_pull_requests: 4,
+      top_language: null,
+      truncated: false,
+    });
+    expect(stats.value).toEqual({
+      repositories: 3,
+      private: 1,
+      internal: 0,
+      stars: 5,
+      forks: 2,
+      openIssuesAndPullRequests: 4,
+      topLanguage: undefined,
+      truncated: false,
+    });
+
+    const repositories = outcome(resources.accountRepositories(mona));
+    http.expectOne('/-/api/users/mona/repositories').flush({
+      repositories: ['rocket', '../evil'].map((name) => ({
+        name,
+        description: null,
+        language: null,
+        stars: 0,
+        forks: 0,
+        open_issues_and_pull_requests: 0,
+        pushed_at: null,
+        fork: false,
+        archived: false,
+        visibility: 'private',
+      })),
+    });
+    expect(
+      repositories.value?.map(({ name, path, visibility }) => [name, path, visibility]),
+    ).toEqual([['rocket', '/mona/rocket', 'private']]);
+
+    const top = outcome(resources.topRepositories(mona));
+    http
+      .expectOne('/-/api/users/mona/top-repositories')
+      .flush({ repositories: [{ name: 'rocket', stars: 5 }] });
+    expect(top.value).toEqual([{ name: 'rocket', path: '/mona/rocket', stars: 5 }]);
+
+    outcome(resources.accountLanguages(mona));
+    http.expectOne('/-/api/users/mona/languages').flush({ languages: [], other: 0 });
+    outcome(resources.lastPush(mona));
+    http
+      .expectOne('/-/api/users/mona/last-push')
+      .flush({ last_7_days: 0, last_30_days: 0, last_12_months: 0, older: 0 });
+    outcome(resources.createdPerYear(mona));
+    http.expectOne('/-/api/users/mona/created-per-year').flush({ years: [] });
   });
 
   it("tells a user's account from an organization's, or that it cannot tell (FR-SRCH-06)", () => {
@@ -454,18 +652,5 @@ describe('Resources', () => {
     expect(type({ type: 'organization' })).toBe('organization');
     expect(type({ type: 'bot' })).toBeUndefined();
     expect(type(null, 404)).toBeUndefined();
-  });
-
-  it("suggests a user's repositories, leaving out names no repository can have", () => {
-    const seen = outcome(resources.userRepositories('mona'));
-    http.expectOne('/-/api/users/mona/repositories').flush({
-      repositories: [
-        { name: 'mona/rocket' },
-        { name: '../evil' },
-        { name: 'mona' },
-        { name: 'mona/x.git' },
-      ],
-    });
-    expect(seen.value).toEqual(['mona/rocket']);
   });
 });

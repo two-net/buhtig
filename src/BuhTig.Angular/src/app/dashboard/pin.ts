@@ -2,7 +2,7 @@ import { Component, computed, inject, input, signal } from '@angular/core';
 import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
 import { catchError, map, of, switchMap } from 'rxjs';
 import { Icon } from '../icon/icon';
-import { Resource } from '../search/parse';
+import { Known } from '../search/parse';
 import { Session } from '../session/session';
 import { Personal, PinProblem } from '../shortcuts/personal';
 import { Shortcut, sameDashboard, shortcutOf } from '../shortcuts/pick';
@@ -39,7 +39,7 @@ export class Pin {
   private readonly toasts = inject(Toasts);
 
   /** The dashboard's resource, with the names as GitHub spells them. */
-  readonly resource = input.required<Resource>();
+  readonly resource = input.required<Known>();
 
   protected readonly user = inject(Session).user;
 

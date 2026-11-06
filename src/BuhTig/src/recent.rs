@@ -312,6 +312,7 @@ mod tests {
         .unwrap();
         let token_user = Viewer::TokenUser {
             user_id: hubot.id,
+            github_id: hubot.github_id,
             credential_id: pat.id,
             pat: Secret::new("ghp_hubot".to_owned()),
             sign_in: Secret::new("gho_hubot".to_owned()),

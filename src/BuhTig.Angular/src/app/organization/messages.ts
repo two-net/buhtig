@@ -1,5 +1,5 @@
-// What an organization's widgets say in sentences, kept apart from their logic so that it can
-// be translated (NFR-UX-07).
+// What an organization's widgets say in sentences, and a user's, which are the same widgets, kept
+// apart from their logic so that it can be translated (NFR-UX-07).
 
 import { LanguageCount, LastPush, YearCount } from '../dashboard/resources';
 import { exactNumber } from '../format/format';
@@ -106,6 +106,10 @@ export const VERIFIED = 'Verified';
 export function hiddenCount(count: number): string {
   return `${exactNumber(count)} private or internal`;
 }
+/** FR-USER-02: a user's private repositories, which only they see, with their token (FR-USER-06). */
+export function privateCount(count: number): string {
+  return `${exactNumber(count)} private`;
+}
 export const PUBLIC_ONLY = 'Public only';
 export const VISIBLE_TO_YOU = 'Visible to you';
 
@@ -122,6 +126,10 @@ export function truncated(name: string, count: number): string {
     `${exactNumber(count)} most recently pushed.`
   );
 }
+
+/** What an overview's side is about, for assistive technology. */
+export const ABOUT_ORGANIZATION = 'About this organization';
+export const ABOUT_USER = 'About this user';
 
 export const POPULAR = 'Popular repositories';
 export const RECENTLY_PUSHED = 'Recently pushed';

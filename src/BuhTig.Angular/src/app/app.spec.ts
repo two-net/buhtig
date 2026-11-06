@@ -8,9 +8,9 @@ import type { Mock } from 'vitest';
 import { ENDED } from './account/messages';
 import { App } from './app';
 import { routes } from './app.routes';
-import { OrganizationDashboard } from './dashboard/organization';
+import { AccountDashboard } from './dashboard/account';
 import { RepositoryDashboard } from './dashboard/repository';
-import { organizationMatcher, repositoryMatcher } from './dashboard/tabs';
+import { accountMatcher, repositoryMatcher } from './dashboard/tabs';
 import { focusPageOnNavigation } from './focus/page-focus';
 import { Home } from './home/home';
 import { Session } from './session/session';
@@ -38,7 +38,7 @@ describe('routes', () => {
     harness.routeNativeElement?.querySelector('h1')?.textContent?.trim();
   /** The routed dashboard, with the inputs it was given. */
   const dashboard = (harness: RouterTestingHarness) =>
-    harness.routeDebugElement?.componentInstance as RepositoryDashboard | OrganizationDashboard;
+    harness.routeDebugElement?.componentInstance as RepositoryDashboard | AccountDashboard;
   /** The tab that a dashboard's tab bar marks as the current page. */
   const currentTab = (harness: RouterTestingHarness) =>
     harness.routeNativeElement
@@ -73,7 +73,7 @@ describe('routes', () => {
     const all = routes.flatMap((route): Route[] => [route, ...(route.children ?? [])]);
     expect(
       all.filter((route) => route.data?.['preload'] === true).map((route) => route.matcher),
-    ).toEqual([organizationMatcher, repositoryMatcher]);
+    ).toEqual([accountMatcher, repositoryMatcher]);
   });
 
   it('opens a dashboard from a URL pasted on the home page and Enter alone (NFR-UX-01)', async () => {
@@ -100,7 +100,7 @@ describe('routes', () => {
     input.form!.requestSubmit();
     await vi.waitFor(() => expect(router().url).toBe('/acme'));
     await harness.fixture.whenStable();
-    expect(dashboard(harness)).toBeInstanceOf(OrganizationDashboard);
+    expect(dashboard(harness)).toBeInstanceOf(AccountDashboard);
     // Its main content, until its heading has come.
     expect(document.activeElement).toBe(harness.routeNativeElement!.querySelector('main#main'));
   });
@@ -177,15 +177,39 @@ describe('routes', () => {
 
   it('has a dashboard for each organization, and its repositories and people (FR-NAV-01)', async () => {
     const harness = await RouterTestingHarness.create();
-    for (const [path, tab, label] of [
-      ['/angular', 'overview', 'Overview'],
-      ['/orgs/angular/repositories', 'repositories', 'Repositories'],
-      ['/orgs/angular/people', 'people', 'People'],
+    for (const [path, kind, tab, label] of [
+      ['/angular', 'account', undefined, 'Overview'],
+      ['/orgs/angular/repositories', 'organization', 'repositories', 'Repositories'],
+      ['/orgs/angular/people', 'organization', 'people', 'People'],
     ]) {
-      await harness.navigateByUrl(path);
-      const shownDashboard = dashboard(harness) as OrganizationDashboard;
-      expect(shownDashboard, path).toBeInstanceOf(OrganizationDashboard);
-      expect([shownDashboard.org(), shownDashboard.tab()], path).toEqual(['angular', tab]);
+      await harness.navigateByUrl(path!);
+      const shownDashboard = dashboard(harness) as AccountDashboard;
+      expect(shownDashboard, path).toBeInstanceOf(AccountDashboard);
+      expect([shownDashboard.name(), shownDashboard.kind(), shownDashboard.tab()], path).toEqual([
+        'angular',
+        kind,
+        tab,
+      ]);
+      expect(currentTab(harness), path).toBe(label);
+    }
+  });
+
+  it("has a dashboard for each user, and their repositories at GitHub's query (FR-NAV-01)", async () => {
+    const harness = await RouterTestingHarness.create();
+    for (const [path, tab, label] of [
+      ['/mona', undefined, 'Overview'],
+      ['/mona?tab=repositories', 'repositories', 'Repositories'],
+      // One of a user's tabs on GitHub that BuhTig has not.
+      ['/mona?tab=stars', 'stars', 'Overview'],
+    ]) {
+      await harness.navigateByUrl(path!);
+      const shownDashboard = dashboard(harness) as AccountDashboard;
+      expect(shownDashboard, path).toBeInstanceOf(AccountDashboard);
+      expect([shownDashboard.name(), shownDashboard.kind(), shownDashboard.tab()], path).toEqual([
+        'mona',
+        'account',
+        tab,
+      ]);
       expect(currentTab(harness), path).toBe(label);
     }
   });
@@ -197,7 +221,13 @@ describe('routes', () => {
     await harness.navigateByUrl('/acme/widget/graphs/contributors');
     expect(dashboard(harness)).toBe(first);
     await harness.navigateByUrl('/acme');
-    expect(dashboard(harness)).toBeInstanceOf(OrganizationDashboard);
+    const account = dashboard(harness);
+    expect(account).toBeInstanceOf(AccountDashboard);
+    // An account's tabs, at its paths and its query alike.
+    await harness.navigateByUrl('/orgs/acme/people');
+    await harness.navigateByUrl('/acme?tab=repositories');
+    await harness.navigateByUrl('/ACME');
+    expect(dashboard(harness)).toBe(account);
   });
 
   it('titles dashboards after their resource, and their tab but the overview (UI-04)', async () => {
@@ -210,6 +240,12 @@ describe('routes', () => {
       ['/angular', 'angular · BuhTig'],
       ['/orgs/angular/repositories', 'Repositories · angular · BuhTig'],
       ['/orgs/angular/people', 'People · angular · BuhTig'],
+      ['/mona', 'mona · BuhTig'],
+      // Moving between a user's tabs changes the query alone.
+      ['/mona?tab=repositories', 'Repositories · mona · BuhTig'],
+      ['/mona', 'mona · BuhTig'],
+      ['/mona?tab=stars', 'mona · BuhTig'],
+      ['/mona?tab=people', 'mona · BuhTig'],
       ['/', 'BuhTig'],
     ]) {
       await harness.navigateByUrl(path);

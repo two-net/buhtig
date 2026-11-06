@@ -4,7 +4,7 @@ import { Avatar } from '../avatar/avatar';
 import { HeadActions } from '../dashboard/head-actions';
 import { Repository } from '../dashboard/resources';
 import { Icon } from '../icon/icon';
-import { Resource } from '../search/parse';
+import { Known } from '../search/parse';
 
 /** What a repository's visibility is called. */
 export const VISIBILITY = { public: 'Public', private: 'Private', internal: 'Internal' } as const;
@@ -56,7 +56,7 @@ export class RepositoryHead {
 
   protected readonly owner = computed(() => this.repository().name.split('/')[0]);
   protected readonly repo = computed(() => this.repository().name.split('/')[1]);
-  protected readonly resource = computed((): Resource => ({
+  protected readonly resource = computed((): Known => ({
     kind: 'repository',
     owner: this.owner(),
     repo: this.repo(),

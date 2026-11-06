@@ -1,5 +1,5 @@
 import { Component, input } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { Params, RouterLink } from '@angular/router';
 import { CompactNumber } from '../format/compact-number';
 import { Icon, IconName } from '../icon/icon';
 
@@ -8,6 +8,8 @@ export interface Tab {
   label: string;
   icon: IconName;
   link: string;
+  /** Its query, as of a user's Repositories tab, at `/{user}?tab=repositories`, if it has one. */
+  query?: Params;
   /** Whether it is the tab shown. */
   current: boolean;
   /** How many items it has, such as open issues, once known. */
@@ -23,8 +25,12 @@ export interface Tab {
   imports: [CompactNumber, Icon, RouterLink],
   template: `
     <nav class="unav" aria-label="Dashboard sections">
-      @for (tab of tabs(); track tab.link) {
-        <a [routerLink]="tab.link" [attr.aria-current]="tab.current ? 'page' : null">
+      @for (tab of tabs(); track tab.label) {
+        <a
+          [routerLink]="tab.link"
+          [queryParams]="tab.query"
+          [attr.aria-current]="tab.current ? 'page' : null"
+        >
           <app-icon [name]="tab.icon" /><span>{{ tab.label }}</span>
           @if (tab.count !== undefined) {
             <span class="counter"><app-compact-number [value]="tab.count" [plain]="true" /></span>

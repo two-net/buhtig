@@ -20,19 +20,27 @@ import {
   problemMessage,
   resourceName,
 } from './messages';
-import { dashboardPath, isUnfinished, parse } from './parse';
+import { Resource, dashboardPath, isUnfinished, parse } from './parse';
 import { Shortcut } from './shortcut';
 
 /** Where a search box is: the visitor's home page, the signed-in home page, or a header. */
 export type SearchVariant = 'hero' | 'dash' | 'header';
 
+/** FR-SRCH-09: the icon beside what kind of resource the input names. */
+const HINT_ICONS: Record<Resource['kind'], IconName> = {
+  repository: 'repo',
+  organization: 'org',
+  user: 'user',
+  account: 'org',
+};
+
 let count = 0;
 
 /**
- * The search box: one input that takes a GitHub repository or organization URL, says what it
- * recognizes as the user types (FR-SRCH-09), and opens its dashboard on Enter or "Show
- * dashboard" (SRS §4.1). A name alone opens that account's dashboard, which says so if the
- * account is a user's (FR-SRCH-06). `/` focuses it, unless the user has turned that off (WCAG
+ * The search box: one input that takes a GitHub repository, organization or user URL, says what
+ * it recognizes as the user types (FR-SRCH-09), and opens its dashboard on Enter or "Show
+ * dashboard" (SRS §4.1). A name alone opens that account's dashboard, an organization's or a
+ * user's, as GitHub tells (FR-SRCH-06). `/` focuses it, unless the user has turned that off (WCAG
  * 2.1.4), and Esc or ✕ clears it (FR-SRCH-07).
  *
  * It lifts as it is hovered or focused (FR-ANIM-02), and shakes as it says why it opens no
@@ -90,7 +98,7 @@ export class Search {
     if (parsed.ok) {
       const resource = parsed.resource;
       return {
-        icon: resource.kind === 'repository' ? 'repo' : 'org',
+        icon: HINT_ICONS[resource.kind],
         kind: KINDS[resource.kind],
         name: resourceName(resource),
       };

@@ -63,6 +63,9 @@ fn pages_beneath_a_dashboard_redirect_to_its_matching_tab() {
         ("/ORGS/acme/people", "/orgs/acme/people"),
         ("/orgs/acme/Repositories/", "/orgs/acme/repositories"),
         ("/acme/", "/acme"),
+        ("/users/mona", "/mona"),
+        ("/users/mona/projects/1", "/mona"),
+        ("/Users/Mona/packages", "/Mona"),
     ] {
         let response = running.get(path);
         assert_status(&response, 308);
@@ -85,6 +88,9 @@ fn pages_beneath_a_dashboard_redirect_to_its_matching_tab() {
         "/acme",
         "/orgs/acme/repositories",
         "/orgs/acme/people",
+        // A user's tab, or a repository named so, which the dashboard tells apart.
+        "/mona?tab=repositories",
+        "/mona/repositories",
         "/owner/repo?tab=x",
         "/owner/repo/issues?q=bug",
         "/-/about",

@@ -2354,6 +2354,7 @@ mod tests {
         };
         let token_user = Viewer::TokenUser {
             user_id: 1,
+            github_id: 1,
             credential_id: 1,
             pat: Secret::new("pat".to_owned()),
             sign_in: Secret::new("sign-in".to_owned()),

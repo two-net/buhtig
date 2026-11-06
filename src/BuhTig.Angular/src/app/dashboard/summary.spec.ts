@@ -5,7 +5,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import type { MockInstance } from 'vitest';
 import { Announcer } from '../live/announcer';
-import { Resource } from '../search/parse';
+import { Resource, dashboardPath } from '../search/parse';
 import { Toasts } from '../toast/toasts';
 import { REFRESHED, STILL_SAVED, loaded, renamed } from './messages';
 import { Resources } from './resources';
@@ -19,7 +19,7 @@ class Host {
   readonly opened = signal<Resource>({ kind: 'repository', owner: 'ACME', repo: 'Widget' });
   /** As a dashboard has it: the same whatever the letter case of its names. */
   readonly resource = computed(() => this.opened(), { equal: same });
-  readonly followed = followSummary(this.resource, (path) => `${path}/issues`);
+  readonly followed = followSummary(this.resource, (known) => `${dashboardPath(known)}/issues`);
 }
 
 describe('followSummary', () => {

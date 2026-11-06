@@ -16,6 +16,8 @@
 >
   @if (known?.invalid) {
     <app-not-found-or-private [name]="owner() + '/' + repo()" kind="repository" [invalid]="true" />
+  } @else if (asking()) {
+    <span class="sr">{{ LOADING }}</span>
   } @else if (known?.notFound) {
     <app-not-found-or-private [name]="owner() + '/' + repo()" kind="repository" />
   } @else if (known?.failure; as failure) {

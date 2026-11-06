@@ -12,6 +12,12 @@ export type RepositoryTab =
 /** The tabs of an organization's dashboard. */
 export type OrganizationTab = 'overview' | 'repositories' | 'people';
 
+/** The tabs of a user's dashboard. */
+export type UserTab = 'overview' | 'repositories';
+
+/** The tabs of an account's dashboard, of either kind. */
+export type AccountTab = OrganizationTab;
+
 /** Where each of a repository's tabs is, below `/{owner}/{repo}`, as on GitHub. */
 const REPOSITORY_PATHS: Record<RepositoryTab, string> = {
   overview: '',
@@ -78,15 +84,18 @@ export function repositoryMatcher(segments: UrlSegment[]): UrlMatchResult | null
 }
 
 /**
- * Matches an organization's dashboard, at `/{org}`, `/orgs/{org}/repositories` or
- * `/orgs/{org}/people`, whatever the letter case of `orgs` and the tab, giving the parameters
- * `org` and `tab`.
+ * Matches an account's dashboard, an organization's or a user's: at `/{name}`, the account's
+ * whatever its kind, or at `/orgs/{org}/repositories` or `/orgs/{org}/people`, an organization's,
+ * whatever the letter case of `orgs` and the tab. It gives the parameters `name`, and `kind`,
+ * `account` or `organization`. Of an organization's path, it gives `tab` too. At `/{name}`, the
+ * tab is the query's, as a user's on GitHub, such as `/{user}?tab=repositories`, which is no
+ * path parameter, so that the query gives it.
  */
-export function organizationMatcher(segments: UrlSegment[]): UrlMatchResult | null {
+export function accountMatcher(segments: UrlSegment[]): UrlMatchResult | null {
   if (segments.length === 1 && segments[0].path !== '-') {
     return {
       consumed: segments,
-      posParams: { org: segments[0], tab: new UrlSegment('overview', {}) },
+      posParams: { name: segments[0], kind: new UrlSegment('account', {}) },
     };
   }
   const [orgs, org, tab] = segments;
@@ -96,14 +105,22 @@ export function organizationMatcher(segments: UrlSegment[]): UrlMatchResult | nu
     orgs.path.toLowerCase() === 'orgs' &&
     (name === 'repositories' || name === 'people')
   ) {
-    return { consumed: segments, posParams: { org, tab: new UrlSegment(name, {}) } };
+    return {
+      consumed: segments,
+      posParams: {
+        name: org,
+        kind: new UrlSegment('organization', {}),
+        tab: new UrlSegment(name, {}),
+      },
+    };
   }
   return null;
 }
 
 /**
  * Which dashboard `url` is of, whatever its tab and the letter case of its names, such as
- * `repository:owner/repo`, or `undefined` for a page that is no dashboard's.
+ * `repository:owner/repo` or `account:name`, of an organization or a user, or `undefined` for a
+ * page that is no dashboard's.
  */
 export function dashboardOf(url: string): string | undefined {
   const segments = url.split(/[?#]/)[0].split('/').filter(Boolean);
@@ -111,11 +128,11 @@ export function dashboardOf(url: string): string | undefined {
   if (first === undefined || first === '-') {
     return undefined;
   }
-  // `/orgs` alone is the dashboard of an organization of that name, as the routes take it.
+  // `/orgs` alone is the dashboard of an account of that name, as the routes take it.
   if (first.toLowerCase() === 'orgs' && second !== undefined) {
-    return `organization:${second.toLowerCase()}`;
+    return `account:${second.toLowerCase()}`;
   }
   return second === undefined
-    ? `organization:${first.toLowerCase()}`
+    ? `account:${first.toLowerCase()}`
     : `repository:${first.toLowerCase()}/${second.toLowerCase()}`;
 }

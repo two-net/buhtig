@@ -118,6 +118,8 @@ fn other_origins_pages_cannot_change_state() {
             "POST /-/api/repositories/owner/repo/refresh",
             "POST /-/api/organizations/acme/view",
             "PUT /-/api/repositories/owner/repo/pin",
+            "POST /-/api/users/mona/refresh",
+            "PUT /-/api/users/mona/pin",
             "PUT /-/api/pins",
             "PUT /-/api/token",
             "DELETE /-/api/history",
@@ -160,6 +162,7 @@ fn errors_say_nothing_of_how_buhtig_works() {
         ("PUT /-/api/pins", "", "{\"pins\": []}", 415),
         ("GET /-/api/repositories/%FF/repo", "", "", 400),
         ("GET /-/api/organizations/%C3%28", "", "", 400),
+        ("GET /-/api/users/%C3%28", "", "", 400),
     ] {
         let response = send(&running, request, headers, sent);
         assert_status(&response, status);

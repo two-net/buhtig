@@ -3,7 +3,7 @@ import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
 import { NavigationEnd, Router } from '@angular/router';
 import { filter, map, mergeMap, switchMap } from 'rxjs';
 import { Announcer } from '../live/announcer';
-import { Resource, dashboardPath } from '../search/parse';
+import { Known, Resource, dashboardPath } from '../search/parse';
 import { Session } from '../session/session';
 import { Personal } from '../shortcuts/personal';
 import { shortcutOf } from '../shortcuts/pick';
@@ -25,13 +25,19 @@ export interface Followed {
  * Follows what BuhTig knows of a dashboard's `resource`, as its URL names it: asked for again on
  * each refresh (FR-DATA-07). Called where `inject` works, as in a constructor.
  *
- * Once it knows how GitHub spells the names, the dashboard moves there, to the same tab, `at`
- * the canonical path, in place of the URL it was opened at (FR-NAV-04), and says so when the
- * resource was renamed or transferred (FR-NAV-05). Its view is then recorded in a signed-in
- * user's history, once per dashboard (FR-PERS-01), and assistive technology is told that it has
- * loaded. A refresh says what came of it, and keeps what was shown when nothing came instead.
+ * Once it knows how GitHub spells the names, and what kind of account one named alone is
+ * (FR-SRCH-06), the dashboard moves there, to the same tab, at the URL that `at` gives for the
+ * resource, in place of the URL it was opened at (FR-NAV-04), and says so when the resource was
+ * renamed or transferred (FR-NAV-05). A tab's URL may have a query, as a user's Repositories tab
+ * at `/{user}?tab=repositories` has; others in the URL go. Its view is then recorded in a
+ * signed-in user's history, once per dashboard (FR-PERS-01), and assistive technology is told
+ * that it has loaded. A refresh says what came of it, and keeps what was shown when nothing came
+ * instead.
  */
-export function followSummary(resource: Signal<Resource>, at: (path: string) => string): Followed {
+export function followSummary(
+  resource: Signal<Resource>,
+  at: (resource: Known) => string,
+): Followed {
   const router = inject(Router);
   const resources = inject(Resources);
   const personal = inject(Personal);
@@ -85,16 +91,18 @@ export function followSummary(resource: Signal<Resource>, at: (path: string) => 
       if (answer.path.toLowerCase() !== opened.toLowerCase()) {
         toasts.show(renamed(opened.slice(1), answer.path.slice(1)), 'info');
       }
-      toCanonical(answer.path);
+      if (answer.resource !== undefined) {
+        toCanonical(answer.resource);
+      }
     });
 
   /**
-   * Moves to the canonical URL of the dashboard at `path`, in place of the URL in the history, so
-   * that Back does not lead to it again, unless the dashboard is there already.
+   * Moves to the canonical URL of the dashboard of `known`, in place of the URL in the history,
+   * so that Back does not lead to it again, unless the dashboard is there already.
    */
-  function toCanonical(path: string): void {
-    const canonical = at(path);
-    if (canonical !== router.url.split(/[?#]/)[0]) {
+  function toCanonical(known: Known): void {
+    const canonical = at(known);
+    if (canonical !== located(router.url)) {
       void router.navigateByUrl(canonical, { replaceUrl: true });
     }
   }
@@ -107,23 +115,19 @@ export function followSummary(resource: Signal<Resource>, at: (path: string) => 
       takeUntilDestroyed(),
     )
     .subscribe(() => {
-      const path = summary()?.path;
-      const here = router.url.split(/[?#]/)[0];
-      if (path !== undefined && at(path).toLowerCase() === here.toLowerCase()) {
-        toCanonical(path);
+      const known = summary()?.resource;
+      if (known !== undefined && at(known).toLowerCase() === located(router.url).toLowerCase()) {
+        toCanonical(known);
       }
     });
 
-  // The resource, for a signed-in user, with the names as GitHub spells them, once BuhTig knows:
-  // what their history records. Not one that GitHub says is not there, or keeps from the viewer,
-  // which has no path.
+  // The resource, for a signed-in user, with the names as GitHub spells them, and of the kind
+  // GitHub tells, once BuhTig knows: what their history records. Not one that GitHub says is not
+  // there, or keeps from the viewer, which has none.
   const viewed = computed(
     () => {
-      const path = summary()?.path;
-      const current = resource();
-      return user() && path?.toLowerCase() === dashboardPath(current).toLowerCase()
-        ? resourceAt(path!, current.kind)
-        : undefined;
+      const known = summary()?.resource;
+      return user() && known !== undefined && same(known, resource()) ? known : undefined;
     },
     { equal: (a, b) => a === b || (a !== undefined && b !== undefined && same(a, b)) },
   );
@@ -138,16 +142,20 @@ export function followSummary(resource: Signal<Resource>, at: (path: string) => 
   return { summary, refreshing, retry: () => attempts.update((count) => count + 1) };
 }
 
-/** The resource of `kind` whose dashboard's path is `path`, such as `/owner/repo`. */
-function resourceAt(path: string, kind: Resource['kind']): Resource {
-  if (kind === 'organization') {
-    return { kind, org: path.slice(1) };
-  }
-  const [owner, repo] = path.slice(1).split('/');
-  return { kind, owner, repo };
-}
-
-/** Whether `a` and `b` are the same resource, whatever the letter case of their names. */
+/**
+ * Whether `a` and `b` are the same resource, whatever the letter case of their names. An account
+ * named alone is the same as the organization or the user of its name.
+ */
 export function same(a: Resource, b: Resource): boolean {
   return dashboardPath(a).toLowerCase() === dashboardPath(b).toLowerCase();
+}
+
+/**
+ * `url` as far as a dashboard's place goes: its path, and its `tab` query parameter, which a
+ * user's tab has (FR-NAV-01), but no other, nor a fragment.
+ */
+function located(url: string): string {
+  const [path, query = ''] = url.split('#')[0].split('?');
+  const tab = new URLSearchParams(query).get('tab');
+  return tab === null ? path : `${path}?${new URLSearchParams({ tab })}`;
 }

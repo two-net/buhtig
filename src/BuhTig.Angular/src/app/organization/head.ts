@@ -1,11 +1,11 @@
 import { Component, computed, inject, input, output } from '@angular/core';
 import { Avatar } from '../avatar/avatar';
-import { OrganizationData } from '../dashboard/data';
+import { AccountData } from '../dashboard/data';
 import { HeadActions } from '../dashboard/head-actions';
 import { Organization } from '../dashboard/resources';
 import { exactDay, exactNumber, exactTime } from '../format/format';
 import { Icon } from '../icon/icon';
-import { Resource } from '../search/parse';
+import { Known } from '../search/parse';
 import { ON_GITHUB_SINCE, VERIFIED, membersLabelOf } from './messages';
 
 /**
@@ -65,13 +65,13 @@ import { ON_GITHUB_SINCE, VERIFIED, membersLabelOf } from './messages';
   styles: '.org-av ::ng-deep .av { width: 100%; height: 100%; border-radius: inherit; }',
 })
 export class OrganizationHead {
-  private readonly membersLoader = inject(OrganizationData).members();
+  private readonly membersLoader = inject(AccountData).members();
 
   readonly organization = input.required<Organization>();
   readonly fetchedAt = input<Date | undefined>(undefined);
   readonly refreshed = output();
 
-  protected readonly resource = computed((): Resource => ({
+  protected readonly resource = computed((): Known => ({
     kind: 'organization',
     org: this.organization().login,
   }));

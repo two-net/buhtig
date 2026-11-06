@@ -374,6 +374,8 @@ impl View {
                 base
             }
             View::Organization(org) => {
+                // An account's dashboard asks which kind it is first.
+                calls.push(Call::get("account", format!("/-/api/accounts/{org}")));
                 let base = format!("/-/api/organizations/{org}");
                 calls.push(Call::get("organization", base.clone()));
                 for (widget, label) in ORGANIZATION_WIDGETS {
@@ -738,7 +740,8 @@ fn github(path: &str, query: &HashMap<String, String>) -> (u16, Option<String>, 
         ["users", login, "repos"] => ok((0..6)
             .map(|n| repository(login, &format!("repo-{n}"), n))
             .collect()),
-        ["orgs", org] => ok(organization(org)),
+        // The organizations, as the account's dashboard asks which kind each is.
+        ["users", org] | ["orgs", org] => ok(organization(org)),
         ["orgs", org, "repos"] => {
             let total = ORGANIZATIONS
                 .iter()

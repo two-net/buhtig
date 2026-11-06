@@ -12,18 +12,16 @@ import { Toasts } from '../toast/toasts';
 import {
   NOT_FOUND_OR_PRIVATE,
   NO_SUCH_NAME,
-  NO_USER_REPOSITORIES,
-  OPEN_A_REPOSITORY,
   OPEN_ON_GITHUB,
   REFRESH,
   REFRESHED,
   SSO_REQUIRED,
   TRY_LATER,
   UNAVAILABLE,
-  userAccount,
+  notFoundForVisitor,
 } from './messages';
 
-describe('OrganizationDashboard', () => {
+describe('AccountDashboard', () => {
   const NOW = new Date('2026-10-22T12:00:00Z').getTime();
   let harness: RouterTestingHarness;
   let http: HttpTestingController;
@@ -46,9 +44,9 @@ describe('OrganizationDashboard', () => {
   });
 
   afterEach(() => {
-    // Who is viewing is the header's own business, and what the parts of the organization show
-    // and the rows' sparklines are the tabs' own, which these tests leave to them, as they leave
-    // a signed-in user's pins and history to those that test them.
+    // Who is viewing is the header's own business, and what the parts of the account show and
+    // the rows' sparklines are the tabs' own, which these tests leave to them, as they leave a
+    // signed-in user's pins and history to those that test them.
     http.match('/-/api/session');
     http.match('/-/api/shortcuts');
     http.match((request) => request.method === 'POST' && request.url.endsWith('/view'));
@@ -57,10 +55,13 @@ describe('OrganizationDashboard', () => {
     http.verify();
   });
 
-  /** Whether `request` is for a part of an organization, such as `/-/api/organizations/org/stats`. */
+  /**
+   * Whether `request` is for a part of an organization or a user, such as
+   * `/-/api/organizations/org/stats`.
+   */
   const isPart = (request: HttpRequest<unknown>) =>
-    request.method === 'GET' && /^\/-\/api\/organizations\/[^/]+\/[^/]+$/.test(request.url);
-  /** The parts of organizations asked for since last asked, as their URLs. */
+    request.method === 'GET' && /^\/-\/api\/(organizations|users)\/[^/]+\/[^/]+$/.test(request.url);
+  /** The parts of accounts asked for since last asked, as their URLs. */
   const parts = () => http.match(isPart).map((request) => request.request.url);
 
   /** All that the server says of `acme` for its head. */
@@ -120,6 +121,20 @@ describe('OrganizationDashboard', () => {
     'last-push': { last_7_days: 1, last_30_days: 1, last_12_months: 1, older: 0 },
     'created-per-year': { years: [{ year: 2020, repositories: 3 }] },
   };
+  /** All that the server says of the user `mona` for their head. */
+  const MONA = {
+    name: 'mona',
+    fetched_at: '2026-10-22T11:58:00Z',
+    avatar_url: 'https://avatars.githubusercontent.com/u/2?v=4',
+    display_name: 'Mona Lisa',
+    bio: 'Paints <b>octocats</b>',
+    company: '@acme',
+    location: 'Paris',
+    website: 'https://mona.example/',
+    created_at: '2011-01-25T18:44:36Z',
+    followers: 12_345,
+    following: 1,
+  };
 
   const page = () => harness.routeNativeElement!;
   const main = () => page().querySelector('main')!;
@@ -146,26 +161,52 @@ describe('OrganizationDashboard', () => {
   const moves = () =>
     navigate.mock.calls.filter(([, extras]) => extras?.replaceUrl).map(([url]) => url);
 
+  /**
+   * Answers that the account `name` is of `type`, as the server says of an account named alone,
+   * as at `url`, but not at an organization's path, which says so already.
+   */
+  function tell(url: string, name: string, type = 'organization'): void {
+    if (!/^\/orgs\//i.test(url)) {
+      http.expectOne(`/-/api/accounts/${name}`).flush({ type, login: name.toLowerCase() });
+    }
+  }
+
   /** Opens `url`, and answers what the server says of the organization `org` with `answer`. */
   async function open(url: string, org: string, answer: object = ACME): Promise<void> {
     await harness.navigateByUrl(url);
+    tell(url, org);
     http.expectOne(`/-/api/organizations/${org}`).flush(answer);
+    await harness.fixture.whenStable();
+  }
+
+  /** Opens `url`, and answers what the server says of the user `login` with `answer`. */
+  async function openUser(url: string, login: string, answer: object = MONA): Promise<void> {
+    await harness.navigateByUrl(url);
+    tell(url, login, 'user');
+    http.expectOne(`/-/api/users/${login}`).flush(answer);
     await harness.fixture.whenStable();
   }
 
   /** Opens `url`, where the server says `status` of the organization `org`. */
   async function fail(url: string, org: string, status: number, body: object | null = null) {
     await harness.navigateByUrl(url);
+    tell(url, org);
     http.expectOne(`/-/api/organizations/${org}`).flush(body, { status, statusText: `${status}` });
     await harness.fixture.whenStable();
   }
 
-  /** Answers each part of `org` asked for, with what `PARTS` says. */
-  async function answerParts(org = 'acme'): Promise<string[]> {
+  /** Opens `url`, where the server says `status` of what the account `name` is. */
+  async function failToTell(url: string, name: string, status: number): Promise<void> {
+    await harness.navigateByUrl(url);
+    http.expectOne(`/-/api/accounts/${name}`).flush(null, { status, statusText: `${status}` });
+    await harness.fixture.whenStable();
+  }
+
+  /** Answers each part asked for, with what `PARTS` says. */
+  async function answerParts(): Promise<string[]> {
     const asked = http.match(isPart);
     for (const request of asked) {
-      const part = request.request.url.slice(`/-/api/organizations/${org}/`.length);
-      request.flush(PARTS[part]);
+      request.flush(PARTS[request.request.url.split('/').pop()!]);
     }
     await harness.fixture.whenStable();
     return asked.map((request) => request.request.url.split('/').pop()!);
@@ -209,6 +250,9 @@ describe('OrganizationDashboard', () => {
     expect(main().getAttribute('aria-busy')).toBe('true');
     expect(main().querySelector('.orghead[aria-hidden="true"] .skel')).not.toBeNull();
     expect(main().querySelector('app-organization-head')).toBeNull();
+    tell('/acme', 'acme');
+    await harness.fixture.whenStable();
+    expect(main().querySelector('.orghead[aria-hidden="true"] .skel')).not.toBeNull();
     http.expectOne('/-/api/organizations/acme').flush(ACME);
     await harness.fixture.whenStable();
     expect(main().getAttribute('aria-busy')).toBe('false');
@@ -282,6 +326,7 @@ describe('OrganizationDashboard', () => {
   });
 
   it('loads each part of the organization once, as the first tab that shows it asks', async () => {
+    // An organization's path says what it is, so its parts load at once.
     await harness.navigateByUrl('/orgs/acme/people');
     // What the tabs count, and the colors of languages, first, then what the tab shows.
     expect(await answerParts()).toEqual(['stats', 'members', 'languages']);
@@ -312,6 +357,25 @@ describe('OrganizationDashboard', () => {
     expect(main().querySelector('.people-grid a')!.textContent?.trim()).toBe('@mona');
     expect(parts()).toEqual([]);
     http.expectNone('/-/api/organizations/acme');
+    http.expectNone('/-/api/accounts/acme');
+  });
+
+  it('loads the parts of an account named alone once the server says what it is (FR-SRCH-06)', async () => {
+    await harness.navigateByUrl('/acme');
+    expect(parts()).toEqual([]);
+    tell('/acme', 'acme');
+    expect(parts()).toEqual([]);
+    http.expectOne('/-/api/organizations/acme').flush(ACME);
+    await harness.fixture.whenStable();
+    expect((await answerParts()).sort()).toEqual([
+      'created-per-year',
+      'languages',
+      'last-push',
+      'members',
+      'repositories',
+      'stats',
+      'top-repositories',
+    ]);
   });
 
   it('loads the parts of another organization as it moves there', async () => {
@@ -347,6 +411,7 @@ describe('OrganizationDashboard', () => {
     expect(main().classList).toContain('refreshing');
     expect(main().getAttribute('aria-busy')).toBe('true');
     expect(heading()).toBe('Acme Corp');
+    tell('/acme', 'acme');
     http.expectOne('/-/api/organizations/acme').flush({ ...ACME, display_name: 'Acme Inc' });
     await harness.fixture.whenStable();
     expect(main().classList).not.toContain('refreshing');
@@ -382,75 +447,205 @@ describe('OrganizationDashboard', () => {
     ]);
   });
 
-  it("offers a user's repositories when the name is a user's (FR-SRCH-06)", async () => {
-    await fail('/mona', 'mona', 404);
-    expect(main().querySelector('.sr')!.textContent).toBe('Loading…');
-    http.expectOne('/-/api/accounts/mona').flush({ type: 'user', login: 'mona' });
-    await harness.fixture.whenStable();
-    http.expectOne('/-/api/users/mona/repositories').flush({
-      repositories: [{ name: 'mona/dotfiles' }, { name: '../evil' }, { name: 'mona/blog' }],
+  describe("a user's", () => {
+    it('heads the dashboard with what the server says of the user (FR-SRCH-06, FR-USER-01)', async () => {
+      await openUser('/mona', 'mona');
+      const head = main().querySelector('app-user-head')!;
+      expect(main().querySelector('app-organization-head')).toBeNull();
+      expect(heading()).toBe('Mona Lisa');
+      expect(head.querySelector('.login')!.textContent?.trim()).toBe('mona');
+      // As plain text, as all GitHub says (NFR-SEC-03).
+      expect(head.querySelector('.oh-desc')!.textContent?.trim()).toBe('Paints <b>octocats</b>');
+      expect(head.querySelector('.oh-desc b')).toBeNull();
+      const avatar = head.querySelector('img')!;
+      expect(avatar.getAttribute('src')).toBe(MONA.avatar_url);
+      expect(avatar.classList).toContain('round');
+      expect([...head.querySelectorAll('.rmeta > *')].map((item) => shown(item))).toEqual([
+        '12.3K followers',
+        '1 following',
+        '@acme',
+        'Paris',
+        'mona.example',
+        `Joined ${exactDay(new Date(MONA.created_at))}`,
+      ]);
+      expect(head.querySelector('.rmeta a')!.getAttribute('href')).toBe('https://mona.example/');
+      const github = [...head.querySelectorAll('a')].find(
+        (link) => link.textContent?.trim() === OPEN_ON_GITHUB,
+      )!;
+      expect(github.getAttribute('href')).toBe('https://github.com/mona');
     });
-    await harness.fixture.whenStable();
-    expect(heading()).toBe(userAccount('mona'));
-    expect(main().textContent).toContain(OPEN_A_REPOSITORY);
-    expect(
-      [...main().querySelectorAll('a.chip')].map((chip) => [
-        chip.textContent?.trim(),
-        chip.getAttribute('href'),
-      ]),
-    ).toEqual([
-      ['mona/dotfiles', '/mona/dotfiles'],
-      ['mona/blog', '/mona/blog'],
-    ]);
-    const again = main().querySelector('a.btn')!;
-    expect([again.textContent?.trim(), again.getAttribute('href')]).toEqual(['Search again', '/']);
-    // Nothing of an organization's.
-    expect(page().querySelector('.unav')).toBeNull();
-    expect(main().querySelector('app-organization-overview')).toBeNull();
+
+    it("names a user without a display name by their login, and leaves out what they don't say", async () => {
+      await openUser('/mona', 'mona', { name: 'mona' });
+      const head = main().querySelector('app-user-head')!;
+      expect(heading()).toBe('mona');
+      expect(head.querySelector('.login, .oh-desc, img, .rmeta a, time')).toBeNull();
+      expect([...head.querySelectorAll('.rmeta > *')].map((item) => shown(item))).toEqual([
+        '0 followers',
+        '0 following',
+      ]);
+    });
+
+    it('has tabs for their overview and repositories, at the query GitHub has (FR-NAV-01)', async () => {
+      await openUser('/mona', 'mona');
+      expect(tabs()).toEqual([
+        ['Overview', '/mona', 'page', undefined],
+        ['Repositories', '/mona?tab=repositories', null, undefined],
+      ]);
+      await answerParts();
+      expect(tabs()).toEqual([
+        ['Overview', '/mona', 'page', undefined],
+        ['Repositories', '/mona?tab=repositories', null, '312'],
+      ]);
+    });
+
+    it('loads their parts under their own URL, and no members, which a user has none of', async () => {
+      await openUser('/mona', 'mona');
+      expect(parts().sort()).toEqual(
+        [
+          'created-per-year',
+          'languages',
+          'last-push',
+          'repositories',
+          'stats',
+          'top-repositories',
+        ].map((part) => `/-/api/users/mona/${part}`),
+      );
+      expect(main().querySelector('app-organization-overview')).not.toBeNull();
+      expect(main().querySelector('section[aria-labelledby="people-heading"]')).toBeNull();
+    });
+
+    it('opens their repositories at the query of the tab, and moves between tabs in place', async () => {
+      await openUser('/mona?tab=repositories', 'mona');
+      expect(main().querySelector('app-organization-repositories-tab')).not.toBeNull();
+      expect(tab('Repositories').getAttribute('aria-current')).toBe('page');
+      expect(moves()).toEqual([]);
+      await answerParts();
+
+      tab('Overview').click();
+      await vi.waitFor(() => expect(router.url).toBe('/mona'));
+      await harness.fixture.whenStable();
+      expect(main().querySelector('app-organization-overview')).not.toBeNull();
+      // What the overview alone shows, first asked for now.
+      expect((await answerParts()).sort()).toEqual([
+        'created-per-year',
+        'last-push',
+        'top-repositories',
+      ]);
+      tab('Repositories').click();
+      await vi.waitFor(() => expect(router.url).toBe('/mona?tab=repositories'));
+      await harness.fixture.whenStable();
+      expect(main().querySelector('app-organization-repositories-tab')).not.toBeNull();
+      // The same user, so nothing to ask again.
+      http.expectNone('/-/api/accounts/mona');
+      http.expectNone('/-/api/users/mona');
+      expect(parts()).toEqual([]);
+    });
+
+    it("moves to GitHub's spelling of their login, keeping the tab (FR-NAV-04)", async () => {
+      await openUser('/Mona?tab=repositories', 'Mona');
+      await vi.waitFor(() => expect(router.url).toBe('/mona?tab=repositories'));
+      expect(moves()).toEqual(['/mona?tab=repositories']);
+    });
+
+    it('moves from one of their tabs on GitHub that BuhTig does not show to the overview (FR-NAV-02)', async () => {
+      await openUser('/mona?tab=stars', 'mona');
+      await vi.waitFor(() => expect(router.url).toBe('/mona'));
+      expect(moves()).toEqual(['/mona']);
+      expect(main().querySelector('app-organization-overview')).not.toBeNull();
+    });
+
+    it("takes an organization's path that names a user to the user's own (FR-NAV-02)", async () => {
+      await harness.navigateByUrl('/orgs/mona/repositories');
+      http
+        .expectOne('/-/api/organizations/mona')
+        .flush(null, { status: 404, statusText: 'Not Found' });
+      tell('/mona', 'mona', 'user');
+      http.expectOne('/-/api/users/mona').flush(MONA);
+      await harness.fixture.whenStable();
+      await vi.waitFor(() => expect(router.url).toBe('/mona?tab=repositories'));
+      expect(heading()).toBe('Mona Lisa');
+      // The organization's parts it asked for while it took it for one, then the user's.
+      expect(parts().filter((url) => url.startsWith('/-/api/users/mona/'))).not.toEqual([]);
+    });
+
+    it('records the view as of a user, for a signed-in user (FR-PERS-01)', async () => {
+      await openUser('/mona', 'mona');
+      await session({ login: 'hubot', name: null, avatar_url: 'https://example.com/hubot.png' });
+      http.expectOne({ method: 'POST', url: '/-/api/users/mona/view' }).flush(null);
+    });
+
+    it('refreshes and pins as a user (FR-DATA-07, FR-PERS-02)', async () => {
+      await openUser('/mona', 'mona');
+      await answerParts();
+      await session({ login: 'hubot', name: null, avatar_url: 'https://example.com/hubot.png' });
+      const refresh = [...main().querySelectorAll('button')].find(
+        (button) => button.textContent?.trim() === REFRESH,
+      )!;
+      refresh.click();
+      http
+        .expectOne({ method: 'POST', url: '/-/api/users/mona/refresh' })
+        .flush(null, { status: 204, statusText: 'No Content' });
+      await harness.fixture.whenStable();
+      tell('/mona', 'mona', 'user');
+      http.expectOne('/-/api/users/mona').flush(MONA);
+      await harness.fixture.whenStable();
+      // Each part once, and no members.
+      expect((await answerParts()).sort()).toEqual([
+        'created-per-year',
+        'languages',
+        'last-push',
+        'repositories',
+        'stats',
+        'top-repositories',
+      ]);
+    });
   });
 
-  it('says when a user has no public repositories, or BuhTig cannot list them', async () => {
-    await fail('/mona', 'mona', 404);
-    http.expectOne('/-/api/accounts/mona').flush({ type: 'user', login: 'mona' });
+  it('says when it could not tell what an account named alone is, and asks again (FR-DATA-05)', async () => {
+    await failToTell('/acme', 'acme', 503);
+    expect(heading()).toBe(UNAVAILABLE);
+    expect(page().querySelector('.unav')).toBeNull();
+    expect(parts()).toEqual([]);
+    main().querySelector<HTMLButtonElement>('app-failure button')!.click();
     await harness.fixture.whenStable();
-    http.expectOne('/-/api/users/mona/repositories').flush({ repositories: [] });
+    tell('/acme', 'acme');
+    http.expectOne('/-/api/organizations/acme').flush(ACME);
     await harness.fixture.whenStable();
-    expect(main().textContent).toContain(NO_USER_REPOSITORIES);
-    expect(main().querySelector('a.chip')).toBeNull();
+    expect(heading()).toBe('Acme Corp');
+  });
 
-    await fail('/octocat', 'octocat', 404);
-    http.expectOne('/-/api/accounts/octocat').flush({ type: 'user', login: 'octocat' });
-    await harness.fixture.whenStable();
-    http
-      .expectOne('/-/api/users/octocat/repositories')
-      .flush(null, { status: 502, statusText: 'Bad Gateway' });
-    await harness.fixture.whenStable();
-    expect(heading()).toBe(userAccount('octocat'));
-    expect(main().textContent).toContain(NO_USER_REPOSITORIES);
+  it('shows nothing of an account that GitHub says is not there (FR-ACC-05)', async () => {
+    await failToTell('/acme', 'acme', 404);
+    await session(null);
+    expect(heading()).toBe(NOT_FOUND_OR_PRIVATE);
+    expect(main().textContent).toContain(notFoundForVisitor('account', 'acme'));
+    expect(page().querySelector('.unav')).toBeNull();
+    expect(main().querySelector('app-organization-head, app-user-head, .orghead')).toBeNull();
+    http.expectNone('/-/api/organizations/acme');
+    http.expectNone('/-/api/users/acme');
   });
 
   it('shows nothing of an organization that GitHub says is not there, or keeps from the viewer (FR-ACC-05)', async () => {
-    await fail('/acme', 'acme', 404);
+    await fail('/orgs/acme/people', 'acme', 404);
     http.expectOne('/-/api/accounts/acme').flush(null, { status: 404, statusText: 'Not Found' });
     // What the viewer can do about it depends on who they are.
     await session(null);
     expect(heading()).toBe(NOT_FOUND_OR_PRIVATE);
-    expect(main().textContent).toContain('called acme');
+    expect(main().textContent).toContain(notFoundForVisitor('organization', 'acme'));
     expect(page().querySelector('.unav')).toBeNull();
     expect(main().querySelector('app-organization-head, .orghead')).toBeNull();
 
-    // Nor of one GitHub says is an organization after all.
+    // Nor of one GitHub says is an organization after all, at its own URL.
     await fail('/other', 'other', 404);
-    http.expectOne('/-/api/accounts/other').flush({ type: 'organization', login: 'other' });
-    await harness.fixture.whenStable();
     expect(heading()).toBe(NOT_FOUND_OR_PRIVATE);
   });
 
-  it('says when its name cannot be an organization’s, without asking what account it is (FR-SRCH-04)', async () => {
-    await fail('/acme', 'acme', 400);
+  it('says when its name cannot be an account’s, as the server says without asking GitHub (FR-SRCH-04)', async () => {
+    await failToTell('/acme', 'acme', 400);
     expect(heading()).toBe(NO_SUCH_NAME);
     expect(page().querySelector('.unav')).toBeNull();
-    http.expectNone('/-/api/accounts/acme');
+    http.expectNone('/-/api/organizations/acme');
   });
 
   it('says when it could not load the organization, and tries again (FR-DATA-05)', async () => {
@@ -460,6 +655,7 @@ describe('OrganizationDashboard', () => {
     expect(page().querySelector('.unav')).toBeNull();
     main().querySelector<HTMLButtonElement>('app-failure button')!.click();
     await harness.fixture.whenStable();
+    tell('/acme', 'acme');
     http.expectOne('/-/api/organizations/acme').flush(ACME);
     await harness.fixture.whenStable();
     expect(heading()).toBe('Acme Corp');

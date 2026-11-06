@@ -65,11 +65,13 @@ pub enum Viewer {
         user_id: i64,
         sign_in: Secret<String>,
     },
-    /// A token user: their PAT, and their private cache. `user_id` is their `users.id`, and
+    /// A token user: their PAT, and their private cache. `user_id` is their `users.id`,
+    /// `github_id` their GitHub account's ID, which is also the PAT's (FR-PAT-02), and
     /// `credential_id` their PAT's. Their sign-in credential takes over once GitHub rejects
     /// the PAT (FR-PAT-07).
     TokenUser {
         user_id: i64,
+        github_id: i64,
         credential_id: i64,
         pat: Secret<String>,
         sign_in: Secret<String>,
@@ -198,8 +200,19 @@ pub struct Cache {
     refreshes: Mutex<HashMap<(Scope, String), DateTimeUtc>>,
     /// How much visitors may still fetch from GitHub (FR-DATA-10, FR-DATA-11).
     visitors: Visitors,
-    /// The most repositories read for an organization (FR-ORG-08).
+    /// The most repositories read for an organization or a user (FR-ORG-08, FR-USER-05).
     org_repositories: usize,
+}
+
+/// Whose credentials a lookup may read with.
+#[derive(Clone, Copy)]
+enum Lookup {
+    /// The viewer's, and once GitHub rejects a token user's PAT, their sign-in credential
+    /// (FR-PAT-07).
+    Fallback,
+    /// The viewer's alone, for data about the viewer themselves: see
+    /// [`Cache::get_own_list_of`].
+    PatOnly,
 }
 
 /// What to read from GitHub.
@@ -397,8 +410,8 @@ impl Cache {
         }
     }
 
-    /// The most repositories that an organization's dashboard reads, the most recently
-    /// pushed (FR-ORG-08): `limits.org_repositories`.
+    /// The most repositories that an organization's or a user's dashboard reads, the most
+    /// recently pushed (FR-ORG-08, FR-USER-05): `limits.org_repositories`.
     pub fn org_repositories(&self) -> usize {
         self.org_repositories
     }
@@ -408,7 +421,7 @@ impl Cache {
     ///
     /// Only for data that is the same for everyone who may see it. Data about the
     /// viewer, such as `/user`, must not be read through the cache: a signed-in user's
-    /// would be shared.
+    /// would be shared. [`Cache::get_own_list_of`] alone reads such data, for token users.
     pub async fn get(
         &self,
         viewer: &Viewer,
@@ -461,7 +474,35 @@ impl Cache {
         limit: usize,
         fields: &[&str],
     ) -> Result<Outcome<List>, Error> {
-        self.list(viewer, dashboard, path, limit, fields, &ChronoUtc::now)
+        self.list(
+            viewer,
+            dashboard,
+            path,
+            limit,
+            fields,
+            Lookup::Fallback,
+            &ChronoUtc::now,
+        )
+        .await
+    }
+
+    /// Up to `limit` items of a list about the viewer themselves, such as their own private
+    /// repositories at `/user/repos`, as [`Cache::get_list_of`], for a token user alone.
+    ///
+    /// Such a list is read with their PAT only, and kept in their private cache. It is not
+    /// read with their sign-in credential, even once GitHub rejects the PAT (FR-PAT-07):
+    /// that would put it in the shared cache, under a key that names no one, for everyone to
+    /// be served (FR-DATA-04, FR-ACC-06). The rejection is the answer instead. For anyone
+    /// else, it is not found, and GitHub is not asked.
+    pub async fn get_own_list_of(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+        limit: usize,
+        fields: &[&str],
+    ) -> Result<Outcome<List>, Error> {
+        self.own_list(viewer, dashboard, path, limit, fields, &ChronoUtc::now)
             .await
     }
 
@@ -621,7 +662,7 @@ impl Cache {
         }
     }
 
-    async fn list(
+    async fn own_list(
         &self,
         viewer: &Viewer,
         dashboard: &str,
@@ -630,12 +671,46 @@ impl Cache {
         fields: &[&str],
         clock: &Clock,
     ) -> Result<Outcome<List>, Error> {
+        debug_assert!(
+            path.to_string().starts_with("/user/"),
+            "{path} is not about the viewer"
+        );
+        if !matches!(viewer, Viewer::TokenUser { .. }) {
+            return Err(Error::GitHub(github::Error::NotFound));
+        }
+        self.list(
+            viewer,
+            dashboard,
+            path,
+            limit,
+            fields,
+            Lookup::PatOnly,
+            clock,
+        )
+        .await
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "each is one of the list's")]
+    async fn list(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+        limit: usize,
+        fields: &[&str],
+        lookup: Lookup,
+        clock: &Clock,
+    ) -> Result<Outcome<List>, Error> {
         let fetch = Fetch::List {
             path,
             limit,
             fields,
         };
-        match self.lookup(viewer, dashboard, fetch, clock).await? {
+        let found = match lookup {
+            Lookup::Fallback => self.lookup(viewer, dashboard, fetch, clock).await,
+            Lookup::PatOnly => self.lookup_as(viewer, dashboard, fetch, clock).await,
+        };
+        match found? {
             Outcome::Computing => Ok(Outcome::Computing),
             Outcome::Data(Cached {
                 data,
@@ -1449,7 +1524,27 @@ mod tests {
             fields: &[&str],
             now: DateTimeUtc,
         ) -> Result<Outcome<List>, Error> {
-            self.list(viewer, dashboard, path, limit, fields, &move || now)
+            self.list(
+                viewer,
+                dashboard,
+                path,
+                limit,
+                fields,
+                Lookup::Fallback,
+                &move || now,
+            )
+            .await
+        }
+
+        /// [`Cache::get_own_list_of`] at `now`.
+        async fn get_own_list_at(
+            &self,
+            viewer: &Viewer,
+            dashboard: &str,
+            path: &Path,
+            now: DateTimeUtc,
+        ) -> Result<Outcome<List>, Error> {
+            self.own_list(viewer, dashboard, path, 100, &[], &move || now)
                 .await
         }
 
@@ -1527,6 +1622,7 @@ mod tests {
         fn alice(&self) -> Viewer {
             Viewer::TokenUser {
                 user_id: self.alice,
+                github_id: 1,
                 credential_id: self.alice_pat,
                 pat: Secret::new("pat-alice".to_owned()),
                 sign_in: Secret::new("sign-in-alice".to_owned()),
@@ -1536,6 +1632,7 @@ mod tests {
         fn bob(&self) -> Viewer {
             Viewer::TokenUser {
                 user_id: self.bob,
+                github_id: 2,
                 credential_id: self.bob_pat,
                 pat: Secret::new("pat-bob".to_owned()),
                 sign_in: Secret::new("sign-in-bob".to_owned()),
@@ -2171,6 +2268,92 @@ mod tests {
                 (Scope::Shared.key(), None)
             ]
         );
+    }
+
+    /// The private repositories of the viewer themselves, which GitHub lists to their own
+    /// credentials alone, under a path that names no one.
+    fn own_repositories() -> Path {
+        path(&["user", "repos"])
+            .query("affiliation", "owner")
+            .query("visibility", "private")
+    }
+
+    #[tokio::test]
+    async fn lists_about_the_viewer_are_read_with_their_pat_alone_and_kept_private() {
+        let setup = setup().await;
+        setup.answer(|request| match header(request, AUTHORIZATION) {
+            Some("Bearer pat-alice") => answer(
+                200,
+                &[],
+                r#"[{"name": "diary", "private": true, "visibility": "private"}]"#,
+            ),
+            _ => answer(200, &[], r#"[{"name": "blog", "private": false}]"#),
+        });
+
+        let own = data(
+            setup
+                .cache
+                .get_own_list_at(&setup.alice(), "/alice", &own_repositories(), at(0))
+                .await,
+        );
+        assert_eq!(
+            own.data.items,
+            [json!({"name": "diary", "private": true, "visibility": "private"})]
+        );
+        let rows: Vec<_> = setup
+            .rows()
+            .await
+            .into_iter()
+            .map(|row| (row.scope, row.credential_id, row.resource_key))
+            .collect();
+        assert_eq!(
+            rows,
+            [(
+                Scope::User(setup.alice).key(),
+                Some(setup.alice_pat),
+                "/user/repos?affiliation=owner&visibility=private limit=100".to_owned()
+            )]
+        );
+
+        // Anyone without a PAT has no such list, and GitHub is not asked for it.
+        for viewer in [visitor(), signed_in("sign-in-alice")] {
+            let error = github_error(
+                setup
+                    .cache
+                    .get_own_list_at(&viewer, "/alice", &own_repositories(), at(1))
+                    .await,
+            );
+            assert_eq!(error, github::Error::NotFound);
+        }
+        assert_eq!(setup.sent(), ["Bearer pat-alice"]);
+    }
+
+    #[tokio::test]
+    async fn a_list_about_the_viewer_is_never_read_with_their_sign_in_credential() {
+        let setup = setup().await;
+        // Her sign-in credential would get a list of her own too, which, shared, would be
+        // served to anyone who asked for the same path.
+        setup.answer(|request| match header(request, AUTHORIZATION) {
+            Some("Bearer pat-alice") => answer(401, &[], r#"{"message":"Bad credentials"}"#),
+            _ => answer(200, &[], r#"[{"name": "blog", "private": false}]"#),
+        });
+
+        let error = github_error(
+            setup
+                .cache
+                .get_own_list_at(&setup.alice(), "/alice", &own_repositories(), at(0))
+                .await,
+        );
+        assert_eq!(error, github::Error::BadCredentials);
+        assert_eq!(setup.sent(), ["Bearer pat-alice"]);
+        assert!(setup.rows().await.is_empty());
+        // Her PAT is marked invalid all the same, for her to replace (FR-PAT-07).
+        let pat = credential::Entity::find_by_id(setup.alice_pat)
+            .one(&setup.db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pat.status, Some(credential::PatStatus::Invalid));
     }
 
     #[tokio::test]

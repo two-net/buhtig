@@ -1,6 +1,19 @@
-/** A GitHub resource that BuhTig has a dashboard for. */
+/**
+ * A GitHub resource that BuhTig has a dashboard for: a repository, an organization or a user. An
+ * account named alone, as in `github.com/name`, may be an organization or a user, which only
+ * GitHub can tell (FR-SRCH-06).
+ */
 export type Resource =
-  { kind: 'repository'; owner: string; repo: string } | { kind: 'organization'; org: string };
+  | { kind: 'repository'; owner: string; repo: string }
+  | { kind: 'organization'; org: string }
+  | { kind: 'user'; login: string }
+  | { kind: 'account'; name: string };
+
+/** A resource of a kind that BuhTig knows: any but an account that GitHub has yet to tell of. */
+export type Known = Exclude<Resource, { kind: 'account' }>;
+
+/** An account of a kind that BuhTig knows, which owns repositories. */
+export type Owner = Extract<Resource, { kind: 'organization' } | { kind: 'user' }>;
 
 /** Why an input names no resource. */
 export type Problem =
@@ -30,22 +43,27 @@ const ACCOUNT = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,38}$/;
  */
 const REPOSITORY = /^[A-Za-z0-9._-]{1,100}$/;
 
-/** How the forms of SRS Table 4-1 begin, up to an organization's name, in lowercase. */
-const BEGINNINGS = [
-  'https://github.com/orgs/',
-  'https://www.github.com/orgs/',
-  'http://github.com/orgs/',
-  'http://www.github.com/orgs/',
-  'github.com/orgs/',
-  'www.github.com/orgs/',
-  'ssh://git@github.com/orgs/',
-  'git@github.com:orgs/',
-  'orgs/',
-];
+/**
+ * How the forms of SRS Table 4-1 begin, up to an organization's or a user's name, in lowercase.
+ */
+const BEGINNINGS = ['orgs/', 'users/'].flatMap((below) =>
+  [
+    'https://github.com/',
+    'https://www.github.com/',
+    'http://github.com/',
+    'http://www.github.com/',
+    'github.com/',
+    'www.github.com/',
+    'ssh://git@github.com/',
+    'git@github.com:',
+    '',
+  ].map((start) => start + below),
+);
 
 /**
- * The repository or organization that `input` names, in any of the forms of SRS Table 4-1, or
- * why it names none (FR-SRCH-01, FR-SRCH-02, FR-SRCH-04, FR-SRCH-05).
+ * The repository, organization, user or account that `input` names, in any of the forms of SRS
+ * Table 4-1, or why it names none (FR-SRCH-01, FR-SRCH-02, FR-SRCH-04, FR-SRCH-05). An account
+ * named alone may be an organization or a user, which GitHub tells (FR-SRCH-06).
  */
 export function parse(input: string): Parsed {
   const text = input.trim().split(/[?#]/)[0];
@@ -60,14 +78,18 @@ export function parse(input: string): Parsed {
     return problem({ kind: 'not-github' });
   }
   const segments = location.path.split('/').filter((segment) => segment !== '');
-  if (segments[0]?.toLowerCase() === 'orgs') {
-    return segments.length > 1 ? organization(segments[1]) : problem({ kind: 'unrecognized' });
+  // GitHub's pages of an organization, and of a user, such as their projects.
+  const below = segments[0]?.toLowerCase();
+  if (below === 'orgs' || below === 'users') {
+    return segments.length > 1
+      ? account(segments[1], below === 'orgs' ? 'organization' : 'user')
+      : problem({ kind: 'unrecognized' });
   }
   switch (segments.length) {
     case 0:
       return problem({ kind: 'unrecognized' });
     case 1:
-      return organization(segments[0]);
+      return account(segments[0], 'account');
     default:
       // Deeper paths, such as `/tree/main` or `/pull/42`, are parts of the repository.
       return repository(segments[0], segments[1]);
@@ -86,9 +108,16 @@ export function isUnfinished(input: string): boolean {
 
 /** The dashboard's path (FR-NAV-01). Names need no escaping: they are letters, digits and `._-`. */
 export function dashboardPath(resource: Resource): string {
-  return resource.kind === 'repository'
-    ? `/${resource.owner}/${resource.repo}`
-    : `/${resource.org}`;
+  switch (resource.kind) {
+    case 'repository':
+      return `/${resource.owner}/${resource.repo}`;
+    case 'organization':
+      return `/${resource.org}`;
+    case 'user':
+      return `/${resource.login}`;
+    case 'account':
+      return `/${resource.name}`;
+  }
 }
 
 /**
@@ -123,10 +152,19 @@ function host(authority: string): string {
   return host.startsWith('www.') ? host.slice('www.'.length) : host;
 }
 
-function organization(org: string): Parsed {
-  return ACCOUNT.test(org)
-    ? { ok: true, resource: { kind: 'organization', org } }
-    : problem({ kind: 'bad-account', name: org });
+/** The account `name`, of `kind` if the form names it, or else of a kind that GitHub tells. */
+function account(name: string, kind: 'organization' | 'user' | 'account'): Parsed {
+  if (!ACCOUNT.test(name)) {
+    return problem({ kind: 'bad-account', name });
+  }
+  switch (kind) {
+    case 'organization':
+      return { ok: true, resource: { kind, org: name } };
+    case 'user':
+      return { ok: true, resource: { kind, login: name } };
+    case 'account':
+      return { ok: true, resource: { kind, name } };
+  }
 }
 
 function repository(owner: string, name: string): Parsed {

@@ -3,7 +3,7 @@ import { Home } from './home/home';
 import {
   ORGANIZATION_TABS,
   REPOSITORY_TABS,
-  organizationMatcher,
+  accountMatcher,
   repositoryMatcher,
 } from './dashboard/tabs';
 import { TITLES, dashboardTitle } from './messages';
@@ -15,8 +15,7 @@ import { TITLES, dashboardTitle } from './messages';
  */
 const repository = () =>
   import('./dashboard/repository').then((module) => module.RepositoryDashboard);
-const organization = () =>
-  import('./dashboard/organization').then((module) => module.OrganizationDashboard);
+const account = () => import('./dashboard/account').then((module) => module.AccountDashboard);
 
 const notFound = () => import('./not-found/not-found').then((module) => module.NotFound);
 
@@ -63,12 +62,14 @@ export const routes: Routes = [
     ],
   },
   // A dashboard and its tabs, at the paths of the matching pages on GitHub (FR-NAV-01). Moving
-  // between tabs keeps the dashboard, and what it has loaded.
+  // between tabs keeps the dashboard, and what it has loaded. A user's tabs differ by their query,
+  // `?tab=repositories`, which the title follows too.
   {
-    matcher: organizationMatcher,
-    loadComponent: organization,
-    title: organizationTitle,
+    matcher: accountMatcher,
+    loadComponent: account,
+    title: accountTitle,
     data: { preload: true },
+    runGuardsAndResolvers: 'paramsOrQueryParamsChange',
   },
   {
     matcher: repositoryMatcher,
@@ -91,9 +92,15 @@ function repositoryTitle(route: ActivatedRouteSnapshot): string {
   return dashboardTitle(`${params.get('owner')}/${params.get('repo')}`, tab?.label);
 }
 
-/** "{org} · BuhTig", after the tab's name unless it is the overview (UI-04). */
-function organizationTitle(route: ActivatedRouteSnapshot): string {
+/**
+ * "{org} · BuhTig" or "{user} · BuhTig", after the tab's name unless it is the overview (UI-04):
+ * the tab in an organization's path, or `?tab=repositories`, as a user's has.
+ */
+function accountTitle(route: ActivatedRouteSnapshot): string {
   const params = route.paramMap;
-  const tab = ORGANIZATION_TABS.find(({ tab }) => tab === params.get('tab'));
-  return dashboardTitle(params.get('org') ?? '', tab?.label);
+  const named =
+    params.get('tab') ??
+    (route.queryParamMap.get('tab') === 'repositories' ? 'repositories' : 'overview');
+  const tab = ORGANIZATION_TABS.find(({ tab }) => tab === named);
+  return dashboardTitle(params.get('name') ?? '', tab?.label);
 }

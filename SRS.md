@@ -29,9 +29,9 @@ This document specifies what BuhTig must do and the constraints it must respect.
 
 ### 1.2 Product scope
 
-BuhTig turns a GitHub URL into an animated dashboard. On a minimalist, search-engine-style home page, a user pastes a repository URL (e.g., `https://github.com/owner/repo`) or an organization URL (e.g., `https://github.com/org`) into a single box and presses Enter. BuhTig then shows activity, contributors, languages, issues, pull requests, and releases at a glance.
+BuhTig turns a GitHub URL into an animated dashboard. On a minimalist, search-engine-style home page, a user pastes a repository URL (e.g., `https://github.com/owner/repo`) or an account URL, an organization's or a user's (e.g., `https://github.com/org`), into a single box and presses Enter. BuhTig then shows activity, contributors, languages, issues, pull requests, and releases at a glance.
 
-Anyone can explore public repositories and organizations without an account. Signing in with GitHub adds personal features. A signed-in user may also add a personal access token, so that BuhTig can show the private repositories and organization data that token can see. Alternatively, an operator can run the whole instance in private mode, where every page requires sign-in.
+Anyone can explore public repositories, organizations and users without an account. Signing in with GitHub adds personal features. A signed-in user may also add a personal access token, so that BuhTig can show the private repositories and organization data that token can see, and their own private repositories on their own dashboard. Alternatively, an operator can run the whole instance in private mode, where every page requires sign-in.
 
 **Goals**
 
@@ -46,7 +46,7 @@ BuhTig is read-only: it never changes anything on GitHub. Its name is "GitHub" s
 
 | Term | Meaning |
 |---|---|
-| Resource | A GitHub repository or organization that BuhTig can show a dashboard for. |
+| Resource | A GitHub repository, organization or user that BuhTig can show a dashboard for. An organization or a user is an *account*. |
 | Dashboard | The BuhTig page that visualizes one resource. |
 | Visitor | Someone using BuhTig without signing in. |
 | Signed-in user | Someone signed in to BuhTig with their GitHub account. |
@@ -105,8 +105,8 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 
 ### 2.2 Product functions
 
-- **Search:** one box that takes a repository or organization URL (§4.1, §4.2).
-- **Dashboards:** animated views of a repository (§4.3) or an organization (§4.4).
+- **Search:** one box that takes a repository, organization or user URL (§4.1, §4.2).
+- **Dashboards:** animated views of a repository (§4.3), or of an organization or a user (§4.4).
 - **Accounts:** sign-in with GitHub (§4.5) and an optional personal access token (§4.6).
 - **Access:** public and private access rules and modes (§4.7).
 - **Personal shortcuts:** history and pinned dashboards (§4.8).
@@ -118,9 +118,9 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 
 | Class | What they can access | Typical goal |
 |---|---|---|
-| Visitor | Public mode only. Dashboards of public repositories and organizations, with public data only. | Size up a project before using or contributing to it. |
+| Visitor | Public mode only. Dashboards of public repositories, organizations and users, with public data only. | Size up a project before using or contributing to it. |
 | Signed-in user | Everything a visitor can, plus history, pins, and manual refresh. GitHub requests count against the user's own rate limit. Still public data only. | Keep an eye on projects they care about. |
-| Token user | Everything a signed-in user can, plus private and internal repositories and organization data their PAT can access. | Monitor their team's private repositories. |
+| Token user | Everything a signed-in user can, plus private and internal repositories and organization data their PAT can access, and their own private repositories on their own dashboard. | Monitor their team's private repositories. |
 | Operator | No in-app role. Controls the instance through the config file and the database. | Run BuhTig with minimal effort. |
 
 ### 2.4 Operating environment
@@ -221,7 +221,7 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | UI-01 | Every screen shall have one obvious primary action, generous whitespace, and a restrained palette. | Must |
 | UI-02 | A visitor's home page shall center the BuhTig wordmark, the search box, and a primary "Show dashboard" button, with "Surprise me" (FR-SRCH-10) and repositories to try (FR-SRCH-11) below. A signed-in user's home page shall show the search box with their shortcuts beside it (FR-SRCH-08). The top-right corner shall hold "Sign in" or, when signed in, the user's avatar with a menu (Home, Settings, Sign out) that says whether BuhTig has a personal access token of theirs. | Must |
 | UI-03 | The dashboard header shall show the wordmark (linking home), breadcrumbs of the resource, the search box pre-filled with the current resource, and "Sign in" or the avatar menu. Below it, the dashboard's tabs shall show how many items each has, once known. | Must |
-| UI-04 | Page titles shall be "BuhTig" on the home page and "{owner}/{repo} · BuhTig" or "{org} · BuhTig" on dashboards. | Must |
+| UI-04 | Page titles shall be "BuhTig" on the home page and "{owner}/{repo} · BuhTig", "{org} · BuhTig" or "{user} · BuhTig" on dashboards. | Must |
 | UI-05 | Dashboard widgets shall sit in a main column with a sidebar, which collapses to one column below 1012 px. | Must |
 | UI-06 | Large numbers shall be shown compactly (e.g., 12.3k) and dates relatively (e.g., "3 days ago"). Exact values shall appear on hover and focus. All numbers and dates shall be formatted for the browser's locale. | Must |
 | UI-07 | Light and dark themes shall follow the operating system's preference. | Should |
@@ -251,15 +251,15 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-SRCH-01 | The home page shall provide a single input that accepts a GitHub repository or organization URL in any form listed in Table 4-1. | Must |
+| FR-SRCH-01 | The home page shall provide a single input that accepts a GitHub repository, organization or user URL in any form listed in Table 4-1. | Must |
 | FR-SRCH-02 | Parsing shall ignore surrounding whitespace, the letter case of the host, a `www.` prefix, the scheme (`http` or `https`), trailing slashes, a `.git` suffix, query strings, and fragments. | Must |
 | FR-SRCH-03 | Pressing Enter or the primary button shall open the recognized resource's dashboard at its canonical URL (FR-NAV-01). | Must |
 | FR-SRCH-04 | Before calling GitHub, BuhTig shall check names for allowed characters and length. The check shall be permissive enough to accept older names that predate GitHub's current naming rules. Input that fails shall produce an inline message and no navigation. | Must |
 | FR-SRCH-05 | URLs on any host other than github.com shall be rejected with the message "BuhTig supports github.com URLs only." | Must |
-| FR-SRCH-06 | If an account turns out to be a user rather than an organization, its dashboard shall say so and offer up to 6 of that user's public repositories, those pushed to last, instead. | Must |
+| FR-SRCH-06 | A name alone, such as `name`, may be an organization's or a user's. Its dashboard shall ask GitHub which, before it reads anything else, and then show the organization's dashboard or the user's (§4.4). | Must |
 | FR-SRCH-07 | On desktop, the input shall be focused when the home page loads. Pressing `/` outside a text field shall focus it, and Esc shall clear it. | Should |
 | FR-SRCH-08 | Signed-in users' home page shall list up to 12 shortcuts beside the input, which they can filter by name: pinned dashboards first, then recent ones (§4.8). | Should |
-| FR-SRCH-09 | As the user types, the input shall show what it recognizes (e.g., "Repository · owner/repo" or "Organization · org") or why the input is invalid. | Could |
+| FR-SRCH-09 | As the user types, the input shall show what it recognizes (e.g., "Repository · owner/repo", "Organization · org", "User · user", or "Account · name" for a name that may be either) or why the input is invalid. | Could |
 | FR-SRCH-10 | A secondary "Surprise me" button shall open the dashboard of a random public repository from the shared cache. The button shall be hidden while that cache is empty. | Could |
 | FR-SRCH-11 | The signed-in home page shall list up to 8 public repositories whose dashboards were opened on the instance lately, from the shared cache only, with their description, language, stars, forks and last push. The visitor's home page shall offer the first 3 to try. Neither shall call GitHub, nor show anything fetched with a PAT (FR-DATA-04). | Could |
 
@@ -272,15 +272,16 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | `https://github.com/owner/repo/tree/main/src`, `…/pull/42`, `…/issues?q=bug` | Repository `owner/repo` (the deeper path is ignored) |
 | `git@github.com:owner/repo.git`, `ssh://git@github.com/owner/repo.git` | Repository `owner/repo` |
 | `owner/repo` | Repository `owner/repo` |
-| `https://github.com/org`, `github.com/org`, `org` | Organization `org` (FR-SRCH-06 applies if it is a user) |
+| `https://github.com/name`, `github.com/name`, `name` | Account `name`: an organization or a user (FR-SRCH-06) |
 | `https://github.com/orgs/org`, `…/orgs/org/repositories` | Organization `org` |
+| `https://github.com/users/user`, `…/users/user/projects/1` | User `user` |
 
 ### 4.2 Navigation and URLs
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-NAV-01 | Each dashboard shall have a stable, shareable URL that mirrors its GitHub path: `/{owner}/{repo}` for a repository and `/{org}` for an organization. Each tab shall have the path of the matching page on GitHub: `/{owner}/{repo}/activity`, `/issues`, `/pulls`, `/graphs/contributors` and `/releases`, and `/orgs/{org}/repositories` and `/orgs/{org}/people`. | Must |
-| FR-NAV-02 | Deeper paths under a dashboard URL shall redirect to the tab that shows the same, e.g. `/{owner}/{repo}/pull/42` to `/{owner}/{repo}/pulls`, `/commits` and `/pulse` to `/activity`, and `/tags` to `/releases`, and any other to the overview. Other paths of the form `/orgs/{org}/…` shall redirect to `/{org}`. Replacing `github.com` with BuhTig's host in any GitHub link therefore opens the matching dashboard. | Should |
+| FR-NAV-01 | Each dashboard shall have a stable, shareable URL that mirrors its GitHub path: `/{owner}/{repo}` for a repository, `/{org}` for an organization and `/{user}` for a user. Each tab shall have the URL of the matching page on GitHub: `/{owner}/{repo}/activity`, `/issues`, `/pulls`, `/graphs/contributors` and `/releases`, `/orgs/{org}/repositories` and `/orgs/{org}/people`, and `/{user}?tab=repositories`. | Must |
+| FR-NAV-02 | Deeper paths under a dashboard URL shall redirect to the tab that shows the same, e.g. `/{owner}/{repo}/pull/42` to `/{owner}/{repo}/pulls`, `/commits` and `/pulse` to `/activity`, and `/tags` to `/releases`, and any other to the overview. Other paths of the form `/orgs/{org}/…` shall redirect to `/{org}`, and paths of the form `/users/{user}/…` to `/{user}`. A user's dashboard with any other `tab` shall switch to `/{user}`, and an organization's at `/{org}?tab=repositories` to `/orgs/{org}/repositories`. `/{user}/repositories` shall open the repository of that name if the user has one, and otherwise the user's Repositories tab. Replacing `github.com` with BuhTig's host in any GitHub link therefore opens the matching dashboard. | Should |
 | FR-NAV-03 | BuhTig's own pages shall live under the reserved prefix `/-/` (e.g., `/-/settings`, `/-/about`, `/-/privacy`, `/-/health`). This prefix cannot collide with GitHub account names, which never start with a hyphen. | Must |
 | FR-NAV-04 | Canonical URLs shall use names exactly as GitHub returns them. Other letter cases shall redirect to the canonical form. | Should |
 | FR-NAV-05 | When GitHub reports that a repository was renamed or transferred, BuhTig shall follow the redirect and switch the browser to the new canonical URL. | Should |
@@ -303,7 +304,7 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | FR-REPO-11 | An empty repository (no commits) shall render with empty states, not errors. | Must |
 | FR-REPO-12 | Items that correspond to a GitHub page (contributor, commit, issue, pull request, release) shall link to that page. | Should |
 
-### 4.4 Organization dashboard
+### 4.4 Organization and user dashboards
 
 | ID | Requirement | Priority |
 |---|---|---|
@@ -316,6 +317,13 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | FR-ORG-07 | A members widget shall show the number of members visible to the viewer and up to 24 member avatars linking to their GitHub profiles. | Could |
 | FR-ORG-08 | If an organization has more repositories than `limits.org_repositories` (default 1,000), all figures shall be computed over the most recently pushed repositories up to that limit. The dashboard shall say so. | Must |
 | FR-ORG-09 | For token users, the dashboard shall include private and internal repositories their PAT can access, marked with badges. For everyone else, it shall include public repositories only. | Must |
+| FR-USER-01 | A user's dashboard header shall show the avatar, display name, login, bio, company, location, website, creation date, how many followers the user has and how many accounts they follow, and an "Open on GitHub" link. | Must |
+| FR-USER-02 | Stat cards shall show the number of repositories, total stars, total forks, total open issues and pull requests, and the most-used primary language. All figures shall be computed over the repositories the user owns that the viewer can see. | Must |
+| FR-USER-03 | A user's dashboard shall have two tabs: Overview, at `/{user}`, and Repositories, at `/{user}?tab=repositories` (FR-NAV-01). | Must |
+| FR-USER-04 | The Repositories tab shall show the repository list of FR-ORG-03, and the overview the charts and lists of FR-ORG-04 to FR-ORG-06, over the user's repositories. Each sparkline shall count as one load of the user's dashboard (FR-DATA-10). | Must |
+| FR-USER-05 | If a user owns more repositories than `limits.org_repositories`, all figures shall be computed over the most recently pushed repositories up to that limit. The dashboard shall say so. | Must |
+| FR-USER-06 | GitHub lists a user's private repositories to that user alone. A token user's own dashboard shall therefore include their private repositories, marked with badges, and every other user's dashboard, for every viewer, public repositories only. | Must |
+| FR-USER-07 | Users' dashboards shall be recorded in history and may be pinned (§4.8), refreshed (FR-DATA-07) and previewed (FR-NAV-06), as other dashboards. | Should |
 
 ### 4.5 Sign-in and sessions
 
@@ -384,7 +392,7 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | FR-DATA-01 | The BuhTig server shall make all GitHub API calls. Browsers shall never call GitHub's API for BuhTig and shall never receive a GitHub credential. Avatar images may load directly from GitHub. | Must |
 | FR-DATA-02 | BuhTig shall call GitHub with the PAT for token users and with the sign-in credential for other signed-in users. For visitors, it shall use no user credential, only the application credentials from the config file where GitHub accepts them for public data. | Must |
 | FR-DATA-03 | Retrieved data shall be cached in PostgreSQL. Data younger than `cache.ttl` (default 15 minutes) shall be served without calling GitHub. | Must |
-| FR-DATA-04 | Data fetched without a PAT shall go to the shared cache. Data fetched with a PAT shall go to that user's private cache and be served only to them. As a safeguard, no item GitHub marks as private or internal shall ever be stored in the shared cache. | Must |
+| FR-DATA-04 | Data fetched without a PAT shall go to the shared cache. Data fetched with a PAT shall go to that user's private cache and be served only to them. As a safeguard, no item GitHub marks as private or internal shall ever be stored in the shared cache. Data that GitHub gives about the viewer alone, such as their own private repositories, shall be fetched only with their PAT, never with their sign-in credential, and kept only in their private cache. | Must |
 | FR-DATA-05 | When GitHub is unreachable, returns an error, or rate-limits a request, BuhTig shall serve the most recent cached data, even if expired, with a notice showing its age. If nothing is cached, it shall show an error state that includes when the rate limit resets, if known. | Must |
 | FR-DATA-06 | Every dashboard shall show when its data was fetched (e.g., "Updated 4 min ago"). | Must |
 | FR-DATA-07 | Signed-in users shall be able to refresh a dashboard on demand, at most once per minute per dashboard. | Should |
@@ -443,7 +451,7 @@ Motion is part of BuhTig's character, but it must feel fast and stay out of the 
 | `auth.session_max_age` | No | `30d` | Absolute session lifetime. |
 | `cache.ttl` | No | `15m` | How long cached GitHub data counts as fresh. |
 | `cache.retention` | No | `30d` | When cached data is deleted. |
-| `limits.org_repositories` | No | `1000` | Maximum number of repositories analyzed per organization. |
+| `limits.org_repositories` | No | `1000` | Maximum number of repositories analyzed per organization or user. |
 | `limits.visitor_fetches_per_hour` | No | `30` | Uncached dashboard loads per visitor per hour. |
 | `ui.animations` | No | `true` | `false` turns off non-essential motion for everyone. |
 | `log.level` | No | `info` | `debug`, `info`, `warn`, or `error`. |
@@ -596,6 +604,7 @@ These scenarios are the minimum release checks. Each should be automated where p
 | AC-09 | Data for `owner/repo` is cached and GitHub is unreachable. | The dashboard shows the cached data with a notice of its age. |
 | AC-10 | A user enters `gitlab.com/owner/repo`. | The inline message "BuhTig supports github.com URLs only." appears, and the page does not navigate. |
 | AC-11 | Alice removes her PAT. | Her private cache is deleted at once. Her private dashboards now show "Not found or private" with an add-token prompt. |
+| AC-12 | Alice saves a PAT and opens her own dashboard, `/alice`. Then Bob, signed in with a PAT of his own, opens `/alice`. | Alice sees her private repositories among her repositories, with Private badges. Bob sees her public repositories only. |
 
 ---
 
@@ -603,7 +612,6 @@ These scenarios are the minimum release checks. Each should be automated where p
 
 These items are not part of this release; they are candidates for later versions:
 
-- Dashboards for user accounts. Only repositories and organizations are supported (FR-SRCH-06).
 - GitHub Enterprise Server and hosts other than github.com.
 - Any write action on GitHub.
 - Rendering READMEs or any other Markdown or HTML from GitHub.

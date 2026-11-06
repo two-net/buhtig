@@ -44,6 +44,7 @@ use crate::shortcuts::{self, Shortcuts};
 use crate::surprise;
 use crate::tokens::{self, Tokens};
 use crate::ui::{self, Ui};
+use crate::users;
 
 /// The page shown in place of BuhTig's own while its database is unreachable. It says
 /// what happened and what to do (NFR-UX-06), and nothing about why (NFR-SEC-09).
@@ -100,8 +101,51 @@ pub fn router(
             get(accounts::kind).with_state(cache.clone()),
         )
         .route(
+            "/-/api/users/{login}",
+            get(users::summary).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/users/{login}/stats",
+            get(users::stats).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/users/{login}/repositories",
-            get(accounts::repositories).with_state(cache.clone()),
+            get(users::repositories).with_state(cache.clone()),
+        )
+        .route(
+            // As an organization's: it needs only the account's name.
+            "/-/api/users/{login}/repositories/{repo}/commit-activity",
+            get(organizations::commit_activity).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/users/{login}/languages",
+            get(users::languages).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/users/{login}/top-repositories",
+            get(users::top_repositories).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/users/{login}/last-push",
+            get(users::last_push).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/users/{login}/created-per-year",
+            get(users::created_per_year).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/users/{login}/refresh",
+            post(organizations::refresh).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/users/{login}/view",
+            post(shortcuts::view).with_state(shortcuts.clone()),
+        )
+        .route(
+            "/-/api/users/{login}/pin",
+            put(shortcuts::pin)
+                .delete(shortcuts::unpin)
+                .with_state(shortcuts.clone()),
         )
         .route(
             "/-/api/organizations/{org}",
@@ -286,11 +330,12 @@ async fn page(State(pages): State<Pages>, uri: Uri, headers: HeaderMap) -> Respo
         Some(previews) => previews.of(uri.path()).await,
         None => None,
     };
-    // The UI's build names each kind of dashboard's code after it.
+    // The UI's build names each kind of dashboard's code after it. An account's, an
+    // organization's or a user's, is one.
     let preload = navigation::dashboard_at(uri.path()).and_then(|(dashboard, _)| {
         ui::dashboard_preload::<Ui>(match dashboard {
             Dashboard::Repository { .. } => "repository",
-            Dashboard::Organization { .. } => "organization",
+            Dashboard::Account { .. } => "account",
         })
     });
     let tags = preview.map(|preview| preview.tags());

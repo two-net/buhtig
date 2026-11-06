@@ -1,4 +1,5 @@
 import { Injector, Signal, runInInjectionContext } from '@angular/core';
+import { Observable } from 'rxjs';
 import { Loader } from '../widget/load';
 import {
   CommitActivity,
@@ -37,8 +38,13 @@ export abstract class RepositoryData {
   abstract readonly releases: () => Loader<Releases>;
 }
 
-/** What an organization's dashboard knows of it, for its tabs, as `RepositoryData` does. */
-export abstract class OrganizationData {
+/**
+ * What the dashboard of an account, an organization's or a user's, knows of it, for its tabs, as
+ * `RepositoryData` does. Its parts load once the dashboard knows which the account is.
+ */
+export abstract class AccountData {
+  /** Whether it is an organization or a user, once the dashboard knows, as GitHub's `type`. */
+  abstract readonly type: Signal<'organization' | 'user' | undefined>;
   /** Its login, as GitHub spells it once the dashboard knows, or else as the URL has it. */
   abstract readonly login: Signal<string>;
   /** The name it goes by, or else its login. */
@@ -49,12 +55,18 @@ export abstract class OrganizationData {
   abstract readonly topRepositories: () => Loader<TopRepository[]>;
   abstract readonly lastPush: () => Loader<LastPush>;
   abstract readonly createdPerYear: () => Loader<YearCount[]>;
+  /** An organization's members (FR-ORG-07), never asked for of a user, who has none. */
   abstract readonly members: () => Loader<Members>;
   /**
    * The color of each primary language on the dashboard, those of the most repositories in the
    * chart's colors, in order, and the others in the gray of "Other".
    */
   abstract readonly languageColor: Signal<(language: string) => string>;
+  /**
+   * The commit activity of its repository `repo`, for the repository's row (FR-ORG-03), once the
+   * dashboard knows which the account is. It reads the signals that say so.
+   */
+  abstract activity(repo: string): Observable<CommitActivity>;
 }
 
 /**
