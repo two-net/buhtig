@@ -623,13 +623,17 @@ async fn cards_show_what_visitors_dashboards_read_alone() {
     );
     assert!(png.body.starts_with("\u{fffd}PNG"), "{:?}", &png.body[..8]);
     let page = served.get(&VISITOR, "/octo/public").await;
-    assert!(
-        page.body.contains(
-            "<meta property=\"og:image\" \
-             content=\"https://buhtig.example.com/-/preview/octo/public.png\">"
-        ),
-        "{page:?}"
-    );
+    // The tags go in the UI's page, when it is built: a build without it has no `<head>`
+    // to put them in.
+    if Ui::get("index.html").is_some() {
+        assert!(
+            page.body.contains(
+                "<meta property=\"og:image\" \
+                 content=\"https://buhtig.example.com/-/preview/octo/public.png\">"
+            ),
+            "{page:?}"
+        );
+    }
     assert_eq!(served.stub.urls(), read);
 
     for path in [
