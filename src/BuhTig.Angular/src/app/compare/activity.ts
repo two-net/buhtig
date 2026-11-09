@@ -3,6 +3,8 @@ import { Column, ColumnChart, Tick } from '../chart/columns';
 import { ChartTable } from '../chart/table';
 import { monthTicks } from '../chart/ticks';
 import { CommitActivity } from '../dashboard/resources';
+import { isoDay } from '../export/csv';
+import { REPOSITORY_COLUMNS, exportName, repositoryCells } from '../export/provenance';
 import { exactNumber, weekDate } from '../format/format';
 import { weekOf } from '../repository/messages';
 import { emptyWhen } from '../widget/load';
@@ -32,7 +34,9 @@ interface Side {
  * Two repositories' commits per week to their default branches over the last 52 weeks, as two
  * charts side by side, the first on the left as their heads are, against one scale, so that the
  * taller column is the busier week (FR-CMP-04). Its summary says how many commits each made, and
- * its table lists every week's commits of both, newest first (NFR-UX-04).
+ * its table lists every week's commits of both, newest first (NFR-UX-04). Its CSV file has a row
+ * for each week and side, in the order of the table, with the side's commits that week, or none
+ * where its activity has no such week, and when its activity was fetched (FR-EXP-02).
  */
 @Component({
   selector: 'app-compare-activity',
@@ -114,10 +118,31 @@ export class CompareActivity {
 
   protected readonly table = computed((): ChartTable | undefined => {
     const ready = this.ready();
-    const [first, second] = this.data.names();
-    return ready
-      ? { headers: pairHeaders(WEEK_OF, first, second), rows: weekRows(ready[0], ready[1]) }
-      : undefined;
+    if (!ready) {
+      return undefined;
+    }
+    const names = this.data.names();
+    const [first, second] = names;
+    const weeks = weeksOf(ready[0], ready[1]);
+    return {
+      headers: pairHeaders(WEEK_OF, first, second),
+      rows: weeks.map(({ start, commits }) => ({
+        label: weekDate(start),
+        values: commits.map((count) => (count === undefined ? NO_FIGURE : exactNumber(count))),
+      })),
+      csv: {
+        name: exportName(first, 'vs', second, 'commit-activity'),
+        columns: ['side', 'week_start', 'commits', ...REPOSITORY_COLUMNS],
+        rows: weeks.flatMap(({ start, commits }) =>
+          commits.map((count, side) => [
+            side + 1,
+            isoDay(start),
+            count,
+            ...repositoryCells(names[side], ready[side]),
+          ]),
+        ),
+      },
+    };
   });
 
   protected readonly COMMIT_ACTIVITY = COMMIT_ACTIVITY;
@@ -125,21 +150,25 @@ export class CompareActivity {
 }
 
 /**
- * The rows of the table of two repositories' commit activity: each week either has, newest
- * first, with each one's commits that week, or a dash where its activity has no such week, as
+ * The weeks of the table of two repositories' commit activity: each week either has, newest
+ * first, with each one's commits that week, or none where its activity has no such week, as
  * when GitHub computed one's a week before the other's.
  */
-function weekRows(a: CommitActivity, b: CommitActivity) {
-  const weeks = new Map<number, { start: Date; commits: [string, string] }>();
+function weeksOf(
+  a: CommitActivity,
+  b: CommitActivity,
+): { start: Date; commits: [number | undefined, number | undefined] }[] {
+  const weeks = new Map<
+    number,
+    { start: Date; commits: [number | undefined, number | undefined] }
+  >();
   for (const [index, activity] of [a, b].entries()) {
     for (const week of activity.weeks) {
       const at = week.start.getTime();
-      const row = weeks.get(at) ?? { start: week.start, commits: [NO_FIGURE, NO_FIGURE] };
-      row.commits[index] = exactNumber(week.commits);
+      const row = weeks.get(at) ?? { start: week.start, commits: [undefined, undefined] };
+      row.commits[index] = week.commits;
       weeks.set(at, row);
     }
   }
-  return [...weeks.entries()]
-    .sort(([a], [b]) => b - a)
-    .map(([, week]) => ({ label: weekDate(week.start), values: week.commits }));
+  return [...weeks.entries()].sort(([a], [b]) => b - a).map(([, week]) => week);
 }

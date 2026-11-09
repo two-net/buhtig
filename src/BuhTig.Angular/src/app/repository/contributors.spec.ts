@@ -1,11 +1,13 @@
 import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
 import { RepositoryData } from '../dashboard/data';
-import { Contributors, Repository } from '../dashboard/resources';
+import { Contributors, Dated, Repository } from '../dashboard/resources';
 import { compactNumber } from '../format/format';
 import { Load } from '../widget/load';
 import { FAILED } from '../widget/messages';
+import { Widget } from '../widget/widget';
 import { RepositoryContributorsTab } from './contributors';
 import {
   CONTRIBUTORS_HEADERS,
@@ -44,7 +46,11 @@ describe('RepositoryContributorsTab', () => {
         provideRouter([]),
         {
           provide: RepositoryData,
-          useValue: { repository, contributors: () => ({ state: contributors, retry }) },
+          useValue: {
+            name: signal('acme/widget'),
+            repository,
+            contributors: () => ({ state: contributors, retry }),
+          },
         },
       ],
     });
@@ -56,6 +62,9 @@ describe('RepositoryContributorsTab', () => {
   const bars = () => [...element().querySelectorAll('.hbar')];
   const summary = () => element().querySelector('.w-sub')?.textContent?.trim();
   const message = () => element().querySelector('.w-state span')?.textContent;
+  /** The CSV file that the widget downloads, if it offers one. */
+  const csv = () =>
+    (fixture.debugElement.query(By.directive(Widget)).componentInstance as Widget).table()?.csv;
 
   async function answer(data: Contributors): Promise<void> {
     contributors.set({ status: 'ready', data });
@@ -104,6 +113,45 @@ describe('RepositoryContributorsTab', () => {
         [...row.children].map((cell) => cell.textContent?.trim()),
       ),
     ).toEqual([[...CONTRIBUTORS_HEADERS], ['@alice', '12,345'], ['@dependabot[bot]', '1']]);
+  });
+
+  it('downloads its table as a CSV file, with how many there are and when fetched (FR-EXP-02)', async () => {
+    const fetchedAt = new Date('2026-11-09T10:00:00.000Z');
+    repository.set({ defaultBranch: 'main' });
+    const dated: Dated<Contributors> = { ...CONTRIBUTORS, fetchedAt, stale: 'held' };
+    await answer(dated);
+    expect(csv()).toEqual({
+      name: 'acme-widget-contributors',
+      columns: [
+        'rank',
+        'login',
+        'commits',
+        'profile_url',
+        'contributors_total',
+        'repository',
+        'default_branch',
+        'fetched_at',
+        'stale',
+      ],
+      // As its table lists them, with their commits exact, and a profile only where GitHub has one.
+      rows: [
+        [
+          1,
+          'alice',
+          12_345,
+          'https://github.com/alice',
+          345,
+          'acme/widget',
+          'main',
+          fetchedAt,
+          'held',
+        ],
+        [2, 'dependabot[bot]', 1, undefined, 345, 'acme/widget', 'main', fetchedAt, 'held'],
+      ],
+    });
+    // How many there are in all is left empty where GitHub does not say, never 0.
+    await answer({ ...CONTRIBUTORS, count: undefined });
+    expect(csv()!.rows.map((row) => row[4])).toEqual([undefined, undefined]);
   });
 
   it("says GitHub doesn't list the contributors of repositories this large", async () => {

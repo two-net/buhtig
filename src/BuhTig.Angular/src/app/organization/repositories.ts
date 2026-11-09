@@ -13,9 +13,19 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, NavigationEnd, NavigationStart, Router } from '@angular/router';
 import { AccountData } from '../dashboard/data';
 import { ListedRepository } from '../dashboard/resources';
+import { saveCsv } from '../export/download';
+import {
+  DOWNLOAD_CSV,
+  DOWNLOAD_FAILED,
+  downloadedRepositories,
+  listDownload,
+  listDownloadCount,
+  listDownloadScope,
+} from '../export/messages';
 import { Icon } from '../icon/icon';
 import { Motion } from '../motion/motion';
 import { Pager } from '../pager/pager';
+import { Tip } from '../tip/tip';
 import { Toasts } from '../toast/toasts';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
@@ -31,6 +41,7 @@ import {
   listed,
   noMatch,
 } from './messages';
+import { listCsv } from './csv';
 import { LIST_PARAMS, ListView, queryOf, viewOf } from './query';
 import { RepositoryRow } from './repository-row';
 import {
@@ -60,6 +71,10 @@ const LIST_EDIT = Symbol('repository list edit');
  * the last, once the list knows how many there are. What only the sender could see, such as a
  * language of private repositories alone, stays chosen, and nothing matches it: the list is the
  * viewer's own, with their credentials and cache (FR-ACC-06, FR-DATA-04).
+ *
+ * "Download CSV" saves every repository that matches, from every page, in the order shown, as a
+ * CSV file, with what the list covers and when it was fetched (FR-EXP-01). It is made of what the
+ * list has loaded, and asks nothing more of BuhTig or GitHub (FR-EXP-06).
  */
 @Component({
   selector: 'app-organization-repositories-tab',
@@ -87,17 +102,21 @@ export class OrganizationRepositoriesTab {
   private readonly route = inject(ActivatedRoute);
   private readonly document = inject(DOCUMENT);
   private readonly toasts = inject(Toasts);
+  private readonly tip = inject(Tip);
   private readonly search = viewChild<ElementRef<HTMLInputElement>>('search');
 
   protected readonly repositories = emptyWhen(
     this.data.repositories(),
-    (repositories) => repositories.length === 0,
+    (list) => list.repositories.length === 0,
   );
 
-  private readonly all = computed((): ListedRepository[] => {
+  /** The list's repositories, with what they cover and when they were fetched, once loaded. */
+  private readonly list = computed(() => {
     const state = this.repositories.state();
-    return state.status === 'ready' ? state.data : [];
+    return state.status === 'ready' ? state.data : undefined;
   });
+
+  private readonly all = computed((): ListedRepository[] => this.list()?.repositories ?? []);
 
   /**
    * What the list shows, as its URL says, and as the user changes it at once, without waiting for
@@ -147,6 +166,18 @@ export class OrganizationRepositoriesTab {
   });
 
   protected readonly noMatch = computed(() => noMatch(this.data.displayName()));
+
+  /** Whether there is a list to download: once it has loaded, and while any repository matches. */
+  protected readonly downloadable = computed(
+    () => this.list() !== undefined && this.matching().length > 0,
+  );
+  /** What "Download CSV" downloads, as assistive technology reads it. */
+  protected readonly downloadDescription = computed(() => {
+    const list = this.list();
+    return list ? listDownload(this.matching().length, list.truncated, list.repositoriesRead) : '';
+  });
+  /** Whether the browser would not save the file, until the list shows something else. */
+  protected readonly downloadFailed = linkedSignal({ source: this.view, computation: () => false });
 
   constructor() {
     this.spellInUrl();
@@ -226,6 +257,43 @@ export class OrganizationRepositoriesTab {
   }
 
   /**
+   * Saves every repository that matches, from every page, in the order shown, as a CSV file, with
+   * the link to the list as it is shown, but from its first page, since the file has them all
+   * (FR-EXP-01). Where the browser will not save it, the list says so beside the button.
+   */
+  protected download(): void {
+    const list = this.list();
+    if (list === undefined) {
+      return;
+    }
+    const repositories = this.matching();
+    const csv = listCsv(this.data.login(), repositories, list);
+    const source =
+      this.document.location.origin +
+      this.router.serializeUrl(this.urlOf({ ...this.view(), page: 0 }));
+    const filename = saveCsv(this.document, csv, source);
+    this.downloadFailed.set(filename === undefined);
+    if (filename !== undefined) {
+      this.toasts.show(downloadedRepositories(repositories.length, filename), 'download');
+    }
+  }
+
+  /** Tells what "Download CSV" downloads, by the button, as it is pointed at or focused. */
+  protected describeDownload(button: HTMLElement): void {
+    const list = this.list();
+    if (list !== undefined) {
+      this.tip.show(button, {
+        value: listDownloadCount(this.matching().length),
+        label: listDownloadScope(list.truncated, list.repositoriesRead),
+      });
+    }
+  }
+
+  protected hideDescription(): void {
+    this.tip.hide();
+  }
+
+  /**
    * Spells the view in the URL as the list does, in place of what the URL says, where it says it
    * otherwise: with GitHub's names, and without what it does not know, or what is as the list
    * starts, so that the URL and what the list shows agree.
@@ -262,6 +330,8 @@ export class OrganizationRepositoriesTab {
   protected readonly ALL_LANGUAGES = ALL_LANGUAGES;
   protected readonly COPY_LINK = COPY_LINK;
   protected readonly COPY_LINK_FAILED = COPY_LINK_FAILED;
+  protected readonly DOWNLOAD_CSV = DOWNLOAD_CSV;
+  protected readonly DOWNLOAD_FAILED = DOWNLOAD_FAILED;
   protected readonly FIND_REPOSITORY = FIND_REPOSITORY;
   protected readonly NO_REPOSITORIES = NO_REPOSITORIES;
 }

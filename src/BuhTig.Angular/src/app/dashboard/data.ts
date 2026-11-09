@@ -7,6 +7,8 @@ import {
   CommitActivity,
   Commit,
   Contributors,
+  Covered,
+  CreatedPerYear,
   Dated,
   IssueAge,
   IssuePage,
@@ -15,18 +17,17 @@ import {
   LanguageCounts,
   Languages,
   LastPush,
-  ListedRepository,
   Members,
   MergeVelocity,
   OrganizationStats,
   ReleaseCadence,
   Releases,
   Repository,
+  RepositoryList,
   Stats,
-  TopRepository,
+  TopRepositories,
   Trends,
   WorkflowRuns,
-  YearCount,
 } from './resources';
 
 /**
@@ -40,10 +41,10 @@ export abstract class RepositoryData {
   /** What the dashboard's head shows of it, once known. */
   abstract readonly repository: Signal<Repository | undefined>;
   abstract readonly stats: () => Loader<Stats>;
-  abstract readonly activity: () => Loader<CommitActivity>;
-  abstract readonly languages: () => Loader<Languages>;
-  abstract readonly contributors: () => Loader<Contributors>;
-  abstract readonly issues: () => Loader<IssuesAndPullRequests>;
+  abstract readonly activity: () => Loader<Dated<CommitActivity>>;
+  abstract readonly languages: () => Loader<Dated<Languages>>;
+  abstract readonly contributors: () => Loader<Dated<Contributors>>;
+  abstract readonly issues: () => Loader<Dated<IssuesAndPullRequests>>;
   /** FR-REPO-06, for the label filter of its Issues and Pull requests tabs. */
   abstract readonly labels: () => Loader<Labels>;
   abstract readonly commits: () => Loader<Commit[]>;
@@ -55,11 +56,11 @@ export abstract class RepositoryData {
   /** FR-REPO-14, for its Activity tab. */
   abstract readonly workflowRuns: () => Loader<WorkflowRuns>;
   /** FR-REPO-15, for its Activity tab. */
-  abstract readonly codeFrequency: () => Loader<CodeFrequency>;
+  abstract readonly codeFrequency: () => Loader<Dated<CodeFrequency>>;
   /** FR-REPO-16, for its Releases tab. */
   abstract readonly releaseCadence: () => Loader<ReleaseCadence>;
   /** FR-REPO-17, for its Activity tab. */
-  abstract readonly trends: () => Loader<Trends>;
+  abstract readonly trends: () => Loader<Dated<Trends>>;
   /**
    * FR-REPO-06: the page of its issues, or of its pull requests, of `kind`, that `view` shows,
    * for its Issues or Pull requests tab, loaded anew as either changes, on each refresh, and when
@@ -81,11 +82,11 @@ export abstract class AccountData {
   /** The name it goes by, or else its login. */
   abstract readonly displayName: Signal<string>;
   abstract readonly stats: () => Loader<OrganizationStats>;
-  abstract readonly repositories: () => Loader<ListedRepository[]>;
-  abstract readonly languages: () => Loader<LanguageCounts>;
-  abstract readonly topRepositories: () => Loader<TopRepository[]>;
-  abstract readonly lastPush: () => Loader<LastPush>;
-  abstract readonly createdPerYear: () => Loader<YearCount[]>;
+  abstract readonly repositories: () => Loader<Covered<RepositoryList>>;
+  abstract readonly languages: () => Loader<Covered<LanguageCounts>>;
+  abstract readonly topRepositories: () => Loader<Covered<TopRepositories>>;
+  abstract readonly lastPush: () => Loader<Covered<LastPush>>;
+  abstract readonly createdPerYear: () => Loader<Covered<CreatedPerYear>>;
   /** An organization's members (FR-ORG-07), never asked for of a user, who has none. */
   abstract readonly members: () => Loader<Members>;
   /**

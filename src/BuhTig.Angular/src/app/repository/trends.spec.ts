@@ -4,9 +4,10 @@ import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
 import { LineChart } from '../chart/line';
 import { RepositoryData } from '../dashboard/data';
-import { CommitActivity, Observation, Period, Trends } from '../dashboard/resources';
+import { CommitActivity, Dated, Observation, Period, Trends } from '../dashboard/resources';
 import { exactTime, utcDay } from '../format/format';
 import { Load } from '../widget/load';
+import { Widget } from '../widget/widget';
 import {
   NOT_OBSERVED,
   NOT_TRACKED,
@@ -93,6 +94,7 @@ describe('RepositoryTrends', () => {
         {
           provide: RepositoryData,
           useValue: {
+            name: signal('acme/widget'),
             trends: () => ({ state: trends, retry: () => {} }),
             activity: () => ({ state: activity, retry: () => {} }),
           },
@@ -218,6 +220,69 @@ describe('RepositoryTrends', () => {
     const rows = await table();
     expect(rows).toHaveLength(31);
     expect(rows.at(-1)?.[1]).toBe(NOT_TRACKED);
+  });
+
+  it('downloads every day of the period as a CSV file, never a zero for a day without one (FR-EXP-02)', async () => {
+    const fetchedAt = new Date('2026-11-09T12:00:00.000Z');
+    const dated: Dated<Trends> = { ...TRENDS_OF, scope: 'private', fetchedAt, stale: undefined };
+    await answer(dated);
+    await choose('7 days');
+    const table = (
+      fixture.debugElement.query(By.directive(Widget)).componentInstance as Widget
+    ).table()!;
+    const csv = table.csv!;
+    expect(csv.name).toBe('acme-widget-trends-7-days');
+    expect(csv.columns).toEqual([
+      'day',
+      'observation',
+      'observed_at',
+      'pull_requests_observed_at',
+      'stars',
+      'forks',
+      'open_issues',
+      'open_pull_requests',
+      'period_days',
+      'scope',
+      'kept_days',
+      'repository',
+      'fetched_at',
+      'stale',
+    ]);
+    // The same days as the table, newest first.
+    expect(csv.rows).toHaveLength(table.rows.length);
+    const provenance = [7, 'private', 90, 'acme/widget', fetchedAt, undefined];
+    expect(csv.rows[0]).toEqual([
+      '2026-11-09',
+      'observed',
+      LATEST.observedAt,
+      LATEST.pullRequestsObservedAt,
+      112,
+      10,
+      40,
+      7,
+      ...provenance,
+    ]);
+    // A day without an observation has no figures, never zeros.
+    expect(csv.rows[1]).toEqual([
+      '2026-11-08',
+      'not_observed',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      ...provenance,
+    ]);
+    // Of the 30 days, those before BuhTig began tracking are told apart from gaps.
+    await choose('30 days');
+    const month = (
+      fixture.debugElement.query(By.directive(Widget)).componentInstance as Widget
+    ).table()!.csv!;
+    expect(month.name).toBe('acme-widget-trends-30-days');
+    expect(month.rows).toHaveLength(31);
+    expect(month.rows.at(-1)?.slice(0, 2)).toEqual(['2026-10-10', 'not_tracked']);
+    expect(month.rows.at(-1)?.[8]).toBe(30);
   });
 
   it("says that what the viewer's token observed is theirs alone", async () => {

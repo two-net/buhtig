@@ -21,6 +21,7 @@ import { Segment, SplitBar } from '../chart/stack';
 import { ChartTable } from '../chart/table';
 import { RepositoryData } from '../dashboard/data';
 import { IssueOrPullRequest, IssuePage, IssuesAndPullRequests } from '../dashboard/resources';
+import { REPOSITORY_COLUMNS, exportName, repositoryCells } from '../export/provenance';
 import { repositoryTabPath } from '../dashboard/tabs';
 import { exactNumber } from '../format/format';
 import { RelativeTime } from '../format/relative-time';
@@ -186,6 +187,34 @@ export function stateSegments(
       { label: STATES.open, value: counts.open, color: 'var(--st-open)' },
       { label: STATES.merged, value: counts.merged, color: 'var(--st-merged)' },
       { label: STATES.closed, value: counts.closed, color: 'var(--st-closed)' },
+    ]
+  );
+}
+
+/**
+ * The states of the issues, or of the pull requests, of `kind`, as a CSV file names them, the same
+ * in every language, with how many are in each, in the order of `stateSegments`: pull requests
+ * closed without being merged are `closed_unmerged`, apart from those `merged`.
+ */
+export function stateCounts(
+  issues: IssuesAndPullRequests,
+  kind: IssueOrPullRequest['kind'],
+): [string, number][] | undefined {
+  if (kind === 'issue') {
+    const counts = issues.issues;
+    return (
+      counts && [
+        ['open', counts.open],
+        ['closed', counts.closed],
+      ]
+    );
+  }
+  const counts = issues.pullRequests;
+  return (
+    counts && [
+      ['open', counts.open],
+      ['merged', counts.merged],
+      ['closed_unmerged', counts.closed],
     ]
   );
 }
@@ -362,17 +391,35 @@ export class RepositoryIssuesTab implements OnInit {
         .join(', ') + '.',
   );
 
+  /**
+   * The counts as a table, and as a CSV file, of the whole repository, whatever the list shows, with
+   * when they were fetched (FR-EXP-02).
+   */
   protected readonly table = computed((): ChartTable | undefined => {
-    const segments = this.segments();
-    return segments
-      ? {
-          headers: STATE_HEADERS,
-          rows: segments.map((segment) => ({
-            label: segment.label,
-            values: [exactNumber(segment.value)],
-          })),
-        }
-      : undefined;
+    const [issues, segments] = [this.ready(), this.segments()];
+    if (!issues || !segments) {
+      return undefined;
+    }
+    const kind = this.kind();
+    const name = this.data.name();
+    const provenance = repositoryCells(name, issues);
+    return {
+      headers: STATE_HEADERS,
+      rows: segments.map((segment) => ({
+        label: segment.label,
+        values: [exactNumber(segment.value)],
+      })),
+      csv: {
+        name: exportName(name, kind === 'issue' ? 'issues' : 'pull-requests', 'by-state'),
+        columns: ['kind', 'state', 'count', ...REPOSITORY_COLUMNS],
+        rows: (stateCounts(issues, kind) ?? []).map(([state, count]) => [
+          kind,
+          state,
+          count,
+          ...provenance,
+        ]),
+      },
+    };
   });
 
   protected readonly empty = computed(() =>

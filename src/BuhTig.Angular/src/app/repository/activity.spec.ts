@@ -4,9 +4,10 @@ import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
 import { niceMax } from '../chart/columns';
 import { RepositoryData } from '../dashboard/data';
-import { Commit, CommitActivity, Repository } from '../dashboard/resources';
+import { Commit, CommitActivity, Dated, Repository } from '../dashboard/resources';
 import { exactNumber, monthLabel, weekDate } from '../format/format';
 import { Load } from '../widget/load';
+import { Widget } from '../widget/widget';
 import { RepositoryActivity } from './activity';
 import { RepositoryActivityTab } from './activity-tab';
 import { RepositoryCommits } from './commits';
@@ -45,7 +46,11 @@ describe('RepositoryActivity', () => {
         provideRouter([]),
         {
           provide: RepositoryData,
-          useValue: { repository, activity: () => ({ state: activity, retry: () => {} }) },
+          useValue: {
+            name: signal('acme/widget'),
+            repository,
+            activity: () => ({ state: activity, retry: () => {} }),
+          },
         },
       ],
     });
@@ -73,6 +78,43 @@ describe('RepositoryActivity', () => {
     expect([heights[0], heights[51]]).toEqual([
       '0.00%',
       `${((51 / niceMax(51)) * 100).toFixed(2)}%`,
+    ]);
+  });
+
+  it('downloads every week as a CSV file, newest first, as its table lists them (FR-EXP-02)', async () => {
+    const fetchedAt = new Date('2026-11-09T10:00:00.000Z');
+    repository.set({ defaultBranch: 'main' });
+    const dated: Dated<CommitActivity> = { ...ACTIVITY, fetchedAt, stale: 'github' };
+    await answer(dated);
+    const table = (
+      fixture.debugElement.query(By.directive(Widget)).componentInstance as Widget
+    ).table()!;
+    expect(table.csv!.name).toBe('acme-widget-commit-activity');
+    expect(table.csv!.columns).toEqual([
+      'week_start',
+      'commits',
+      'repository',
+      'default_branch',
+      'fetched_at',
+      'stale',
+    ]);
+    expect(table.csv!.rows).toHaveLength(table.rows.length);
+    // The week starting on Sunday, in UTC, as GitHub counts weeks, and its commits exact.
+    expect(table.csv!.rows[0]).toEqual([
+      '2026-10-18',
+      51,
+      'acme/widget',
+      'main',
+      fetchedAt,
+      'github',
+    ]);
+    expect(table.csv!.rows.at(-1)).toEqual([
+      '2025-10-26',
+      0,
+      'acme/widget',
+      'main',
+      fetchedAt,
+      'github',
     ]);
   });
 

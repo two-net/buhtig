@@ -8,7 +8,21 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { filter, firstValueFrom } from 'rxjs';
 import type { Mock } from 'vitest';
 import { AccountData } from '../dashboard/data';
-import { ListedRepository } from '../dashboard/resources';
+import {
+  Coverage,
+  Covered,
+  Freshness,
+  ListedRepository,
+  RepositoryList,
+} from '../dashboard/resources';
+import {
+  DOWNLOAD_CSV,
+  DOWNLOAD_FAILED,
+  listDownload,
+  listDownloadCount,
+  listDownloadScope,
+} from '../export/messages';
+import { Tip } from '../tip/tip';
 import { Toasts } from '../toast/toasts';
 import { Load } from '../widget/load';
 import { FAILED } from '../widget/messages';
@@ -21,6 +35,7 @@ import {
   listed,
   noMatch,
 } from './messages';
+import { LIST_COLUMNS } from './csv';
 import { OrganizationRepositoriesTab } from './repositories';
 
 @Component({ selector: 'app-blank', template: '' })
@@ -52,6 +67,42 @@ function repository(name: string, details: Partial<ListedRepository> = {}): List
   };
 }
 
+/** When the repositories were fetched from GitHub. */
+const FETCHED = new Date('2026-11-09T10:00:00.000Z');
+
+/** The rows of the CSV file `text`, cell by cell, as a spreadsheet reads them (RFC 4180). */
+function parse(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let at = 0; at < text.length; at++) {
+    const char = text[at];
+    if (quoted) {
+      if (char === '"' && text[at + 1] === '"') {
+        cell += '"';
+        at++;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        cell += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ',') {
+      row.push(cell);
+      cell = '';
+    } else if (char === '\r' && text[at + 1] === '\n') {
+      rows.push([...row, cell]);
+      [row, cell] = [[], ''];
+      at++;
+    } else {
+      cell += char;
+    }
+  }
+  return rows;
+}
+
 /** What stands in for the browser's IntersectionObserver, which sees nothing come into view. */
 class Unseeing {
   observe(): void {}
@@ -66,7 +117,7 @@ describe('OrganizationRepositoriesTab', () => {
   const scrolling = Element.prototype.scrollIntoView;
   let harness: RouterTestingHarness;
   let http: HttpTestingController;
-  let state: ReturnType<typeof signal<Load<ListedRepository[]>>>;
+  let state: ReturnType<typeof signal<Load<Covered<RepositoryList>>>>;
   let retry: Mock<() => void>;
   let scrollIntoView: Mock<Element['scrollIntoView']>;
 
@@ -76,7 +127,7 @@ describe('OrganizationRepositoriesTab', () => {
     // The tests' jsdom scrolls nothing, and has no way to.
     scrollIntoView = vi.fn<Element['scrollIntoView']>();
     Element.prototype.scrollIntoView = scrollIntoView;
-    state = signal<Load<ListedRepository[]>>({ status: 'loading' });
+    state = signal<Load<Covered<RepositoryList>>>({ status: 'loading' });
     retry = vi.fn();
     TestBed.configureTestingModule({
       imports: [OrganizationRepositoriesTab],
@@ -130,8 +181,25 @@ describe('OrganizationRepositoriesTab', () => {
     )!;
   const current = () => pager()!.querySelector('[aria-current="page"]')?.textContent?.trim();
 
-  async function answer(repositories: ListedRepository[]): Promise<void> {
-    state.set({ status: 'ready', data: repositories });
+  /**
+   * The list loads `repositories`, all of the account's, fetched at `FETCHED`, unless `covered`
+   * says otherwise.
+   */
+  async function answer(
+    repositories: ListedRepository[],
+    covered: Partial<Coverage & Freshness> = {},
+  ): Promise<void> {
+    state.set({
+      status: 'ready',
+      data: {
+        repositories,
+        truncated: false,
+        repositoriesRead: repositories.length,
+        fetchedAt: FETCHED,
+        stale: undefined,
+        ...covered,
+      },
+    });
     await harness.fixture.whenStable();
   }
 
@@ -666,6 +734,182 @@ describe('OrganizationRepositoriesTab', () => {
         await answer(mixed());
         await click(copyButton());
         expect(alert()!.textContent?.trim()).toBe(COPY_LINK_FAILED);
+      });
+    });
+
+    describe('Download CSV (FR-EXP-01)', () => {
+      const { createObjectURL, revokeObjectURL } = URL;
+      let blobs: Blob[];
+      let saved: string[];
+
+      beforeEach(() => {
+        blobs = [];
+        saved = [];
+        URL.createObjectURL = vi.fn((blob: Blob) => {
+          blobs.push(blob);
+          return 'blob:test';
+        });
+        URL.revokeObjectURL = vi.fn();
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+          this: HTMLAnchorElement,
+        ) {
+          saved.push(this.download);
+        });
+      });
+
+      afterEach(() => {
+        URL.createObjectURL = createObjectURL;
+        URL.revokeObjectURL = revokeObjectURL;
+        vi.restoreAllMocks();
+      });
+
+      const origin = () => TestBed.inject(DOCUMENT).location.origin;
+      const today = () => new Date().toISOString().slice(0, 10);
+      const downloadButton = () =>
+        [...element().querySelectorAll<HTMLButtonElement>('.filters button')].find(
+          (button) => button.textContent?.trim() === DOWNLOAD_CSV,
+        )!;
+      const description = () =>
+        element().querySelector(`[id="${downloadButton().getAttribute('aria-describedby')}"]`)
+          ?.textContent;
+
+      /** Downloads the list, and reads the file back, a row of cells a line, the header first. */
+      async function download(): Promise<string[][]> {
+        await click(downloadButton());
+        return parse(await blobs.at(-1)!.text());
+      }
+
+      it('saves every repository that matches, from every page, in the order shown', async () => {
+        await answer(mixed());
+        await open('/orgs/acme/repositories?type=source&sort=stargazers&page=2');
+        // 30 sources, on 2 pages, the second shown.
+        expect(current()).toBe('2');
+        const [header, ...rows] = await download();
+        expect(header).toEqual([...LIST_COLUMNS, 'source_url']);
+        // Those with the most stars first, as the list shows them: the sources are the even ones.
+        const sources = Array.from({ length: 30 }, (_, i) => 58 - 2 * i);
+        expect(rows.map((row) => row[1])).toEqual(
+          sources.map((i) => `acme/r${String(i + 1).padStart(2, '0')}`),
+        );
+        expect(rows.map((row) => row[0])).toEqual(sources.map((_, at) => String(at + 1)));
+        // Exactly, as GitHub gave it, with what the list covers and when it was fetched, and
+        // the link to the list, from its first page, since the file has every page.
+        expect(rows[0]).toEqual([
+          '1',
+          'acme/r59',
+          '',
+          'Go',
+          '',
+          'public',
+          'false',
+          'false',
+          '58',
+          '0',
+          '0',
+          new Date(Date.UTC(2026, 9, 22) - 58 * 86_400_000).toISOString(),
+          'acme',
+          'all',
+          '60',
+          '2026-11-09T10:00:00.000Z',
+          '',
+          `${origin()}/orgs/acme/repositories?type=source&sort=stargazers`,
+        ]);
+        expect(saved).toEqual([`acme-repositories-${today()}.csv`]);
+        expect(
+          TestBed.inject(Toasts)
+            .toasts()
+            .map((toast) => toast.message),
+        ).toEqual([`Downloaded 30 repositories as acme-repositories-${today()}.csv`]);
+        // The list shows what it showed.
+        expect(current()).toBe('2');
+      });
+
+      it('says what it downloads, as it is pointed at or focused, and to assistive technology', async () => {
+        await answer(many(60));
+        await type('r1');
+        expect(description()).toBe(listDownload(10, false, 60));
+        downloadButton().dispatchEvent(new Event('focus'));
+        expect(TestBed.inject(Tip).shown()).toMatchObject({
+          value: listDownloadCount(10),
+          label: listDownloadScope(false, 60),
+        });
+        downloadButton().dispatchEvent(new Event('blur'));
+        expect(TestBed.inject(Tip).shown()).toBeUndefined();
+      });
+
+      it('says what it covers of an account with more repositories than BuhTig reads (FR-ORG-08)', async () => {
+        await answer(many(30), { truncated: true, repositoriesRead: 30, stale: 'github' });
+        expect(description()).toBe(listDownload(30, true, 30));
+        const [header, ...rows] = await download();
+        const cell = (row: string[], column: string) => row[header.indexOf(column)];
+        expect(rows).toHaveLength(30);
+        expect(rows.map((row) => [cell(row, 'coverage'), cell(row, 'repositories_read')])).toEqual(
+          rows.map(() => ['most_recently_pushed', '30']),
+        );
+        // Saved data, as GitHub failed, with when it was fetched.
+        expect([cell(rows[0], 'fetched_at'), cell(rows[0], 'stale')]).toEqual([
+          '2026-11-09T10:00:00.000Z',
+          'github',
+        ]);
+      });
+
+      it('keeps text from GitHub as it is, in any language, but never as a formula (FR-EXP-05)', async () => {
+        await answer([
+          repository('widget', {
+            description: '=HYPERLINK("https://evil.example","Click")',
+            topics: ['widgets', 'rust'],
+            pushedAt: new Date(Date.UTC(2026, 9, 22)),
+          }),
+          repository('gadget', {
+            description: 'Gadgets, "tools"\nand ウィジェット 🚀',
+            language: 'C++',
+          }),
+        ]);
+        const [header, ...rows] = await download();
+        const cell = (row: string[], column: string) => row[header.indexOf(column)];
+        expect(rows.map((row) => cell(row, 'description'))).toEqual([
+          `'=HYPERLINK("https://evil.example","Click")`,
+          'Gadgets, "tools"\nand ウィジェット 🚀',
+        ]);
+        expect(rows.map((row) => [cell(row, 'topics'), cell(row, 'language')])).toEqual([
+          ['widgets rust', ''],
+          ['', 'C++'],
+        ]);
+      });
+
+      it("has only the repositories the viewer's list has, of the type chosen (FR-ACC-06)", async () => {
+        await answer([repository('rocket'), repository('secret', { visibility: 'private' })]);
+        let [header, ...rows] = await download();
+        expect(rows.map((row) => [row[1], row[header.indexOf('visibility')]])).toEqual([
+          ['acme/rocket', 'public'],
+          ['acme/secret', 'private'],
+        ]);
+        await choose('Type', 'public');
+        [header, ...rows] = await download();
+        expect(rows.map((row) => row[1])).toEqual(['acme/rocket']);
+      });
+
+      it('is offered once the list has loaded, while any repository matches', async () => {
+        expect(downloadButton().disabled).toBe(true);
+        await answer(many(3));
+        expect(downloadButton().disabled).toBe(false);
+        await type('nothing');
+        expect(downloadButton().disabled).toBe(true);
+        expect(saved).toEqual([]);
+      });
+
+      it('says so beside it when the browser will not save it (NFR-UX-06)', async () => {
+        URL.createObjectURL = vi.fn(() => {
+          throw new Error('no downloads');
+        });
+        await answer(many(3));
+        await click(downloadButton());
+        expect(alert()!.textContent?.trim()).toBe(DOWNLOAD_FAILED);
+        expect(downloadButton().getAttribute('aria-describedby')).toBe(`list-csv ${alert()!.id}`);
+        expect(TestBed.inject(Toasts).toasts()).toEqual([]);
+        // Until the list shows something else.
+        await choose('Sort', 'name');
+        expect(alert()).toBeNull();
       });
     });
   });

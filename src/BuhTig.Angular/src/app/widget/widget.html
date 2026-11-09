@@ -2,16 +2,32 @@
   <div class="w-head">
     <h2 [id]="id">{{ heading() }}</h2>
     @if (ready() && table()) {
-      <button
-        type="button"
-        class="linkbtn"
-        [attr.aria-pressed]="tabled()"
-        (click)="tabled.set(!tabled())"
-      >
-        {{ toggle() }}
-      </button>
+      <div class="w-actions">
+        <button
+          type="button"
+          class="linkbtn"
+          [attr.aria-pressed]="tabled()"
+          (click)="tabled.set(!tabled())"
+        >
+          {{ toggle() }}
+        </button>
+        @if (csv(); as csv) {
+          <button
+            type="button"
+            class="linkbtn"
+            [attr.aria-describedby]="id + '-csv'"
+            (click)="download(csv)"
+          >
+            {{ downloadCsv }}
+          </button>
+          <span class="sr" [id]="id + '-csv'">{{ csvDescription() }}</span>
+        }
+      </div>
     }
   </div>
+  @if (ready() && downloadFailed()) {
+    <p class="field-msg err w-msg" role="alert"><app-icon name="alert" />{{ failedDownload }}</p>
+  }
   @if (ready() && summary()) {
     <p class="w-sub">{{ summary() }}</p>
   }

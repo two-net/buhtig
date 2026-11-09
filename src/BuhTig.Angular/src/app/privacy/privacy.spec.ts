@@ -54,6 +54,14 @@ describe('Privacy', () => {
     );
   });
 
+  it('says that CSV files are made in the browser, and kept nowhere (FR-EXP-06)', async () => {
+    const text = (await page()).querySelector('main')?.textContent?.replace(/\s+/g, ' ');
+    expect(text).toContain(
+      '“Download CSV” makes its file in your browser, of what the page already shows you. BuhTig ' +
+        'neither asks GitHub for anything to make it nor keeps any record of it.',
+    );
+  });
+
   it('says where to delete it all, and where to revoke access on GitHub (FR-PERS-04)', async () => {
     const links = [...(await page()).querySelectorAll('main a')].map((link) => [
       link.textContent?.trim(),

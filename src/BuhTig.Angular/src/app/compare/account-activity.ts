@@ -3,9 +3,11 @@ import { Column, ColumnChart, Tick } from '../chart/columns';
 import { Bar, BarChart } from '../chart/hbars';
 import { ChartTable } from '../chart/table';
 import { yearTicks } from '../chart/ticks';
-import { LastPush, YearCount } from '../dashboard/resources';
+import { CreatedPerYear, LastPush } from '../dashboard/resources';
+import { ACCOUNT_COLUMNS, accountCells, exportName } from '../export/provenance';
 import { exactNumber } from '../format/format';
 import { LAST_PUSH as PERIODS, NO_REPOSITORIES, createdIn } from '../organization/messages';
+import { PERIOD_KEYS } from '../organization/csv';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
 import { ComparisonData } from './data';
@@ -31,7 +33,8 @@ function pushed(pushes: LastPush): number {
  * Two accounts' repositories by when each last received a push, as two charts of bars side by
  * side, the first on the left as their heads are, against one scale (FR-CMP-04). Its summary
  * says how many of each were pushed to in the last 7 days, and its table lists each period's
- * repositories of both (NFR-UX-04).
+ * repositories of both (NFR-UX-04). Its CSV file has a row for each period and side, in the order
+ * of the table, each with what its side's figures cover and when they were fetched (FR-EXP-02).
  */
 @Component({
   selector: 'app-compare-last-push',
@@ -111,7 +114,8 @@ export class CompareLastPush {
 
   protected readonly table = computed((): ChartTable | undefined => {
     const ready = this.ready();
-    const [first, second] = this.data.names();
+    const names = this.data.names();
+    const [first, second] = names;
     return ready
       ? {
           headers: pairHeaders(LAST_PUSH, first, second),
@@ -119,6 +123,18 @@ export class CompareLastPush {
             label: PERIODS[period],
             values: ready.map((pushes) => exactNumber(pushes[period])),
           })),
+          csv: {
+            name: exportName(first, 'vs', second, 'last-push'),
+            columns: ['side', 'period', 'repositories', ...ACCOUNT_COLUMNS],
+            rows: this.periods.flatMap((period) =>
+              ready.map((pushes, side) => [
+                side + 1,
+                PERIOD_KEYS[period],
+                pushes[period],
+                ...accountCells(names[side], pushes),
+              ]),
+            ),
+          },
         }
       : undefined;
   });
@@ -132,7 +148,9 @@ export class CompareLastPush {
  * Two accounts' repositories created in each year, as two charts of columns side by side, the
  * first on the left as their heads are, over the same years, from the first either created a
  * repository in, and against one scale (FR-CMP-04). Its summary says how many each created since
- * when, and its table lists each year's repositories of both (NFR-UX-04).
+ * when, and its table lists each year's repositories of both (NFR-UX-04). Its CSV file has a
+ * row for each year and side, in the order of the table, each with what its side's figures cover
+ * and when they were fetched (FR-EXP-02).
  */
 @Component({
   selector: 'app-compare-created',
@@ -173,7 +191,7 @@ export class CompareCreated {
 
   protected readonly createdPerYear = emptyWhen(
     this.data.createdPerYear(),
-    ([a, b]) => a.length === 0 && b.length === 0,
+    ([a, b]) => a.years.length === 0 && b.years.length === 0,
   );
 
   private readonly ready = computed(() => {
@@ -183,7 +201,7 @@ export class CompareCreated {
 
   /** Every year from the first either created a repository in to the last either did. */
   private readonly years = computed(() => {
-    const years = (this.ready() ?? []).flat().map(({ year }) => year);
+    const years = (this.ready() ?? []).flatMap((created) => created.years.map(({ year }) => year));
     if (years.length === 0) {
       return [];
     }
@@ -194,7 +212,7 @@ export class CompareCreated {
   /** How many repositories each side created in each of `years`, none in those it has not. */
   private readonly counts = computed(() =>
     (this.ready() ?? []).map((created) => {
-      const of = new Map(created.map(({ year, repositories }) => [year, repositories]));
+      const of = new Map(created.years.map(({ year, repositories }) => [year, repositories]));
       return this.years().map((year) => of.get(year) ?? 0);
     }),
   );
@@ -204,7 +222,7 @@ export class CompareCreated {
   );
 
   protected readonly sides = computed(() =>
-    (this.ready() ?? []).map((created: YearCount[], index) => {
+    (this.ready() ?? []).map((created: CreatedPerYear, index) => {
       const name = this.data.names()[index];
       return {
         name,
@@ -212,7 +230,7 @@ export class CompareCreated {
           value: this.counts()[index][at],
           label: createdIn(year),
         })),
-        summary: sentence(sideCreated(name, created)),
+        summary: sentence(sideCreated(name, created.years)),
       };
     }),
   );
@@ -223,19 +241,35 @@ export class CompareCreated {
   protected readonly summary = computed(() => {
     const ready = this.ready();
     const [first, second] = this.data.names();
-    return ready ? bothSides(sideCreated(first, ready[0]), sideCreated(second, ready[1])) : '';
+    return ready
+      ? bothSides(sideCreated(first, ready[0].years), sideCreated(second, ready[1].years))
+      : '';
   });
 
   protected readonly table = computed((): ChartTable | undefined => {
-    const [first, second] = this.data.names();
+    const names = this.data.names();
+    const [first, second] = names;
     const counts = this.counts();
-    return this.ready()
+    const ready = this.ready();
+    return ready
       ? {
           headers: pairHeaders(YEAR, first, second),
           rows: this.years().map((year, at) => ({
             label: String(year),
             values: counts.map((count) => exactNumber(count[at])),
           })),
+          csv: {
+            name: exportName(first, 'vs', second, 'created-per-year'),
+            columns: ['side', 'year', 'repositories', ...ACCOUNT_COLUMNS],
+            rows: this.years().flatMap((year, at) =>
+              counts.map((count, side) => [
+                side + 1,
+                year,
+                count[at],
+                ...accountCells(names[side], ready[side]),
+              ]),
+            ),
+          },
         }
       : undefined;
   });

@@ -7,7 +7,9 @@ import { Router, provideRouter } from '@angular/router';
 import { map } from 'rxjs';
 import { ChartTable } from '../chart/table';
 import { Icon } from '../icon/icon';
+import { DOWNLOAD_FAILED, tableDownload } from '../export/messages';
 import { ENTRANCE_MS, Entrance } from '../motion/entrance';
+import { Toasts } from '../toast/toasts';
 import { Computing, load } from './load';
 import { COMPUTING, FAILED, HELD, LOADED, LOADING, UNAVAILABLE } from './messages';
 import { Loaded, Skeleton, Widget } from './widget';
@@ -49,6 +51,14 @@ class Host {
       { label: 'TypeScript', values: ['75%'] },
       { label: 'CSS', values: ['25%'] },
     ],
+    csv: {
+      name: 'acme-widget-languages',
+      columns: ['language', 'share'],
+      rows: [
+        ['TypeScript', 0.75],
+        ['CSS', 0.25],
+      ],
+    },
   });
   readonly releases = load(
     () => this.http.get<string[]>(`/releases/${this.repo()}`),
@@ -334,6 +344,86 @@ describe('Widget', () => {
       await answer(['v1.0.0'], ['TypeScript']);
       await set((host) => host.table.set(undefined));
       expect(toggle(languages())).toBeNull();
+    });
+  });
+
+  describe('as a CSV file (FR-EXP-02)', () => {
+    const { createObjectURL, revokeObjectURL } = URL;
+    let blobs: Blob[];
+    let saved: string[];
+
+    beforeEach(() => {
+      blobs = [];
+      saved = [];
+      URL.createObjectURL = vi.fn((blob: Blob) => {
+        blobs.push(blob);
+        return 'blob:test';
+      });
+      URL.revokeObjectURL = vi.fn();
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+        this: HTMLAnchorElement,
+      ) {
+        saved.push(this.download);
+      });
+    });
+
+    afterEach(() => {
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = revokeObjectURL;
+      vi.restoreAllMocks();
+    });
+
+    const download = (widget: HTMLElement) =>
+      [...widget.querySelectorAll<HTMLButtonElement>('.w-head button')].find(
+        (button) => button.textContent?.trim() === 'Download CSV',
+      );
+
+    it('offers its table as a CSV file once its chart shows, and says what it downloads', async () => {
+      expect(download(languages())).toBeUndefined();
+      await answer(['v1.0.0'], ['TypeScript']);
+      const button = download(languages())!;
+      const description = button.getAttribute('aria-describedby')!;
+      expect(languages().querySelector(`[id="${description}"]`)?.textContent).toBe(
+        tableDownload(2),
+      );
+      // Nor for a widget without a table, nor for a table without one.
+      expect(download(releases())).toBeUndefined();
+      await set((host) => host.table.set({ headers: ['Language', 'Share'], rows: [] }));
+      expect(download(languages())).toBeUndefined();
+      expect(toggle(languages())?.textContent?.trim()).toBe('Show table');
+    });
+
+    it('saves it, with the page it is from, and says so', async () => {
+      await answer(['v1.0.0'], ['TypeScript']);
+      download(languages())!.click();
+      await fixture.whenStable();
+      const today = new Date().toISOString().slice(0, 10);
+      expect(saved).toEqual([`acme-widget-languages-${today}.csv`]);
+      expect(await blobs[0].text()).toBe(
+        'language,share,source_url\r\n' +
+          `TypeScript,0.75,${document.location.origin}/\r\n` +
+          `CSS,0.25,${document.location.origin}/\r\n`,
+      );
+      expect(
+        TestBed.inject(Toasts)
+          .toasts()
+          .map((toast) => toast.message),
+      ).toEqual([`Downloaded acme-widget-languages-${today}.csv`]);
+      // And asks nothing of the server for it.
+      http.verify();
+    });
+
+    it('says so beside it when the browser will not save it (NFR-UX-06)', async () => {
+      URL.createObjectURL = vi.fn(() => {
+        throw new Error('no downloads');
+      });
+      await answer(['v1.0.0'], ['TypeScript']);
+      download(languages())!.click();
+      await fixture.whenStable();
+      expect(languages().querySelector('[role="alert"]')?.textContent?.trim()).toBe(
+        DOWNLOAD_FAILED,
+      );
+      expect(TestBed.inject(Toasts).toasts()).toEqual([]);
     });
   });
 });

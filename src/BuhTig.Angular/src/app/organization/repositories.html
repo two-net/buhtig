@@ -38,10 +38,30 @@
     >
       <app-icon name="link" />{{ COPY_LINK }}
     </button>
+    <button
+      #downloadButton
+      type="button"
+      class="btn"
+      [disabled]="!downloadable()"
+      [attr.aria-describedby]="downloadFailed() ? 'list-csv list-csv-failed' : 'list-csv'"
+      (click)="download()"
+      (pointerenter)="describeDownload(downloadButton)"
+      (pointerleave)="hideDescription()"
+      (focus)="describeDownload(downloadButton)"
+      (blur)="hideDescription()"
+    >
+      <app-icon name="download" />{{ DOWNLOAD_CSV }}
+    </button>
+    <span id="list-csv" class="sr">{{ downloadDescription() }}</span>
   </div>
   @if (copyFailed()) {
     <p id="copy-link-failed" class="field-msg err" role="alert">
       <app-icon name="alert" />{{ COPY_LINK_FAILED }}
+    </p>
+  }
+  @if (downloadFailed()) {
+    <p id="list-csv-failed" class="field-msg err" role="alert">
+      <app-icon name="alert" />{{ DOWNLOAD_FAILED }}
     </p>
   }
   <p class="count-note" aria-live="polite">{{ status() }}</p>

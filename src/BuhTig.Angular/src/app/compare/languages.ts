@@ -1,6 +1,14 @@
 import { Component, computed, inject } from '@angular/core';
 import { Segment, SplitBar } from '../chart/stack';
 import { ChartTable } from '../chart/table';
+import { Cell } from '../export/csv';
+import {
+  ACCOUNT_COLUMNS,
+  REPOSITORY_COLUMNS,
+  accountCells,
+  exportName,
+  repositoryCells,
+} from '../export/provenance';
 import { percent } from '../format/format';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
@@ -35,6 +43,12 @@ interface Side {
  * read alike, and each bar's legend names every language with its share, so that no one needs
  * the colors (NFR-UX-05). Its summary says which language has the largest share of each, and its
  * table lists each language's share of both (NFR-UX-04).
+ *
+ * Its CSV file has a row for each of the table's languages and side, in its order: the side's
+ * bytes or repositories of the language, exactly, and its share, from 0 to 1, or none where the
+ * side counts the language in "Other", then the row of the other languages together, which has no
+ * name. Each says when its side's data was fetched, and, of an account, what it covers
+ * (FR-EXP-02).
  */
 @Component({
   selector: 'app-compare-languages',
@@ -154,9 +168,73 @@ export class CompareLanguages {
     if (ready.some((shares) => shares.other > 0)) {
       rows.push({ label: OTHER, values: ready.map((shares) => share(shares, shares.other)) });
     }
-    const [first, second] = this.data.names();
-    return { headers: pairHeaders(LANGUAGE, first, second), rows };
+    const names = this.data.names();
+    const [first, second] = names;
+    return {
+      headers: pairHeaders(LANGUAGE, first, second),
+      rows,
+      csv: {
+        name: exportName(first, 'vs', second, 'languages'),
+        columns: [
+          'side',
+          'language',
+          'is_other',
+          'value',
+          'unit',
+          'share',
+          'counted_in_other',
+          ...(this.kind === 'repository' ? REPOSITORY_COLUMNS : ACCOUNT_COLUMNS),
+        ],
+        rows: this.csvRows(ready, names),
+      },
+    };
   });
+
+  /**
+   * The rows of the CSV file of the languages of both `sides`, named `names`: each language of the
+   * table, in its order, for each side, then the other languages of each together.
+   */
+  private csvRows(sides: readonly Shares[], names: readonly string[]): Cell[][] {
+    const provenance = sides.map((shares, side) =>
+      this.kind === 'repository'
+        ? repositoryCells(names[side], shares)
+        : accountCells(names[side], shares),
+    );
+    const shareOf = (shares: Shares, value: number) =>
+      shares.total > 0 ? value / shares.total : 0;
+    const rows: Cell[][] = [...this.colors().keys()].flatMap((language) =>
+      sides.map((shares, side) => {
+        const listed = shares.languages.find(({ name }) => name === language);
+        const inOther = !listed && shares.other > 0;
+        const value = listed ? listed.value : inOther ? undefined : 0;
+        return [
+          side + 1,
+          language,
+          false,
+          value,
+          shares.unit,
+          value === undefined ? undefined : shareOf(shares, value),
+          inOther,
+          ...provenance[side],
+        ];
+      }),
+    );
+    if (sides.some((shares) => shares.other > 0)) {
+      rows.push(
+        ...sides.map((shares, side) => [
+          side + 1,
+          undefined,
+          true,
+          shares.other,
+          shares.unit,
+          shareOf(shares, shares.other),
+          false,
+          ...provenance[side],
+        ]),
+      );
+    }
+    return rows;
+  }
 
   protected readonly LANGUAGES = LANGUAGES;
   protected readonly NO_LANGUAGES = NO_LANGUAGES;

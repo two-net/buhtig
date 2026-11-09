@@ -2,7 +2,9 @@ import { Component, computed, inject, signal } from '@angular/core';
 import { LineChart } from '../chart/line';
 import { ChartTable } from '../chart/table';
 import { RepositoryData } from '../dashboard/data';
-import { Observation, Period, Trends } from '../dashboard/resources';
+import { Dated, Observation, Period, Trends } from '../dashboard/resources';
+import { Cell, isoDay } from '../export/csv';
+import { REPOSITORY_COLUMNS, exportName, repositoryCells } from '../export/provenance';
 import { exactNumber, exactTime, utcDay } from '../format/format';
 import { Icon, IconName } from '../icon/icon';
 import { emptyWhen } from '../widget/load';
@@ -74,7 +76,9 @@ interface Chart {
  * not allow one, it says why, rather than show a zero: a repository observed once has no earlier
  * baseline. A small chart of each figure leaves the days without an observation as gaps. Its
  * summary says what changed, and on how many days there is an observation, and its table lists
- * every day, newest first, with those without one said to be so (NFR-UX-04).
+ * every day, newest first, with those without one said to be so (NFR-UX-04). Its CSV file lists
+ * the same days, with their figures exact, and those of a day without an observation empty, never
+ * zero, and says the period, whose observations they are, and how long they are kept (FR-EXP-02).
  *
  * Beside them, the commits of as many whole weeks as the period, against as many before
  * (FR-REPO-18), from the commit activity GitHub keeps.
@@ -161,7 +165,7 @@ export class RepositoryTrends {
   /** The period shown, in days. */
   readonly selected = signal(FIRST_PERIOD);
 
-  private readonly ready = computed((): Trends | undefined => {
+  private readonly ready = computed((): Dated<Trends> | undefined => {
     const state = this.trends.state();
     return state.status === 'ready' ? state.data : undefined;
   });
@@ -255,15 +259,40 @@ export class RepositoryTrends {
   });
 
   protected readonly table = computed((): ChartTable | undefined => {
-    if (this.ready() === undefined) {
+    const trends = this.ready();
+    if (trends === undefined) {
       return undefined;
     }
+    const days = [...this.days()].reverse();
+    const name = this.data.name();
+    const provenance = [
+      this.selected(),
+      trends.scope,
+      trends.keptDays,
+      ...repositoryCells(name, trends),
+    ];
     return {
       headers: TRENDS_HEADERS,
-      rows: [...this.days()].reverse().map(({ day, observation, untracked }) => ({
+      rows: days.map(({ day, observation, untracked }) => ({
         label: utcDay(day),
         values: observation ? observed(observation) : missing(untracked),
       })),
+      csv: {
+        name: exportName(name, 'trends', `${this.selected()}-days`),
+        columns: [...TREND_COLUMNS, 'period_days', 'scope', 'kept_days', ...REPOSITORY_COLUMNS],
+        rows: days.map(({ day, observation, untracked }) => [
+          isoDay(day),
+          observation ? 'observed' : untracked ? 'not_tracked' : 'not_observed',
+          ...(observation
+            ? [
+                observation.observedAt,
+                observation.pullRequestsObservedAt,
+                ...METRICS.map((metric) => observation.figures[metric]),
+              ]
+            : NOT_OBSERVED_CELLS),
+          ...provenance,
+        ]),
+      },
     };
   });
 
@@ -278,6 +307,25 @@ export class RepositoryTrends {
   protected readonly PERIOD = PERIOD;
   protected readonly PRIVATE_TRENDS = PRIVATE_TRENDS;
 }
+
+/**
+ * The columns of the trends' CSV file of each day: the UTC day, whether there is an observation
+ * of it, or BuhTig was not yet tracking the repository, when GitHub gave the figures, and the
+ * figures.
+ */
+const TREND_COLUMNS = [
+  'day',
+  'observation',
+  'observed_at',
+  'pull_requests_observed_at',
+  'stars',
+  'forks',
+  'open_issues',
+  'open_pull_requests',
+] as const;
+
+/** The cells of a day without an observation, after whether it is: nothing, never a zero. */
+const NOT_OBSERVED_CELLS: Cell[] = [undefined, undefined, ...METRICS.map(() => undefined)];
 
 /** A day's row of the table, after its day: when it was observed, and its figures. */
 function observed(observation: Observation): string[] {

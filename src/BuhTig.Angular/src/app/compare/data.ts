@@ -1,7 +1,11 @@
 import { Signal } from '@angular/core';
 import {
   CommitActivity,
+  Coverage,
+  Covered,
+  CreatedPerYear,
   Dated,
+  Freshness,
   IssueAge,
   LanguageCounts,
   Languages,
@@ -11,7 +15,6 @@ import {
   ReleaseCadence,
   Stats,
   WorkflowRuns,
-  YearCount,
 } from '../dashboard/resources';
 import { Loader } from '../widget/load';
 import { Compared } from './route';
@@ -29,7 +32,7 @@ export abstract class ComparisonData {
   /** Of two repositories, their stat cards' figures (FR-REPO-02). */
   abstract readonly stats: () => Loader<[Stats, Stats]>;
   /** Of two repositories, their commit activity (FR-REPO-03). */
-  abstract readonly activity: () => Loader<[CommitActivity, CommitActivity]>;
+  abstract readonly activity: () => Loader<[Dated<CommitActivity>, Dated<CommitActivity>]>;
   /**
    * Of two repositories, how their pull requests updated last came to an end (FR-REPO-13), and
    * when that was fetched (FR-CMP-06), as each of the next three.
@@ -44,9 +47,11 @@ export abstract class ComparisonData {
   /** Of two accounts, their stat cards' figures (FR-ORG-02, FR-USER-02). */
   abstract readonly accountStats: () => Loader<[OrganizationStats, OrganizationStats]>;
   /** Of two accounts, their repositories by last push (FR-ORG-06). */
-  abstract readonly lastPush: () => Loader<[LastPush, LastPush]>;
+  abstract readonly lastPush: () => Loader<[Covered<LastPush>, Covered<LastPush>]>;
   /** Of two accounts, their repositories created in each year (FR-ORG-06). */
-  abstract readonly createdPerYear: () => Loader<[YearCount[], YearCount[]]>;
+  abstract readonly createdPerYear: () => Loader<
+    [Covered<CreatedPerYear>, Covered<CreatedPerYear>]
+  >;
   /**
    * Of either, their languages: of a repository, its bytes of code in each (FR-REPO-04), and of
    * an account, its repositories with each as their primary language (FR-ORG-04).
@@ -54,27 +59,35 @@ export abstract class ComparisonData {
   abstract readonly languages: () => Loader<[Shares, Shares]>;
 }
 
-/** How much of a resource is in each language, in bytes of code or in repositories. */
-export interface Shares {
+/**
+ * How much of a resource is in each language, in bytes of code or in repositories, and when that
+ * was fetched, and, of an account, what it covers (FR-EXP-04).
+ */
+export interface Shares extends Partial<Freshness>, Partial<Coverage> {
   /** Those with the most, up to 8, most first. */
   languages: { name: string; value: number }[];
   /** All the others together, which are "Other". */
   other: number;
   /** All of them together. */
   total: number;
+  /** What the values count: a repository's bytes of code, or an account's repositories. */
+  unit: 'bytes' | 'repositories';
 }
 
 /** The shares of a repository's `languages`, in bytes of code. */
-export function bytesShares(languages: Languages): Shares {
+export function bytesShares(languages: Languages & Partial<Freshness>): Shares {
   return {
     languages: languages.languages.map(({ name, bytes }) => ({ name, value: bytes })),
     other: languages.other,
     total: languages.total,
+    unit: 'bytes',
+    fetchedAt: languages.fetchedAt,
+    stale: languages.stale,
   };
 }
 
 /** The shares of an account's languages, in repositories that have each as primary language. */
-export function repositoryShares(counts: LanguageCounts): Shares {
+export function repositoryShares(counts: LanguageCounts & Partial<Covered<object>>): Shares {
   const languages = counts.languages.map(({ name, repositories }) => ({
     name,
     value: repositories,
@@ -83,5 +96,10 @@ export function repositoryShares(counts: LanguageCounts): Shares {
     languages,
     other: counts.other,
     total: languages.reduce((total, language) => total + language.value, counts.other),
+    unit: 'repositories',
+    fetchedAt: counts.fetchedAt,
+    stale: counts.stale,
+    truncated: counts.truncated,
+    repositoriesRead: counts.repositoriesRead,
   };
 }

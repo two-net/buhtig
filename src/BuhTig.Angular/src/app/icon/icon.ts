@@ -90,6 +90,11 @@ const ICONS = {
   ],
   equal: ['M6 9.5h12M6 14.5h12'],
   plus: ['M12 5v14M5 12h14'],
+  /** An arrow down onto a tray: a file to save (FR-EXP-06). */
+  download: [
+    'M12 4v11M7.5 10.5 12 15l4.5-4.5',
+    'M4.5 15.5v3a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-3',
+  ],
 } satisfies Record<string, string[]>;
 
 export type IconName = keyof typeof ICONS;

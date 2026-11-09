@@ -2,7 +2,7 @@ import { HttpRequest, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { Title } from '@angular/platform-browser';
+import { By, Title } from '@angular/platform-browser';
 import { Router, provideRouter, withComponentInputBinding } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import type { MockInstance } from 'vitest';
@@ -27,6 +27,7 @@ import {
   weekDate,
 } from '../format/format';
 import { truncated } from '../organization/messages';
+import { Widget } from '../widget/widget';
 import {
   NO_OPEN_ISSUES,
   NO_RELEASES,
@@ -126,6 +127,15 @@ describe('Comparison', () => {
     );
     expect(found, heading).toBeDefined();
     return found!;
+  }
+
+  /** The CSV file that the widget headed `heading` downloads, if it offers one (FR-EXP-02). */
+  function csv(heading: string) {
+    return harness.fixture.debugElement
+      .queryAll(By.directive(Widget))
+      .map((widget) => widget.componentInstance as Widget)
+      .find((widget) => widget.heading() === heading)
+      ?.table()?.csv;
   }
 
   /** The table of the widget headed `heading`, once "Show table" shows it, row by row. */
@@ -470,6 +480,61 @@ describe('Comparison', () => {
       ['Go', IN_OTHER, percent(0.6)],
       ['Other', percent(0.1), percent(0)],
     ]);
+  });
+
+  it('downloads both sides of its charts as CSV files, a row a side, with when each was fetched (FR-EXP-02)', async () => {
+    const fetchedAt = '2026-11-09T10:00:00.000Z';
+    await open('/-/compare/acme/widget...umbrella/gadget');
+    await answerParts({
+      ...REPOSITORY_PARTS,
+      '/-/api/repositories/acme/widget/commit-activity': {
+        ...REPOSITORY_PARTS['/-/api/repositories/acme/widget/commit-activity'],
+        fetched_at: fetchedAt,
+        stale: null,
+      },
+      '/-/api/repositories/umbrella/gadget/languages': {
+        ...REPOSITORY_PARTS['/-/api/repositories/umbrella/gadget/languages'],
+        fetched_at: fetchedAt,
+        stale: 'github',
+      },
+    });
+    const at = new Date(fetchedAt);
+    // Newest week first, as the table, and none where a side has no such week, never 0.
+    expect(csv('Commit activity')).toEqual({
+      name: 'acme-widget-vs-umbrella-gadget-commit-activity',
+      columns: ['side', 'week_start', 'commits', 'repository', 'fetched_at', 'stale'],
+      rows: [
+        [1, '2026-10-18', 6, 'acme/widget', at, undefined],
+        [2, '2026-10-18', 30, 'umbrella/gadget', undefined, undefined],
+        [1, '2026-10-11', 4, 'acme/widget', at, undefined],
+        [2, '2026-10-11', undefined, 'umbrella/gadget', undefined, undefined],
+      ],
+    });
+    // The bytes of each language, exact, and their shares, from 0 to 1, as the table orders
+    // them, with none where a side counts the language in "Other", and that "Other" last.
+    expect(csv('Languages')).toEqual({
+      name: 'acme-widget-vs-umbrella-gadget-languages',
+      columns: [
+        'side',
+        'language',
+        'is_other',
+        'value',
+        'unit',
+        'share',
+        'counted_in_other',
+        'repository',
+        'fetched_at',
+        'stale',
+      ],
+      rows: [
+        [1, 'Rust', false, 900, 'bytes', 0.9, false, 'acme/widget', undefined, undefined],
+        [2, 'Rust', false, 400, 'bytes', 0.4, false, 'umbrella/gadget', at, 'github'],
+        [1, 'Go', false, undefined, 'bytes', undefined, true, 'acme/widget', undefined, undefined],
+        [2, 'Go', false, 600, 'bytes', 0.6, false, 'umbrella/gadget', at, 'github'],
+        [1, undefined, true, 100, 'bytes', 0.1, false, 'acme/widget', undefined, undefined],
+        [2, undefined, true, 0, 'bytes', 0, false, 'umbrella/gadget', at, 'github'],
+      ],
+    });
   });
 
   it('moves to the URL that spells the names as GitHub does, and asks nothing again (FR-CMP-01)', async () => {
@@ -916,6 +981,64 @@ describe('Comparison', () => {
         ['2019', exactNumber(4), '0'],
         ['2020', '0', exactNumber(12)],
         ['2021', exactNumber(10), '0'],
+      ]);
+    });
+
+    it('downloads both sides of its charts as CSV files, with what each covers (FR-EXP-02, FR-ORG-08)', async () => {
+      await openAccounts();
+      const covered = (part: string, truncated: boolean, read: number) => ({
+        ...ACCOUNT_PARTS[part],
+        truncated,
+        repositories_read: read,
+      });
+      await answerParts({
+        ...ACCOUNT_PARTS,
+        '/-/api/organizations/acme/last-push': covered(
+          '/-/api/organizations/acme/last-push',
+          true,
+          1000,
+        ),
+        '/-/api/users/mona/last-push': covered('/-/api/users/mona/last-push', false, 12),
+        '/-/api/organizations/acme/created-per-year': covered(
+          '/-/api/organizations/acme/created-per-year',
+          true,
+          1000,
+        ),
+        '/-/api/users/mona/created-per-year': covered(
+          '/-/api/users/mona/created-per-year',
+          false,
+          12,
+        ),
+      });
+      const acme = ['acme', 'most_recently_pushed', 1000, undefined, undefined];
+      const mona = ['mona', 'all', 12, undefined, undefined];
+      const columns = ['account', 'coverage', 'repositories_read', 'fetched_at', 'stale'];
+
+      const pushes = csv('Last push')!;
+      expect(pushes.name).toBe('acme-vs-mona-last-push');
+      expect(pushes.columns).toEqual(['side', 'period', 'repositories', ...columns]);
+      expect(pushes.rows).toEqual([
+        [1, 'last_7_days', 12, ...acme],
+        [2, 'last_7_days', 3, ...mona],
+        [1, 'last_30_days', 1, ...acme],
+        [2, 'last_30_days', 0, ...mona],
+        [1, 'last_12_months', 1, ...acme],
+        [2, 'last_12_months', 0, ...mona],
+        [1, 'older', 0, ...acme],
+        [2, 'older', 9, ...mona],
+      ]);
+
+      const created = csv('Repositories created per year')!;
+      expect(created.name).toBe('acme-vs-mona-created-per-year');
+      expect(created.columns).toEqual(['side', 'year', 'repositories', ...columns]);
+      // Over the same years as the table.
+      expect(created.rows).toEqual([
+        [1, 2019, 4, ...acme],
+        [2, 2019, 0, ...mona],
+        [1, 2020, 0, ...acme],
+        [2, 2020, 12, ...mona],
+        [1, 2021, 10, ...acme],
+        [2, 2021, 0, ...mona],
       ]);
     });
   });

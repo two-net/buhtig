@@ -28,9 +28,10 @@ use crate::accounts::is_account_name;
 use crate::cache::{self, Cache, Outcome, Viewer};
 use crate::github::{self, List};
 use crate::organizations::{
-    REPOSITORY_FIELDS, figures, language_chart, login, pushes, table, time, top, website, years,
+    REPOSITORY_FIELDS, covered, figures, language_chart, login, pushes, table, time, top, website,
+    years,
 };
-use crate::repositories::{data, denied, link, respond, stale, status, text};
+use crate::repositories::{Dating, data, denied, link, respond, stale, status, text};
 
 /// `/-/api/users/{login}`: what the dashboard's header shows (FR-USER-01),
 ///
@@ -95,7 +96,8 @@ pub async fn summary(
 /// the viewer may see: their private ones too if the viewer is the user, with a PAT
 /// (FR-USER-06). `internal` is then 0, since only organizations have internal ones. A user
 /// with more than `limits.org_repositories` repositories is figured over that many, those
-/// pushed to most recently, and `truncated` then says so (FR-USER-05).
+/// pushed to most recently, and `truncated` then says so (FR-USER-05). `fetched_at` and
+/// `stale` say when the repositories were fetched, as [`listed`] tells it.
 ///
 /// Its statuses are those of [`summary`], since it reads the user first. A failure to read
 /// their repositories is 502.
@@ -105,7 +107,7 @@ pub async fn stats(
     Path(login): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &login).await {
-        Ok(list) => respond(figures(&list)),
+        Ok((list, dating)) => respond(dating.apply(figures(&list))),
         Err(code) => status(code),
     }
 }
@@ -121,7 +123,7 @@ pub async fn repositories(
     Path(login): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &login).await {
-        Ok(list) => respond(table(&list)),
+        Ok((list, dating)) => respond(covered(table(&list), &list, dating)),
         Err(code) => status(code),
     }
 }
@@ -136,7 +138,7 @@ pub async fn languages(
     Path(login): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &login).await {
-        Ok(list) => respond(language_chart(&list)),
+        Ok((list, dating)) => respond(covered(language_chart(&list), &list, dating)),
         Err(code) => status(code),
     }
 }
@@ -151,7 +153,7 @@ pub async fn top_repositories(
     Path(login): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &login).await {
-        Ok(list) => respond(top(&list)),
+        Ok((list, dating)) => respond(covered(top(&list), &list, dating)),
         Err(code) => status(code),
     }
 }
@@ -167,7 +169,7 @@ pub async fn last_push(
     Path(login): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &login).await {
-        Ok(list) => respond(pushes(&list, ChronoUtc::now())),
+        Ok((list, dating)) => respond(covered(pushes(&list, ChronoUtc::now()), &list, dating)),
         Err(code) => status(code),
     }
 }
@@ -182,21 +184,22 @@ pub async fn created_per_year(
     Path(login): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &login).await {
-        Ok(list) => respond(years(&list, ChronoUtc::now())),
+        Ok((list, dating)) => respond(covered(years(&list, ChronoUtc::now()), &list, dating)),
         Err(code) => status(code),
     }
 }
 
 /// The repositories that the user `name` owns and the viewer may see, as many as BuhTig
-/// reads, those pushed to most recently first, or the status that says why there are none:
-/// those of [`summary`], since it reads the user first, or 502 if the repositories cannot be
-/// read.
+/// reads, those pushed to most recently first, and when they were fetched, or the status that
+/// says why there are none: those of [`summary`], since it reads the user first, or 502 if the
+/// repositories cannot be read. Of two lists merged, they were fetched when the earlier was,
+/// as [`Dating`] tells it.
 ///
 /// Those that GitHub lists as the user's, to anyone, are public. If the viewer is the user,
 /// with a PAT, their private ones are read too, as GitHub lists them to the user alone, and
 /// the two lists are one ([`merged`]). Without them, as once GitHub rejects the PAT, the
 /// public ones are all there is, as for anyone else.
-async fn listed(cache: &Cache, viewer: Viewer, name: &str) -> Result<List, StatusCode> {
+async fn listed(cache: &Cache, viewer: Viewer, name: &str) -> Result<(List, Dating), StatusCode> {
     if !is_account_name(name) {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -212,7 +215,10 @@ async fn listed(cache: &Cache, viewer: Viewer, name: &str) -> Result<List, Statu
         .query("sort", "pushed");
     let public = cache.get_list_of(&viewer, &dashboard, &public, limit, &REPOSITORY_FIELDS);
     if !is_own(&viewer, &profile) {
-        return data(public.await).map(|list| list.data);
+        return data(public.await).map(|list| {
+            let dating = Dating::of(&list);
+            (list.data, dating)
+        });
     }
     let private = github::Path::new(["user", "repos"])
         .expect("`user` is neither empty nor dots")
@@ -221,7 +227,9 @@ async fn listed(cache: &Cache, viewer: Viewer, name: &str) -> Result<List, Statu
         .query("sort", "pushed");
     let private = cache.get_own_list_of(&viewer, &dashboard, &private, limit, &REPOSITORY_FIELDS);
     let (public, private) = tokio::join!(public, private);
-    let public = data(public)?.data;
+    let public = data(public)?;
+    let dating = Dating::of(&public);
+    let public = public.data;
     let private = match private {
         // The PAT no longer sees them, or no longer works, so the viewer sees what anyone
         // does. A rejected PAT is marked invalid, for them to replace (FR-PAT-07).
@@ -230,12 +238,13 @@ async fn listed(cache: &Cache, viewer: Viewer, name: &str) -> Result<List, Statu
             | github::Error::NotFound
             | github::Error::Forbidden { .. }
             | github::Error::SsoRequired { .. },
-        )) => return Ok(public),
+        )) => return Ok((public, dating)),
         // Figures without them would be wrong, with no word of it: GitHub's failure is told
         // instead, as for any part of the dashboard.
-        private => data(private)?.data,
+        private => data(private)?,
     };
-    Ok(merged(public, private, limit))
+    let dating = dating.and(Dating::of(&private));
+    Ok((merged(public, private.data, limit), dating))
 }
 
 /// The user `name` as the cache has it for the viewer: their public profile, the same for
@@ -680,6 +689,7 @@ mod tests {
                 json!({
                     "repositories": 3, "private": 0, "internal": 0, "stars": 42, "forks": 4,
                     "open_issues_and_pull_requests": 2, "top_language": "Go", "truncated": false,
+                    "stale": null,
                 })
             )
         );
@@ -688,7 +698,12 @@ mod tests {
             (status, top),
             (
                 StatusCode::OK,
-                json!({"repositories": [{"name": "widget", "stars": 40}, {"name": "gadget", "stars": 2}]})
+                json!({
+                    "repositories": [{"name": "widget", "stars": 40}, {"name": "gadget", "stars": 2}],
+                    "truncated": false,
+                    "repositories_read": 3,
+                    "stale": null,
+                })
             )
         );
         for api in [Api::Languages, Api::LastPush, Api::CreatedPerYear] {

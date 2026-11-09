@@ -23,8 +23,8 @@ use crate::accounts::is_account_name;
 use crate::cache::{self, Cache, Cached, Outcome, Viewer};
 use crate::github::{self, List};
 use crate::repositories::{
-    data, denied, is_repository_name, link, page, refreshed, respond, stale, status, text, topics,
-    visibility, weeks,
+    Dating, data, denied, is_repository_name, link, page, refreshed, respond, stale, status, text,
+    topics, visibility, weeks,
 };
 
 /// FR-ORG-04: the languages the chart names. The rest are "Other".
@@ -121,7 +121,8 @@ pub async fn summary(
 ///
 /// ```json
 /// {"repositories": …, "private": …, "internal": …, "stars": …, "forks": …,
-///  "open_issues_and_pull_requests": …, "top_language": "Rust" | null, "truncated": false}
+///  "open_issues_and_pull_requests": …, "top_language": "Rust" | null, "truncated": false,
+///  "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// The figures are over the organization's repositories that the viewer may see, of which
@@ -129,7 +130,8 @@ pub async fn summary(
 /// figure, as GitHub counts them. `top_language` is the primary language of the most
 /// repositories, `null` if none has one. An organization with more than
 /// `limits.org_repositories` repositories is figured over that many, those pushed to most
-/// recently, and `truncated` then says so (FR-ORG-08).
+/// recently, and `truncated` then says so (FR-ORG-08). `fetched_at` and `stale` say when the
+/// repositories were fetched, as [`Dating`] tells it.
 ///
 /// Its statuses are those of [`summary`], since it reads the organization first. A failure
 /// to read its repositories is 502.
@@ -139,7 +141,7 @@ pub async fn stats(
     Path(org): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &org).await {
-        Ok(list) => respond(figures(&list)),
+        Ok((list, dating)) => respond(dating.apply(figures(&list))),
         Err(code) => status(code),
     }
 }
@@ -150,14 +152,17 @@ pub async fn stats(
 /// ```json
 /// {"repositories": [{"name": "widget", "description": …, "language": "Rust" | null,
 ///   "topics": ["widgets", …], "stars": …, "forks": …, "open_issues_and_pull_requests": …,
-///   "pushed_at": …, "fork": false, "archived": false, "visibility": "public"}]}
+///   "pushed_at": …, "fork": false, "archived": false, "visibility": "public"}],
+///  "truncated": false, "repositories_read": 12,
+///  "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// The repositories are those that [`stats`] figures over, in the order GitHub gives them,
 /// pushed to most recently first. The dashboard sorts, filters and pages them itself. Each
 /// `name` is the repository's alone, without the organization's, and `visibility` is
 /// `public`, `private` or `internal` (FR-ORG-09). What GitHub does not say is `null`, or 0
-/// for a figure, or no topics, and an item without a repository's name is left out.
+/// for a figure, or no topics, and an item without a repository's name is left out. What
+/// they cover, and when they were fetched, is as [`covered`] tells it.
 ///
 /// Its statuses are those of [`stats`].
 pub async fn repositories(
@@ -166,9 +171,23 @@ pub async fn repositories(
     Path(org): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &org).await {
-        Ok(list) => respond(table(&list)),
+        Ok((list, dating)) => respond(covered(table(&list), &list, dating)),
         Err(code) => status(code),
     }
+}
+
+/// `body`, made from the account's repositories `list`, with what they cover: whether the
+/// account has more than BuhTig reads, as `truncated` (FR-ORG-08), and how many it read, as
+/// `repositories_read`, and when they were fetched, as `dating` tells it, so that an export
+/// of it can say so (FR-EXP-04).
+pub(crate) fn covered(body: Value, list: &List, dating: Dating) -> Value {
+    let mut body = dating.apply(body);
+    if let Some(fields) = body.as_object_mut() {
+        let read = list.items.iter().filter(|item| item.is_object()).count();
+        fields.insert("truncated".into(), list.truncated.into());
+        fields.insert("repositories_read".into(), read.into());
+    }
+    body
 }
 
 /// The repository table's rows, from the account's repositories, in their order.
@@ -182,13 +201,15 @@ pub(crate) fn table(list: &List) -> Value {
 /// repositories of the rest together,
 ///
 /// ```json
-/// {"languages": [{"name": "Rust", "repositories": 12}, …], "other": 5}
+/// {"languages": [{"name": "Rust", "repositories": 12}, …], "other": 5, "truncated": false,
+///  "repositories_read": 17, "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// The repositories are those that [`stats`] figures over, but for those without a primary
 /// language. Of languages with as many repositories, the first by name comes first. `other`
 /// is apart from the languages named, so that none is taken for a language that GitHub
-/// calls "Other".
+/// calls "Other". What they cover, and when they were fetched, is as [`covered`] tells it,
+/// as for the other charts below.
 ///
 /// Its statuses are those of [`stats`].
 pub async fn languages(
@@ -197,7 +218,7 @@ pub async fn languages(
     Path(org): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &org).await {
-        Ok(list) => respond(language_chart(&list)),
+        Ok((list, dating)) => respond(covered(language_chart(&list), &list, dating)),
         Err(code) => status(code),
     }
 }
@@ -206,7 +227,8 @@ pub async fn languages(
 /// with the most stars (FR-ORG-05), most first,
 ///
 /// ```json
-/// {"repositories": [{"name": "widget", "stars": 1200}, …]}
+/// {"repositories": [{"name": "widget", "stars": 1200}, …], "truncated": false,
+///  "repositories_read": 17, "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// The repositories are those that [`stats`] figures over, but for those without stars, and
@@ -221,7 +243,7 @@ pub async fn top_repositories(
     Path(org): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &org).await {
-        Ok(list) => respond(top(&list)),
+        Ok((list, dating)) => respond(covered(top(&list), &list, dating)),
         Err(code) => status(code),
     }
 }
@@ -230,7 +252,8 @@ pub async fn top_repositories(
 /// last pushed to in each period before now (FR-ORG-06),
 ///
 /// ```json
-/// {"last_7_days": 3, "last_30_days": 5, "last_12_months": 20, "older": 12}
+/// {"last_7_days": 3, "last_30_days": 5, "last_12_months": 20, "older": 12,
+///  "truncated": false, "repositories_read": 40, "fetched_at": …, "stale": null | …}
 /// ```
 ///
 /// Each repository counts in one period alone: `last_30_days` are those pushed to within 30
@@ -245,7 +268,7 @@ pub async fn last_push(
     Path(org): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &org).await {
-        Ok(list) => respond(pushes(&list, ChronoUtc::now())),
+        Ok((list, dating)) => respond(covered(pushes(&list, ChronoUtc::now()), &list, dating)),
         Err(code) => status(code),
     }
 }
@@ -255,7 +278,8 @@ pub async fn last_push(
 /// oldest first,
 ///
 /// ```json
-/// {"years": [{"year": 2015, "repositories": 3}, …]}
+/// {"years": [{"year": 2015, "repositories": 3}, …], "truncated": false,
+///  "repositories_read": 40, "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// A year in which none was created is there too, with 0. The repositories are those that
@@ -269,7 +293,7 @@ pub async fn created_per_year(
     Path(org): Path<String>,
 ) -> Response {
     match listed(&cache, viewer, &org).await {
-        Ok(list) => respond(years(&list, ChronoUtc::now())),
+        Ok((list, dating)) => respond(covered(years(&list, ChronoUtc::now()), &list, dating)),
         Err(code) => status(code),
     }
 }
@@ -386,10 +410,10 @@ fn members_path(viewer: &Viewer, login: &str) -> github::Path {
 }
 
 /// The repositories of the organization `org` that the viewer may see, as many as BuhTig
-/// reads, those pushed to most recently first, or the status that says why there are none:
-/// those of [`summary`], since it reads the organization first, or 502 if the repositories
-/// cannot be read.
-async fn listed(cache: &Cache, viewer: Viewer, org: &str) -> Result<List, StatusCode> {
+/// reads, those pushed to most recently first, and when they were fetched, or the status that
+/// says why there are none: those of [`summary`], since it reads the organization first, or
+/// 502 if the repositories cannot be read.
+async fn listed(cache: &Cache, viewer: Viewer, org: &str) -> Result<(List, Dating), StatusCode> {
     let organization = organization(cache, &viewer, org).await?.data;
     let login = login(&organization).ok_or(StatusCode::BAD_GATEWAY)?;
     // By the name GitHub gave, so that the list is cached once whatever case the dashboard
@@ -407,7 +431,10 @@ async fn listed(cache: &Cache, viewer: Viewer, org: &str) -> Result<List, Status
             &REPOSITORY_FIELDS,
         )
         .await;
-    data(list).map(|list| list.data)
+    data(list).map(|list| {
+        let dating = Dating::of(&list);
+        (list.data, dating)
+    })
 }
 
 /// `POST /-/api/organizations/{org}/refresh`: makes the next requests for the
@@ -903,7 +930,8 @@ mod tests {
             return (status, Value::Null);
         }
         let mut body: Value = serde_json::from_slice(&body).unwrap();
-        // Only the summary tells it, as JavaScript writes it.
+        // The summary tells it, and what is made of the repositories, as JavaScript writes
+        // it.
         if let Some(fetched_at) = body.as_object_mut().unwrap().remove("fetched_at") {
             let text = fetched_at.as_str().unwrap();
             assert!(text.ends_with('Z') && text.len() == 24, "{text}");
@@ -1077,6 +1105,7 @@ mod tests {
             "open_issues_and_pull_requests": 19,
             "top_language": "Rust",
             "truncated": false,
+            "stale": null,
         });
         assert_eq!(
             ask(&cache, Api::Stats, "acme").await,
@@ -1116,6 +1145,7 @@ mod tests {
                     "open_issues_and_pull_requests": 0,
                     "top_language": null,
                     "truncated": false,
+                    "stale": null,
                 })
             )
         );
@@ -1139,6 +1169,7 @@ mod tests {
                     // Of one repository each, the first by name.
                     "top_language": "C",
                     "truncated": true,
+                    "stale": null,
                 })
             )
         );
@@ -1232,6 +1263,10 @@ mod tests {
                         // topics are only text.
                         odd,
                     ],
+                    // Of the 5 that GitHub gave, all that the organization has.
+                    "truncated": false,
+                    "repositories_read": 5,
+                    "stale": null,
                 })
             )
         );
@@ -1272,6 +1307,11 @@ mod tests {
             .map(|row| row["name"].as_str().unwrap())
             .collect();
         assert_eq!((status, names), (StatusCode::OK, vec!["new", "newer"]));
+        // And says so, for an export of it to say what it covers (FR-EXP-04).
+        assert_eq!(
+            (&body["truncated"], &body["repositories_read"]),
+            (&json!(true), &json!(2))
+        );
     }
 
     #[test]
@@ -1318,6 +1358,9 @@ mod tests {
                         {"name": "TypeScript", "repositories": 1},
                     ],
                     "other": 0,
+                    "truncated": false,
+                    "repositories_read": 5,
+                    "stale": null,
                 })
             )
         );
@@ -1334,6 +1377,10 @@ mod tests {
                         {"name": "Go", "repositories": 1},
                     ],
                     "other": 0,
+                    // And says that they are of the 2 it read.
+                    "truncated": true,
+                    "repositories_read": 2,
+                    "stale": null,
                 })
             )
         );
@@ -1394,6 +1441,9 @@ mod tests {
                         {"name": "sprocket", "stars": 45},
                         {"name": "docs", "stars": 5},
                     ],
+                    "truncated": false,
+                    "repositories_read": 5,
+                    "stale": null,
                 })
             )
         );
@@ -1552,7 +1602,15 @@ mod tests {
         let (status, pushes) = ask(&cache, Api::LastPush, "acme").await;
         assert_eq!(status, StatusCode::OK);
         let periods = ["last_7_days", "last_30_days", "last_12_months", "older"];
-        assert_eq!(pushes.as_object().unwrap().len(), periods.len());
+        let covered = ["truncated", "repositories_read", "stale"];
+        assert_eq!(
+            pushes.as_object().unwrap().len(),
+            periods.len() + covered.len()
+        );
+        assert_eq!(
+            covered.map(|key| &pushes[key]),
+            [&json!(false), &json!(5), &Value::Null]
+        );
         let counted: u64 = periods
             .iter()
             .map(|period| pushes[period].as_u64().unwrap())
@@ -1561,6 +1619,10 @@ mod tests {
 
         let (status, created) = ask(&cache, Api::CreatedPerYear, "acme").await;
         assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            (&created["truncated"], &created["repositories_read"]),
+            (&json!(false), &json!(5))
+        );
         let years = created["years"].as_array().unwrap();
         assert_eq!(years[0], json!({"year": 2015, "repositories": 1}));
         assert_eq!(
@@ -1578,7 +1640,7 @@ mod tests {
     async fn an_organization_without_repositories_has_nothing_to_chart() {
         let stub = github();
         let cache = cache(&stub, 30, 1000).await;
-        for (api, expected) in [
+        for (api, mut expected) in [
             (Api::Languages, json!({"languages": [], "other": 0})),
             (Api::TopRepositories, json!({"repositories": []})),
             (
@@ -1587,6 +1649,10 @@ mod tests {
             ),
             (Api::CreatedPerYear, json!({"years": []})),
         ] {
+            let fields = expected.as_object_mut().unwrap();
+            fields.insert("truncated".into(), json!(false));
+            fields.insert("repositories_read".into(), json!(0));
+            fields.insert("stale".into(), Value::Null);
             assert_eq!(
                 ask(&cache, api, "bare").await,
                 (StatusCode::OK, expected),

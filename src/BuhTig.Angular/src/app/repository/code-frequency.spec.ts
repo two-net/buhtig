@@ -4,10 +4,11 @@ import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
 import { ColumnChart } from '../chart/columns';
 import { RepositoryData } from '../dashboard/data';
-import { CodeFrequency, Repository } from '../dashboard/resources';
+import { CodeFrequency, Dated, Repository } from '../dashboard/resources';
 import { exactNumber, weekDate } from '../format/format';
 import { Load } from '../widget/load';
 import { COMPUTING } from '../widget/messages';
+import { Widget } from '../widget/widget';
 import { RepositoryCodeFrequency } from './code-frequency';
 import {
   ADDITIONS,
@@ -49,6 +50,7 @@ describe('RepositoryCodeFrequency', () => {
         {
           provide: RepositoryData,
           useValue: {
+            name: signal('acme/widget'),
             repository: signal<Partial<Repository>>({ defaultBranch: 'main' }),
             codeFrequency: () => ({ state: frequency, retry: () => {} }),
           },
@@ -118,6 +120,34 @@ describe('RepositoryCodeFrequency', () => {
       [weekDate(FREQUENCY.weeks[1].start), '0', '0'],
       [weekDate(FREQUENCY.weeks[0].start), exactNumber(1_200), '340'],
     ]);
+  });
+
+  it('downloads its weeks as a CSV file, as its table lists them (FR-EXP-02)', async () => {
+    const fetchedAt = new Date('2026-11-09T10:00:00.000Z');
+    const dated: Dated<CodeFrequency> = { ...FREQUENCY, fetchedAt, stale: undefined };
+    await answer(dated);
+    const widget = fixture.debugElement.query(By.directive(Widget)).componentInstance as Widget;
+    const table = widget.table()!;
+    expect(table.csv!.name).toBe('acme-widget-code-frequency');
+    expect(table.csv!.columns).toEqual([
+      'week_start',
+      'additions',
+      'deletions',
+      'repository',
+      'default_branch',
+      'fetched_at',
+      'stale',
+    ]);
+    // Newest first, as the table, with the lines exact, and a week without changes as 0.
+    expect(table.csv!.rows).toEqual([
+      ['2026-10-25', 30, 0, 'acme/widget', 'main', fetchedAt, undefined],
+      ['2026-10-18', 5, 4_000, 'acme/widget', 'main', fetchedAt, undefined],
+      ['2026-10-11', 0, 0, 'acme/widget', 'main', fetchedAt, undefined],
+      ['2026-10-04', 1_200, 340, 'acme/widget', 'main', fetchedAt, undefined],
+    ]);
+    expect(table.rows.map((row) => row.label)).toEqual(
+      table.csv!.rows.map(([day]) => weekDate(new Date(`${day}T00:00:00Z`))),
+    );
   });
 
   it('says so while GitHub computes it (FR-REPO-10)', async () => {

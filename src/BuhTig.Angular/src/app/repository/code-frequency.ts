@@ -2,6 +2,8 @@ import { Component, computed, inject, input } from '@angular/core';
 import { Column, ColumnChart } from '../chart/columns';
 import { ChartTable } from '../chart/table';
 import { RepositoryData } from '../dashboard/data';
+import { isoDay } from '../export/csv';
+import { BRANCH_COLUMNS, branchCells, exportName } from '../export/provenance';
 import { exactNumber, weekDate } from '../format/format';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
@@ -24,7 +26,7 @@ import {
  * its Activity tab (FR-REPO-15): a chart of columns that go up for the lines added and down for
  * those deleted, with its months below, and a legend that names each. Pointing at a week tells
  * both. Its summary says what it shows in all, and its table lists every week's lines, newest
- * first (NFR-UX-04).
+ * first (NFR-UX-04), as its CSV file does, with when they were fetched (FR-EXP-02).
  *
  * While GitHub is still computing it, it says so and asks again (FR-REPO-10). GitHub does not
  * compute it for its largest repositories, which it says.
@@ -106,15 +108,29 @@ export class RepositoryCodeFrequency {
 
   protected readonly table = computed((): ChartTable | undefined => {
     const frequency = this.ready();
-    return frequency
-      ? {
-          headers: CODE_FREQUENCY_HEADERS,
-          rows: [...frequency.weeks].reverse().map((week) => ({
-            label: weekDate(week.start),
-            values: [exactNumber(week.additions), exactNumber(week.deletions)],
-          })),
-        }
-      : undefined;
+    if (!frequency) {
+      return undefined;
+    }
+    const weeks = [...frequency.weeks].reverse();
+    const name = this.data.name();
+    const provenance = branchCells(name, this.data.repository()?.defaultBranch, frequency);
+    return {
+      headers: CODE_FREQUENCY_HEADERS,
+      rows: weeks.map((week) => ({
+        label: weekDate(week.start),
+        values: [exactNumber(week.additions), exactNumber(week.deletions)],
+      })),
+      csv: {
+        name: exportName(name, 'code-frequency'),
+        columns: ['week_start', 'additions', 'deletions', ...BRANCH_COLUMNS],
+        rows: weeks.map((week) => [
+          isoDay(week.start),
+          week.additions,
+          week.deletions,
+          ...provenance,
+        ]),
+      },
+    };
   });
 
   protected readonly count = exactNumber;

@@ -67,6 +67,41 @@ export interface Freshness {
 /** `T`, with when the data it was made from was fetched. */
 export type Dated<T> = T & Freshness;
 
+/**
+ * What a figure of an organization's or a user's repositories covers (FR-ORG-08, FR-USER-05),
+ * for an export of it to say (FR-EXP-04).
+ */
+export interface Coverage {
+  /**
+   * Whether the account has more repositories than BuhTig reads, so that the figure is of those
+   * pushed to most recently, `repositoriesRead` of them.
+   */
+  truncated: boolean;
+  /** How many of its repositories BuhTig read. */
+  repositoriesRead: number;
+}
+
+/** `T`, of an account's repositories, with what it covers and when they were fetched. */
+export type Covered<T> = Dated<T> & Coverage;
+
+/** The repositories that an account's repository list lists (FR-ORG-03, FR-USER-04). */
+export interface RepositoryList {
+  /** Pushed to most recently first. */
+  repositories: ListedRepository[];
+}
+
+/** The 10 of an account's repositories with the most stars (FR-ORG-05). */
+export interface TopRepositories {
+  /** Most first. */
+  repositories: TopRepository[];
+}
+
+/** How many of an account's repositories were created in each year (FR-ORG-06). */
+export interface CreatedPerYear {
+  /** Oldest first, from the year of the first to this one. */
+  years: YearCount[];
+}
+
 /** What came of a request to refresh a dashboard (FR-DATA-07). */
 export type Refreshed =
   | { status: 'refreshed' }
@@ -680,8 +715,17 @@ interface OrganizationStatsAnswer {
   truncated: boolean;
 }
 
+/**
+ * The server's answer about a figure of an organization's or a user's repositories, with what it
+ * covers and when they were fetched.
+ */
+interface CoveredAnswer extends DatedAnswer {
+  truncated?: boolean;
+  repositories_read?: number;
+}
+
 /** The server's answer about an organization or a user, for its repository table. */
-interface OrganizationRepositoriesAnswer {
+interface OrganizationRepositoriesAnswer extends CoveredAnswer {
   repositories: {
     name: string;
     description: string | null;
@@ -698,12 +742,12 @@ interface OrganizationRepositoriesAnswer {
 }
 
 /** The server's answer about an organization, for its top-repositories chart. */
-interface TopRepositoriesAnswer {
+interface TopRepositoriesAnswer extends CoveredAnswer {
   repositories: { name: string; stars: number }[];
 }
 
 /** The server's answer about an organization, for its last-push chart. */
-interface LastPushAnswer {
+interface LastPushAnswer extends CoveredAnswer {
   last_7_days: number;
   last_30_days: number;
   last_12_months: number;
@@ -711,8 +755,14 @@ interface LastPushAnswer {
 }
 
 /** The server's answer about an organization, for its created-per-year chart. */
-interface CreatedPerYearAnswer {
+interface CreatedPerYearAnswer extends CoveredAnswer {
   years: YearCount[];
+}
+
+/** The server's answer about an organization, for its languages chart. */
+interface LanguageCountsAnswer extends CoveredAnswer {
+  languages: LanguageCount[];
+  other: number;
 }
 
 /** The server's answer about an organization, for its members widget. */
@@ -754,18 +804,18 @@ interface GlanceAnswer extends RepositoryAnswer {
 }
 
 /** The server's answer about a repository, for its commit-activity chart. */
-interface CommitActivityAnswer {
+interface CommitActivityAnswer extends DatedAnswer {
   weeks: { week: string; commits: number }[];
 }
 
 /** The server's answer about a repository, for its languages chart. */
-interface LanguagesAnswer {
+interface LanguagesAnswer extends DatedAnswer {
   languages: Language[];
   other: number;
 }
 
 /** The server's answer about a repository, for its top contributors. */
-interface ContributorsAnswer {
+interface ContributorsAnswer extends DatedAnswer {
   contributors: {
     login: string;
     avatar_url: string | null;
@@ -789,7 +839,7 @@ interface IssueAnswer {
 }
 
 /** The server's answer about a repository, for its issues and pull requests. */
-interface IssuesAnswer {
+interface IssuesAnswer extends DatedAnswer {
   issues: { open: number; closed: number } | null;
   pull_requests: { open: number; merged: number; closed: number } | null;
   recent: IssueAnswer[];
@@ -877,7 +927,7 @@ interface WorkflowRunsAnswer extends DatedAnswer {
 }
 
 /** The server's answer about a repository, for its code frequency chart. */
-interface CodeFrequencyAnswer {
+interface CodeFrequencyAnswer extends DatedAnswer {
   weeks: { week: string; additions: number; deletions: number }[];
   too_large: boolean;
 }
@@ -1148,11 +1198,11 @@ export class Resources {
    * to most recently first, which fail as `accountStats` does. Any that the server gives a name
    * no repository can have is left out.
    */
-  accountRepositories(owner: Owner): Observable<ListedRepository[]> {
+  accountRepositories(owner: Owner): Observable<Covered<RepositoryList>> {
     const login = nameOf(owner);
     return this.http.get<OrganizationRepositoriesAnswer>(`${resourceUrl(owner)}/repositories`).pipe(
-      map(({ repositories }) =>
-        repositories.flatMap((repository): ListedRepository[] => {
+      map((answer) => ({
+        repositories: answer.repositories.flatMap((repository): ListedRepository[] => {
           const path = canonicalPath(`${login}/${repository.name}`, 'repository');
           if (path === undefined) {
             return [];
@@ -1176,7 +1226,8 @@ export class Resources {
             },
           ];
         }),
-      ),
+        ...coverage(answer),
+      })),
     );
   }
 
@@ -1184,8 +1235,14 @@ export class Resources {
    * How many of the repositories of the organization or user `owner` have each primary language,
    * which fails as `accountStats` does.
    */
-  accountLanguages(owner: Owner): Observable<LanguageCounts> {
-    return this.http.get<LanguageCounts>(`${resourceUrl(owner)}/languages`);
+  accountLanguages(owner: Owner): Observable<Covered<LanguageCounts>> {
+    return this.http.get<LanguageCountsAnswer>(`${resourceUrl(owner)}/languages`).pipe(
+      map((answer) => ({
+        languages: answer.languages,
+        other: answer.other,
+        ...coverage(answer),
+      })),
+    );
   }
 
   /**
@@ -1193,15 +1250,16 @@ export class Resources {
    * fail as `accountStats` does. Any that the server gives a name no repository can have is
    * left out.
    */
-  topRepositories(owner: Owner): Observable<TopRepository[]> {
+  topRepositories(owner: Owner): Observable<Covered<TopRepositories>> {
     const login = nameOf(owner);
     return this.http.get<TopRepositoriesAnswer>(`${resourceUrl(owner)}/top-repositories`).pipe(
-      map(({ repositories }) =>
-        repositories.flatMap(({ name, stars }): TopRepository[] => {
+      map((answer) => ({
+        repositories: answer.repositories.flatMap(({ name, stars }): TopRepository[] => {
           const path = canonicalPath(`${login}/${name}`, 'repository');
           return path !== undefined ? [{ name, path, stars }] : [];
         }),
-      ),
+        ...coverage(answer),
+      })),
     );
   }
 
@@ -1209,13 +1267,14 @@ export class Resources {
    * How many of the repositories of the organization or user `owner` were last pushed to in each
    * period, which fails as `accountStats` does.
    */
-  lastPush(owner: Owner): Observable<LastPush> {
+  lastPush(owner: Owner): Observable<Covered<LastPush>> {
     return this.http.get<LastPushAnswer>(`${resourceUrl(owner)}/last-push`).pipe(
       map((answer) => ({
         last7Days: answer.last_7_days,
         last30Days: answer.last_30_days,
         last12Months: answer.last_12_months,
         older: answer.older,
+        ...coverage(answer),
       })),
     );
   }
@@ -1224,10 +1283,10 @@ export class Resources {
    * How many of the repositories of the organization or user `owner` were created in each year,
    * oldest first, which fails as `accountStats` does.
    */
-  createdPerYear(owner: Owner): Observable<YearCount[]> {
+  createdPerYear(owner: Owner): Observable<Covered<CreatedPerYear>> {
     return this.http
       .get<CreatedPerYearAnswer>(`${resourceUrl(owner)}/created-per-year`)
-      .pipe(map(({ years }) => years));
+      .pipe(map((answer) => ({ years: answer.years, ...coverage(answer) })));
   }
 
   /**
@@ -1251,23 +1310,26 @@ export class Resources {
    * The commit activity of the repository `owner/repo`, which fails with `Computing` while
    * GitHub is still computing it (FR-REPO-10), and otherwise as `stats` does.
    */
-  commitActivity(owner: string, repo: string): Observable<CommitActivity> {
-    return this.part<CommitActivityAnswer>(owner, repo, 'commit-activity').pipe(map(activity));
+  commitActivity(owner: string, repo: string): Observable<Dated<CommitActivity>> {
+    return this.part<CommitActivityAnswer>(owner, repo, 'commit-activity').pipe(
+      map((answer) => ({ ...activity(answer), ...freshness(answer) })),
+    );
   }
 
   /** The languages of the repository `owner/repo`, which fail as `commitActivity` does. */
-  languages(owner: string, repo: string): Observable<Languages> {
+  languages(owner: string, repo: string): Observable<Dated<Languages>> {
     return this.part<LanguagesAnswer>(owner, repo, 'languages').pipe(
-      map(({ languages, other }) => ({
-        languages,
-        other,
-        total: languages.reduce((total, language) => total + language.bytes, other),
+      map((answer) => ({
+        languages: answer.languages,
+        other: answer.other,
+        total: answer.languages.reduce((total, language) => total + language.bytes, answer.other),
+        ...freshness(answer),
       })),
     );
   }
 
   /** The top contributors of the repository `owner/repo`, which fail as `commitActivity` does. */
-  contributors(owner: string, repo: string): Observable<Contributors> {
+  contributors(owner: string, repo: string): Observable<Dated<Contributors>> {
     return this.part<ContributorsAnswer>(owner, repo, 'contributors').pipe(
       map((answer) => ({
         contributors: answer.contributors.map((contributor) => ({
@@ -1278,6 +1340,7 @@ export class Resources {
         })),
         tooLarge: answer.too_large === true,
         count: typeof answer.count === 'number' ? answer.count : undefined,
+        ...freshness(answer),
       })),
     );
   }
@@ -1286,12 +1349,13 @@ export class Resources {
    * The issues and pull requests of the repository `owner/repo`, which fail as `commitActivity`
    * does.
    */
-  issues(owner: string, repo: string): Observable<IssuesAndPullRequests> {
+  issues(owner: string, repo: string): Observable<Dated<IssuesAndPullRequests>> {
     return this.part<IssuesAnswer>(owner, repo, 'issues').pipe(
-      map((answer): IssuesAndPullRequests => ({
+      map((answer): Dated<IssuesAndPullRequests> => ({
         issues: answer.issues ?? undefined,
         pullRequests: answer.pull_requests ?? undefined,
         recent: answer.recent.map(issueOrPullRequest),
+        ...freshness(answer),
       })),
     );
   }
@@ -1419,7 +1483,7 @@ export class Resources {
    * fails with `Computing` while GitHub is still computing it (FR-REPO-10, FR-REPO-15), and
    * otherwise as `commitActivity` does. Weeks it cannot date are left out.
    */
-  codeFrequency(owner: string, repo: string): Observable<CodeFrequency> {
+  codeFrequency(owner: string, repo: string): Observable<Dated<CodeFrequency>> {
     return this.part<CodeFrequencyAnswer>(owner, repo, 'code-frequency').pipe(
       map((answer) => {
         const weeks = answer.weeks.flatMap(({ week, additions, deletions }) => {
@@ -1433,6 +1497,7 @@ export class Resources {
           additions: weeks.reduce((total, week) => total + week.additions, 0),
           deletions: weeks.reduce((total, week) => total + week.deletions, 0),
           tooLarge: answer.too_large === true,
+          ...freshness(answer),
         };
       }),
     );
@@ -1796,6 +1861,19 @@ function staleOf(value: unknown): Stale | undefined {
 /** When the data of `answer` was fetched, and why it is no newer, as the server tells them. */
 function freshness(answer: DatedAnswer): Freshness {
   return { fetchedAt: date(answer.fetched_at), stale: staleOf(answer.stale) };
+}
+
+/**
+ * What a figure of an account's repositories, as `answer`, covers, and when they were fetched, as
+ * the server tells them. A server that does not tell how many it read is taken to have read none.
+ */
+function coverage(answer: CoveredAnswer): Freshness & Coverage {
+  const read = answer.repositories_read;
+  return {
+    ...freshness(answer),
+    truncated: answer.truncated === true,
+    repositoriesRead: typeof read === 'number' && Number.isInteger(read) && read >= 0 ? read : 0,
+  };
 }
 
 /** The time `text` tells, if it tells one. */

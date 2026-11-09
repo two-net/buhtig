@@ -1163,16 +1163,38 @@ describe('Resources', () => {
         archived: false,
         visibility: 'private',
       })),
+      truncated: true,
+      repositories_read: 2,
+      fetched_at: '2026-11-09T10:00:00.000Z',
+      stale: 'github',
     });
     expect(
-      repositories.value?.map(({ name, path, visibility }) => [name, path, visibility]),
+      repositories.value?.repositories.map(({ name, path, visibility }) => [
+        name,
+        path,
+        visibility,
+      ]),
     ).toEqual([['rocket', '/mona/rocket', 'private']]);
+    // What the list covers, and when it was fetched, for an export of it (FR-EXP-04).
+    expect(repositories.value).toMatchObject({
+      truncated: true,
+      repositoriesRead: 2,
+      fetchedAt: new Date('2026-11-09T10:00:00.000Z'),
+      stale: 'github',
+    });
 
     const top = outcome(resources.topRepositories(mona));
     http
       .expectOne('/-/api/users/mona/top-repositories')
       .flush({ repositories: [{ name: 'rocket', stars: 5 }] });
-    expect(top.value).toEqual([{ name: 'rocket', path: '/mona/rocket', stars: 5 }]);
+    // A server that does not say what they cover is taken to have read none, of all there are.
+    expect(top.value).toEqual({
+      repositories: [{ name: 'rocket', path: '/mona/rocket', stars: 5 }],
+      truncated: false,
+      repositoriesRead: 0,
+      fetchedAt: undefined,
+      stale: undefined,
+    });
 
     outcome(resources.accountLanguages(mona));
     http.expectOne('/-/api/users/mona/languages').flush({ languages: [], other: 0 });

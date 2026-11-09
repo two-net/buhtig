@@ -1,4 +1,5 @@
 import { Component, computed, input } from '@angular/core';
+import { CsvExport } from '../export/csv';
 
 /** One row of a chart's table: what it is of, and its figures in full, one a column. */
 export interface Row {
@@ -8,11 +9,13 @@ export interface Row {
 
 /**
  * A chart's data as a table: the headers of its columns, first that of what each row is of,
- * then those of its figures, and its rows.
+ * then those of its figures, and its rows. And the same data as a CSV file to download, if it
+ * can be, made with the table, of the same rows, so that the two always agree (FR-EXP-02).
  */
 export interface ChartTable {
   headers: readonly [string, ...string[]];
   rows: Row[];
+  csv?: CsvExport;
 }
 
 /**

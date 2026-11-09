@@ -349,11 +349,13 @@ fn repository_id(repository: &Value) -> Option<i64> {
 /// default branch had in each of the last 52 weeks (FR-REPO-03), oldest first,
 ///
 /// ```json
-/// {"weeks": [{"week": "2025-10-26", "commits": 3}, …]}
+/// {"weeks": [{"week": "2025-10-26", "commits": 3}, …],
+///  "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// Each week starts on the Sunday whose date it gives, in UTC, as GitHub counts them. An
-/// empty repository has no weeks (FR-REPO-11).
+/// empty repository has no weeks (FR-REPO-11). `fetched_at` and `stale` say when the weeks
+/// were fetched, as [`dated`] tells it, for an export of them to say (FR-EXP-04).
 ///
 /// 202 while GitHub is still computing them: ask again (FR-REPO-10). Its other statuses
 /// are those of [`stats`].
@@ -371,11 +373,11 @@ pub async fn commit_activity(
         .get(&repository.viewer, &repository.dashboard, &path)
         .await;
     let activity = match data(activity) {
-        Ok(activity) => activity.data,
+        Ok(activity) => activity,
         Err(code) => return status(code),
     };
-    match weeks(&activity) {
-        Some(weeks) => respond(json!({ "weeks": weeks })),
+    match weeks(&activity.data) {
+        Some(weeks) => respond(dated_by(json!({ "weeks": weeks }), &activity)),
         None => status(StatusCode::BAD_GATEWAY),
     }
 }
@@ -385,11 +387,13 @@ pub async fn commit_activity(
 /// first, and the rest together,
 ///
 /// ```json
-/// {"languages": [{"name": "Rust", "bytes": 120000}, …], "other": 3456}
+/// {"languages": [{"name": "Rust", "bytes": 120000}, …], "other": 3456,
+///  "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// `other` is apart from the languages named, so that none is taken for a language that
-/// GitHub calls "Other". An empty repository has no languages (FR-REPO-11).
+/// GitHub calls "Other". An empty repository has no languages (FR-REPO-11). `fetched_at`
+/// and `stale` say when they were fetched, as [`dated`] tells it.
 ///
 /// Its statuses are those of [`commit_activity`].
 pub async fn languages(
@@ -406,11 +410,11 @@ pub async fn languages(
         .get(&repository.viewer, &repository.dashboard, &path)
         .await;
     let languages = match data(languages) {
-        Ok(languages) => languages.data,
+        Ok(languages) => languages,
         Err(code) => return status(code),
     };
-    match shares(&languages) {
-        Some(shares) => respond(shares),
+    match shares(&languages.data) {
+        Some(shares) => respond(dated_by(shares, &languages)),
         None => status(StatusCode::BAD_GATEWAY),
     }
 }
@@ -421,7 +425,7 @@ pub async fn languages(
 ///
 /// ```json
 /// {"contributors": [{"login": …, "avatar_url": …, "url": …, "commits": …}, …],
-///  "count": 42 | null, "too_large": false}
+///  "count": 42 | null, "too_large": false, "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// `url` is the account's page on GitHub (FR-REPO-12). Bots count too, as on GitHub. What
@@ -430,6 +434,8 @@ pub async fn languages(
 /// when there are more than 10. GitHub does not list the contributors of its largest
 /// repositories: `too_large` then says so, there are none, and `count` is `null`, as it is
 /// when GitHub lists them but will not count them. An empty repository has none (FR-REPO-11).
+/// `fetched_at` and `stale` say when the list was fetched, or its count if that was fetched
+/// earlier, as [`Dating`] tells it, or the repository, when GitHub would not list them.
 ///
 /// Its statuses are those of [`commit_activity`]. A failure to count the contributors is
 /// 502.
@@ -453,13 +459,17 @@ pub async fn contributors(
         .await;
     let list = match list {
         Err(error) if refused(&error) => {
-            return respond(json!({ "contributors": [], "count": null, "too_large": true }));
+            return respond(repository.dated(json!({
+                "contributors": [], "count": null, "too_large": true
+            })));
         }
         list => match data(list) {
-            Ok(list) => list.data,
+            Ok(list) => list,
             Err(code) => return status(code),
         },
     };
+    let mut dating = Dating::of(&list);
+    let list = list.data;
     let count = if list.truncated {
         let count = cache
             .get_count(&repository.viewer, &repository.dashboard, &path)
@@ -467,7 +477,10 @@ pub async fn contributors(
         match count {
             Err(error) if refused(&error) => None,
             count => match data(count) {
-                Ok(count) => Some(count.data.max(listed(&list))),
+                Ok(count) => {
+                    dating = dating.and(Dating::of(&count));
+                    Some(count.data.max(listed(&list)))
+                }
                 Err(code) => return status(code),
             },
         }
@@ -483,7 +496,9 @@ pub async fn contributors(
     contributors.sort_by(|(one, _), (other, _)| other.cmp(one));
     contributors.truncate(CONTRIBUTORS);
     let contributors: Vec<Value> = contributors.into_iter().map(|(_, data)| data).collect();
-    respond(json!({ "contributors": contributors, "count": count, "too_large": false }))
+    respond(dating.apply(json!({
+        "contributors": contributors, "count": count, "too_large": false
+    })))
 }
 
 /// Whether GitHub refused to list or count what is under a repository: its contributors,
@@ -507,14 +522,17 @@ fn listed(list: &List) -> u64 {
 ///  "pull_requests": {"open": …, "merged": …, "closed": …} | null,
 ///  "recent": [{"number": …, "title": …, "kind": "issue" | "pull_request",
 ///              "state": "open" | "closed" | "merged", "author": …, "created_at": …,
-///              "updated_at": …, "url": …}, …]}
+///              "updated_at": …, "url": …}, …],
+///  "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// Closed pull requests are those closed without being merged. Open issues are counted as
 /// the stat cards count them, so that the two agree. Issues or pull requests that the
 /// repository has turned off on GitHub are `null`, and are not searched for, beyond the open
 /// pull requests that the stat cards count anyway. `url` is each one's page on GitHub
-/// (FR-REPO-12). What BuhTig does not show or link to is `null` (NFR-SEC-03).
+/// (FR-REPO-12). What BuhTig does not show or link to is `null` (NFR-SEC-03). `fetched_at`
+/// and `stale` say when the oldest of the repository, the counts and the list was fetched,
+/// as [`Dating`] tells it.
 ///
 /// Its statuses are those of [`stats`].
 pub async fn issues(
@@ -1006,14 +1024,15 @@ fn part(result: Result<Value, StatusCode>) -> Value {
 ///
 /// ```json
 /// {"weeks": [{"week": "2025-10-26", "additions": 1200, "deletions": 340}, …],
-///  "too_large": false}
+///  "too_large": false, "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// Each week starts on the Sunday whose date it gives, in UTC, as GitHub counts them, and
 /// the last is the current week. A week that GitHub leaves out had no changes. An empty
 /// repository has no weeks (FR-REPO-11). GitHub does not compute the code frequency of
 /// repositories with 10,000 commits or more: `too_large` then says so, and there are no
-/// weeks.
+/// weeks. `fetched_at` and `stale` say when the weeks were fetched, as [`dated`] tells it,
+/// or the repository, when GitHub would not compute them.
 ///
 /// Its statuses are those of [`commit_activity`]: 202 while GitHub is still computing it.
 pub async fn code_frequency(
@@ -1032,15 +1051,18 @@ pub async fn code_frequency(
     let frequency = match frequency {
         // GitHub's answer for a repository with 10,000 commits or more.
         Err(cache::Error::GitHub(github::Error::Status { status: 422, .. })) => {
-            return respond(json!({ "weeks": [], "too_large": true }));
+            return respond(repository.dated(json!({ "weeks": [], "too_large": true })));
         }
         frequency => match data(frequency) {
-            Ok(frequency) => frequency.data,
+            Ok(frequency) => frequency,
             Err(code) => return status(code),
         },
     };
-    match changes(&frequency, ChronoUtc::now()) {
-        Some(weeks) => respond(json!({ "weeks": weeks, "too_large": false })),
+    match changes(&frequency.data, ChronoUtc::now()) {
+        Some(weeks) => respond(dated_by(
+            json!({ "weeks": weeks, "too_large": false }),
+            &frequency,
+        )),
         None => status(StatusCode::BAD_GATEWAY),
     }
 }
@@ -1160,7 +1182,15 @@ impl Under {
     /// `body`, made from the repository alone without asking GitHub more, with when the
     /// repository was fetched, as [`dated`] tells it.
     fn dated(&self, body: Value) -> Value {
-        dated(body, self.fetched_at, self.stale)
+        self.dating().apply(body)
+    }
+
+    /// When GitHub gave the repository, and why it is no newer.
+    fn dating(&self) -> Dating {
+        Dating {
+            fetched_at: self.fetched_at,
+            stale: self.stale,
+        }
     }
 
     /// The path of what is under the repository on GitHub, such as `["languages"]`, by the
@@ -1230,7 +1260,41 @@ fn dated(mut body: Value, fetched_at: DateTimeUtc, stale: Option<&'static str>) 
 
 /// `body`, made from `cached`, with when it was fetched, as [`dated`] tells it.
 fn dated_by<T>(body: Value, cached: &Cached<T>) -> Value {
-    dated(body, cached.fetched_at, stale(cached))
+    Dating::of(cached).apply(body)
+}
+
+/// When GitHub gave the data that a figure was made from, and why that is no newer, as
+/// [`dated`] tells them (FR-DATA-05, FR-DATA-06). Of a figure made from several parts, such
+/// as counts of several searches, they are those of the part fetched first, and it is stale
+/// if any part is, so that an export of it says no more than BuhTig knows (FR-EXP-04).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Dating {
+    pub(crate) fetched_at: DateTimeUtc,
+    pub(crate) stale: Option<&'static str>,
+}
+
+impl Dating {
+    /// When `cached` was fetched, and why it is no newer.
+    pub(crate) fn of<T>(cached: &Cached<T>) -> Self {
+        Self {
+            fetched_at: cached.fetched_at,
+            stale: stale(cached),
+        }
+    }
+
+    /// Of a figure made from this part and `other`: the earlier of their fetches, and stale
+    /// if either is.
+    pub(crate) fn and(self, other: Self) -> Self {
+        Self {
+            fetched_at: self.fetched_at.min(other.fetched_at),
+            stale: self.stale.or(other.stale),
+        }
+    }
+
+    /// `body`, with when its data was fetched, as [`dated`] tells it.
+    pub(crate) fn apply(self, body: Value) -> Value {
+        dated(body, self.fetched_at, self.stale)
+    }
 }
 
 /// The repository `owner/repo`, as the cache has it for the viewer, or the status that
@@ -1340,15 +1404,24 @@ async fn issues_and_pulls(cache: &Cache, repository: &Under) -> Result<Value, St
         ),
         cache.get_list(&repository.viewer, &repository.dashboard, &updated, RECENT),
     );
-    let open_pulls = open_pulls?;
-    let issues = match closed_issues.transpose()? {
+    // The open issues are counted from the repository as well as the open pull requests.
+    let mut dating = repository.dating();
+    let mut counted = |counted: (u64, Dating)| {
+        dating = dating.and(counted.1);
+        counted.0
+    };
+    let open_pulls = counted(open_pulls?);
+    let closed_issues = closed_issues.transpose()?.map(&mut counted);
+    let merged_pulls = merged_pulls.transpose()?.map(&mut counted);
+    let closed_pulls = closed_pulls.transpose()?.map(&mut counted);
+    let issues = match closed_issues {
         Some(closed) => Some(json!({
             "open": open_issues(&repository.data, open_pulls).ok_or(StatusCode::BAD_GATEWAY)?,
             "closed": closed,
         })),
         None => None,
     };
-    let pull_requests = match (merged_pulls.transpose()?, closed_pulls.transpose()?) {
+    let pull_requests = match (merged_pulls, closed_pulls) {
         (Some(merged), Some(closed)) => Some(json!({
             "open": open_pulls,
             "merged": merged,
@@ -1356,13 +1429,17 @@ async fn issues_and_pulls(cache: &Cache, repository: &Under) -> Result<Value, St
         })),
         _ => None,
     };
-    let recent: Vec<Value> = data(recent)?
+    let recent = data(recent)?;
+    let dating = dating.and(Dating::of(&recent));
+    let recent: Vec<Value> = recent
         .data
         .items
         .iter()
         .filter_map(|item| listed_item(item, cache.github_host()))
         .collect();
-    Ok(json!({ "issues": issues, "pull_requests": pull_requests, "recent": recent }))
+    Ok(dating.apply(json!({
+        "issues": issues, "pull_requests": pull_requests, "recent": recent
+    })))
 }
 
 /// What the Issues or the Pull requests tab lists (FR-REPO-06).
@@ -1577,15 +1654,21 @@ fn list_page(kind: Kind, view: &ListView, page: &Page, off: bool, host: &str) ->
 }
 
 /// How many of the repository's issues or pull requests the search for `qualifiers` finds,
-/// or the status that says why it cannot tell: 502 if GitHub left the count out.
-async fn count(cache: &Cache, repository: &Under, qualifiers: &str) -> Result<u64, StatusCode> {
+/// and when the search was fetched, or the status that says why it cannot tell: 502 if
+/// GitHub left the count out.
+async fn count(
+    cache: &Cache,
+    repository: &Under,
+    qualifiers: &str,
+) -> Result<(u64, Dating), StatusCode> {
     let path = search(&repository.name, qualifiers);
     let found = data(
         cache
             .get(&repository.viewer, &repository.dashboard, &path)
             .await,
     )?;
-    total(&found.data).ok_or(StatusCode::BAD_GATEWAY)
+    let total = total(&found.data).ok_or(StatusCode::BAD_GATEWAY)?;
+    Ok((total, Dating::of(&found)))
 }
 
 /// What `future` comes to, if `enabled`. Otherwise it is never started, so it asks GitHub
@@ -3081,6 +3164,115 @@ mod tests {
         }
     }
 
+    /// FR-EXP-04, FR-DATA-05, FR-DATA-06: what the charts' tables are made of says when its
+    /// data was fetched, and why it is no newer, so that an export of a table can say so.
+    #[tokio::test]
+    async fn chart_figures_say_when_fetched_and_why_no_newer() {
+        let down = Arc::new(AtomicBool::new(false));
+        let stub = Stub::new({
+            let down = down.clone();
+            move |request| {
+                if down.load(Ordering::Relaxed) {
+                    return answer(502, &[], r#"{"message": "Server Error"}"#);
+                }
+                match request.uri().path() {
+                    "/repos/acme/widget" => answer(200, &[], WIDGET),
+                    "/repos/Acme/Widget/stats/commit_activity" => answer(200, &[], &activity()),
+                    "/repos/Acme/Widget/stats/code_frequency" => answer(200, &[], &frequency()),
+                    "/repos/Acme/Widget/languages" => answer(200, &[], LANGUAGES),
+                    "/repos/Acme/Widget/contributors" => answer(200, &[], CONTRIBUTORS),
+                    "/repos/Acme/Widget/issues" => answer(200, &[], ISSUES),
+                    "/search/issues" => answer(200, &[], PULLS),
+                    _ => answer(404, &[], r#"{"message": "Not Found"}"#),
+                }
+            }
+        });
+        // Nothing is fresh, and visitors may fetch nothing.
+        let cache = cache_for(&stub, 0, Duration::ZERO).await;
+        let signed_in = Viewer::SignedIn {
+            user_id: 1,
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let ask = async |viewer: &Viewer, api: Api| {
+            let (status, body) = request_as(&cache, viewer.clone(), api, "acme", "widget").await;
+            let body: Value = serde_json::from_str(&body).unwrap();
+            (status, body["stale"].clone(), fetched_at(&body))
+        };
+
+        for api in [
+            Api::CommitActivity,
+            Api::CodeFrequency,
+            Api::Languages,
+            Api::Contributors,
+            Api::Issues,
+        ] {
+            let before = ChronoUtc::now().trunc_subsecs(3);
+            let (status, stale, fetched) = ask(&signed_in, api).await;
+            assert_eq!((status, stale), (StatusCode::OK, Value::Null), "{api:?}");
+            assert!(before <= fetched && fetched <= ChronoUtc::now(), "{api:?}");
+            // A visitor who may not fetch from GitHub now is served what is cached, and told
+            // why it is no newer.
+            let (status, stale, _) = ask(&visitor, api).await;
+            assert_eq!((status, stale), (StatusCode::OK, json!("held")), "{api:?}");
+            // GitHub fails: what is cached is served, with why it is no newer.
+            down.store(true, Ordering::Relaxed);
+            let (status, stale, _) = ask(&signed_in, api).await;
+            assert_eq!(
+                (status, stale),
+                (StatusCode::OK, json!("github")),
+                "{api:?}"
+            );
+            down.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// FR-EXP-04: counts made of several parts are as fresh as the part fetched first, here
+    /// the repository, read before its searches were.
+    #[tokio::test]
+    async fn counts_are_as_fresh_as_their_oldest_part() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let fetched = |body: &str| fetched_at(&serde_json::from_str(body).unwrap());
+        let repository = fetched(&request(&cache, Api::Summary, "acme", "widget").await.1);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let (status, body) = request(&cache, Api::Issues, "acme", "widget").await;
+        assert_eq!((status, fetched(&body)), (StatusCode::OK, repository));
+    }
+
+    #[test]
+    fn a_figure_of_several_parts_is_dated_by_the_first_fetched_and_stale_if_any_is() {
+        let at = |seconds| DateTimeUtc::from_timestamp(seconds, 0).unwrap();
+        let fresh = Dating {
+            fetched_at: at(200),
+            stale: None,
+        };
+        let held = Dating {
+            fetched_at: at(300),
+            stale: Some("held"),
+        };
+        let failed = Dating {
+            fetched_at: at(100),
+            stale: Some("github"),
+        };
+        assert_eq!(
+            fresh.and(held),
+            Dating {
+                fetched_at: at(200),
+                stale: Some("held")
+            }
+        );
+        assert_eq!(fresh.and(failed), failed);
+        assert_eq!(fresh.and(fresh), fresh);
+        assert_eq!(
+            fresh.apply(json!({"weeks": []})),
+            json!({"weeks": [], "fetched_at": "1970-01-01T00:03:20.000Z", "stale": null})
+        );
+    }
+
     /// FR-CMP-06: what is told without asking GitHub more is as fresh as the repository it is
     /// told from, and that GitHub refused to list workflow runs is as fresh as can be, since
     /// nothing is cached of it.
@@ -3668,6 +3860,7 @@ mod tests {
                     ],
                     // Python and Nix.
                     "other": 150,
+                    "stale": null,
                 })
             )
         );
@@ -3712,6 +3905,7 @@ mod tests {
                     // on one page, so they are not counted apart.
                     "count": 6,
                     "too_large": false,
+                    "stale": null,
                 })
             )
         );
@@ -3790,7 +3984,7 @@ mod tests {
             ask(&cache, Api::Contributors, "acme", "huge").await,
             (
                 StatusCode::OK,
-                json!({"contributors": [], "count": null, "too_large": true})
+                json!({"contributors": [], "count": null, "too_large": true, "stale": null})
             )
         );
     }
@@ -3862,6 +4056,7 @@ mod tests {
                             "url": null,
                         },
                     ],
+                    "stale": null,
                 })
             )
         );
@@ -4312,6 +4507,7 @@ mod tests {
                         "updated_at": null,
                         "url": "https://github.com/acme/mirror/pull/3",
                     }],
+                    "stale": null,
                 })
             )
         );
@@ -4319,7 +4515,7 @@ mod tests {
             ask(&cache, Api::Issues, "acme", "locked").await,
             (
                 StatusCode::OK,
-                json!({"issues": null, "pull_requests": null, "recent": []})
+                json!({"issues": null, "pull_requests": null, "recent": [], "stale": null})
             )
         );
         let mut searches: Vec<String> = stub
@@ -4638,7 +4834,10 @@ mod tests {
         let cache = cache(&stub, 30).await;
         assert_eq!(
             ask(&cache, Api::CodeFrequency, "acme", "huge").await,
-            (StatusCode::OK, json!({"weeks": [], "too_large": true}))
+            (
+                StatusCode::OK,
+                json!({"weeks": [], "too_large": true, "stale": null})
+            )
         );
     }
 
@@ -4767,17 +4966,20 @@ mod tests {
         let cache = cache(&stub, 30).await;
         assert_eq!(
             ask(&cache, Api::CommitActivity, "acme", "bare").await,
-            (StatusCode::OK, json!({"weeks": []}))
+            (StatusCode::OK, json!({"weeks": [], "stale": null}))
         );
         assert_eq!(
             ask(&cache, Api::Languages, "acme", "bare").await,
-            (StatusCode::OK, json!({"languages": [], "other": 0}))
+            (
+                StatusCode::OK,
+                json!({"languages": [], "other": 0, "stale": null})
+            )
         );
         assert_eq!(
             ask(&cache, Api::Contributors, "acme", "bare").await,
             (
                 StatusCode::OK,
-                json!({"contributors": [], "count": 0, "too_large": false})
+                json!({"contributors": [], "count": 0, "too_large": false, "stale": null})
             )
         );
         assert_eq!(
@@ -4788,6 +4990,7 @@ mod tests {
                     "issues": {"open": 0, "closed": 0},
                     "pull_requests": {"open": 0, "merged": 0, "closed": 0},
                     "recent": [],
+                    "stale": null,
                 })
             )
         );
@@ -4813,7 +5016,10 @@ mod tests {
         );
         assert_eq!(
             ask(&cache, Api::CodeFrequency, "acme", "bare").await,
-            (StatusCode::OK, json!({"weeks": [], "too_large": false}))
+            (
+                StatusCode::OK,
+                json!({"weeks": [], "too_large": false, "stale": null})
+            )
         );
         assert_eq!(
             ask(&cache, Api::ReleaseCadence, "acme", "bare").await,

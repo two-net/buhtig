@@ -1,6 +1,7 @@
 import { NgTemplateOutlet } from '@angular/common';
 import {
   Component,
+  DOCUMENT,
   Directive,
   ElementRef,
   TemplateRef,
@@ -15,6 +16,10 @@ import {
 import { Router } from '@angular/router';
 import { DataTable, ChartTable } from '../chart/table';
 import { SHOW_CHART, SHOW_TABLE } from '../chart/messages';
+import { CsvExport } from '../export/csv';
+import { saveCsv } from '../export/download';
+import { DOWNLOAD_CSV, DOWNLOAD_FAILED, downloaded, tableDownload } from '../export/messages';
+import { Toasts } from '../toast/toasts';
 import { Icon, IconName } from '../icon/icon';
 import { Entrance, enterInView } from '../motion/entrance';
 import { signInUrl } from '../session/session';
@@ -45,8 +50,9 @@ let count = 0;
  * message when there is nothing to show, or a message and "Try again" when loading failed
  * (FR-REPO-09). While GitHub is still computing its data, it says so (FR-REPO-10). Once its
  * content shows, a sentence below the heading may say what it shows, and "Show table" shows its
- * data as a table in place of its chart (NFR-UX-04). What is marked `footer`, such as a link to
- * see more, goes below it then.
+ * data as a table in place of its chart (NFR-UX-04). "Download CSV" then saves the table's data,
+ * exact and with where it came from, as a CSV file, if the table has one (FR-EXP-02). What is
+ * marked `footer`, such as a link to see more, goes below it then.
  *
  * The message of a failure says why, and what the user can do (NFR-UX-06): try again, or sign in
  * once the server asks GitHub for no more for visitors (FR-DATA-10). "Try again" goes as it is
@@ -59,7 +65,22 @@ let count = 0;
   selector: 'app-widget',
   imports: [DataTable, Icon, NgTemplateOutlet],
   templateUrl: './widget.html',
-  styles: ':host { display: block; min-width: 0; }',
+  styles: `
+    :host {
+      display: block;
+      min-width: 0;
+    }
+    /* "Show table" and "Download CSV", side by side (NFR-UX-04, FR-EXP-02). */
+    .w-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 4px 12px;
+    }
+    .w-msg {
+      margin: 12px 16px 0;
+    }
+  `,
   providers: [Entrance],
   host: { '[class.entering]': 'entrance.playing()' },
 })
@@ -96,6 +117,20 @@ export class Widget {
   /** Whether the table shows in place of the chart, until the data changes. */
   protected readonly tabled = linkedSignal({ source: this.table, computation: () => false });
   protected readonly toggle = computed(() => (this.tabled() ? SHOW_CHART : SHOW_TABLE));
+
+  /** The table's data as a CSV file, if it can be downloaded (FR-EXP-02). */
+  protected readonly csv = computed(() => this.table()?.csv);
+  /** What "Download CSV" downloads, for assistive technology. */
+  protected readonly csvDescription = computed(() => tableDownload(this.csv()?.rows.length ?? 0));
+  /** Whether the browser would not save the file, until the data changes. */
+  protected readonly downloadFailed = linkedSignal({
+    source: this.table,
+    computation: () => false,
+  });
+  protected readonly downloadCsv = DOWNLOAD_CSV;
+  protected readonly failedDownload = DOWNLOAD_FAILED;
+  private readonly document = inject(DOCUMENT);
+  private readonly toasts = inject(Toasts);
 
   private readonly failure = computed(() => {
     const state = this.state();
@@ -143,6 +178,20 @@ export class Widget {
   /** Where signing in starts, to come back to the dashboard (FR-AUTH-05). */
   protected signIn(): string {
     return signInUrl(this.router.url);
+  }
+
+  /**
+   * Saves `csv`, with the page it is downloaded from, made of what the widget has loaded alone
+   * (FR-EXP-06). The toast says the file's name, and the widget says so if the browser would not
+   * save it (NFR-UX-06).
+   */
+  protected download(csv: CsvExport): void {
+    const source = this.document.location.origin + this.router.url;
+    const filename = saveCsv(this.document, csv, source);
+    this.downloadFailed.set(filename === undefined);
+    if (filename !== undefined) {
+      this.toasts.show(downloaded(filename), 'download');
+    }
   }
 
   protected retry(): void {

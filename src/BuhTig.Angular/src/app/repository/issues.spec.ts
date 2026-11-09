@@ -18,8 +18,15 @@ import { relativeTime } from '../format/format';
 import { Icon } from '../icon/icon';
 import { Load } from '../widget/load';
 import { FAILED } from '../widget/messages';
+import { Widget } from '../widget/widget';
 import { IssueKind, IssueView } from './issue-query';
-import { IssueRows, RepositoryIssuesTab, RepositoryRecentIssues, stateSegments } from './issues';
+import {
+  IssueRows,
+  RepositoryIssuesTab,
+  RepositoryRecentIssues,
+  stateCounts,
+  stateSegments,
+} from './issues';
 import {
   ALL_ISSUES,
   ALL_PULL_REQUESTS,
@@ -455,6 +462,29 @@ describe('RepositoryIssuesTab', () => {
     ).toEqual([[...STATE_HEADERS], ['Open', '3'], ['Merged', '5'], ['Closed', '1']]);
   });
 
+  it('downloads the counts as a CSV file, of the whole repository, with when fetched (FR-EXP-02)', async () => {
+    const fetchedAt = new Date('2026-11-09T10:00:00.000Z');
+    issues.set({
+      status: 'ready',
+      data: { ...ISSUES, fetchedAt, stale: 'github' } as typeof ISSUES,
+    });
+    await open('/acme/widget/pulls?q=is%3Apr+is%3Amerged');
+    const widget = harness.fixture.debugElement
+      .queryAll(By.directive(Widget))
+      .map((widget) => widget.componentInstance as Widget)
+      .find((widget) => widget.heading() === 'Pull requests')!;
+    // Whatever the list below shows.
+    expect(widget.table()!.csv).toEqual({
+      name: 'acme-widget-pull-requests-by-state',
+      columns: ['kind', 'state', 'count', 'repository', 'fetched_at', 'stale'],
+      rows: [
+        ['pull_request', 'open', 3, 'acme/widget', fetchedAt, 'github'],
+        ['pull_request', 'merged', 5, 'acme/widget', fetchedAt, 'github'],
+        ['pull_request', 'closed_unmerged', 1, 'acme/widget', fetchedAt, 'github'],
+      ],
+    });
+  });
+
   it('lists a full page of open issues, updated last first, apart from pull requests, and says how many', () => {
     expect(lastAsked()).toEqual([
       'issue',
@@ -707,5 +737,22 @@ describe('stateSegments', () => {
     const off = { issues: undefined, pullRequests: undefined, recent: [] };
     expect(stateSegments(off, 'issue')).toBeUndefined();
     expect(stateSegments(off, 'pull_request')).toBeUndefined();
+    expect(stateCounts(off, 'issue')).toBeUndefined();
+    expect(stateCounts(off, 'pull_request')).toBeUndefined();
+  });
+});
+
+describe('stateCounts', () => {
+  it('names each state as a CSV file does, in the order of the segments (FR-EXP-02)', () => {
+    expect(stateCounts(ISSUES, 'issue')).toEqual([
+      ['open', 12_345],
+      ['closed', 4],
+    ]);
+    // Pull requests closed without being merged apart from those merged.
+    expect(stateCounts(ISSUES, 'pull_request')).toEqual([
+      ['open', 3],
+      ['merged', 5],
+      ['closed_unmerged', 1],
+    ]);
   });
 });

@@ -3,6 +3,8 @@ import { Column, ColumnChart } from '../chart/columns';
 import { monthTicks } from '../chart/ticks';
 import { ChartTable } from '../chart/table';
 import { RepositoryData } from '../dashboard/data';
+import { isoDay } from '../export/csv';
+import { BRANCH_COLUMNS, branchCells, exportName } from '../export/provenance';
 import { exactNumber, weekDate } from '../format/format';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
@@ -17,7 +19,8 @@ import {
 /**
  * A repository's commits per week to its default branch over the last 52 weeks, as a chart of
  * columns, with its months below (FR-REPO-03). Pointing at a week tells its commits. Its summary
- * says what it shows in all, and its table lists every week's commits, newest first (NFR-UX-04).
+ * says what it shows in all, and its table lists every week's commits, newest first (NFR-UX-04),
+ * as its CSV file does, with when they were fetched (FR-EXP-02).
  */
 @Component({
   selector: 'app-repository-activity',
@@ -72,13 +75,23 @@ export class RepositoryActivity {
 
   protected readonly table = computed((): ChartTable | undefined => {
     const activity = this.ready();
-    return activity
-      ? {
-          headers: ACTIVITY_HEADERS,
-          rows: [...activity.weeks]
-            .reverse()
-            .map((week) => ({ label: weekDate(week.start), values: [exactNumber(week.commits)] })),
-        }
-      : undefined;
+    if (!activity) {
+      return undefined;
+    }
+    const weeks = [...activity.weeks].reverse();
+    const name = this.data.name();
+    const provenance = branchCells(name, this.data.repository()?.defaultBranch, activity);
+    return {
+      headers: ACTIVITY_HEADERS,
+      rows: weeks.map((week) => ({
+        label: weekDate(week.start),
+        values: [exactNumber(week.commits)],
+      })),
+      csv: {
+        name: exportName(name, 'commit-activity'),
+        columns: ['week_start', 'commits', ...BRANCH_COLUMNS],
+        rows: weeks.map((week) => [isoDay(week.start), week.commits, ...provenance]),
+      },
+    };
   });
 }

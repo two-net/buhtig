@@ -2,7 +2,8 @@
 
 BuhTig turns a GitHub repository, organization or user URL into an animated dashboard,
 puts two of them side by side at `/-/compare/{a}...{b}`, and draws a card of each to embed
-at `/-/preview/{name}.svg`. On any page, `Ctrl+K` (`⌘K` on a Mac) opens a command palette
+at `/-/preview/{name}.svg`. Repository lists and charts' tables download as CSV files, made
+in the browser from what the page shows, with when the data was fetched. On any page, `Ctrl+K` (`⌘K` on a Mac) opens a command palette
 that finds dashboards as you type, and `owner/repo pulls` opens a dashboard's tab. It is one
 application plus one PostgreSQL database, configured by one file, for github.com or a GitHub
 Enterprise Server. What it must do is in [SRS.md](SRS.md).

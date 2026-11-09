@@ -6,7 +6,9 @@ import { yearTicks } from '../chart/ticks';
 import { Bar, BarChart } from '../chart/hbars';
 import { ChartTable } from '../chart/table';
 import { AccountData } from '../dashboard/data';
-import { LastPush, LanguageCount, ListedRepository } from '../dashboard/resources';
+import { Covered, LastPush, LanguageCount, ListedRepository } from '../dashboard/resources';
+import { Cell, CsvExport } from '../export/csv';
+import { ACCOUNT_COLUMNS, accountCells, exportName } from '../export/provenance';
 import { accountTabUrl } from '../dashboard/account-tabs';
 import { organizationTabPath } from '../dashboard/tabs';
 import { CompactNumber } from '../format/compact-number';
@@ -47,6 +49,7 @@ import {
   topRepositoriesDescription,
   truncated,
 } from './messages';
+import { PERIOD_KEYS } from './csv';
 import { RepositoryCard, RepositoryRow } from './repository-row';
 import { GITHUB_HOST } from '../github/host';
 
@@ -204,11 +207,11 @@ export class OrganizationOverview {
   private readonly statsLoader = this.data.stats();
   protected readonly repositories = emptyWhen(
     this.data.repositories(),
-    (repositories) => repositories.length === 0,
+    (list) => list.repositories.length === 0,
   );
   protected readonly topRepositories = emptyWhen(
     this.data.topRepositories(),
-    (top) => top.length === 0,
+    (top) => top.repositories.length === 0,
   );
   protected readonly lastPush = emptyWhen(
     this.data.lastPush(),
@@ -216,7 +219,7 @@ export class OrganizationOverview {
   );
   protected readonly createdPerYear = emptyWhen(
     this.data.createdPerYear(),
-    (years) => years.length === 0,
+    (created) => created.years.length === 0,
   );
   private readonly languagesLoader = this.data.languages();
   private readonly membersLoader = this.data.members();
@@ -239,7 +242,7 @@ export class OrganizationOverview {
     return stats?.truncated ? truncated(this.data.displayName(), stats.repositories) : undefined;
   });
 
-  private readonly listed = computed(() => ready(this.repositories.state()) ?? []);
+  private readonly listed = computed(() => ready(this.repositories.state())?.repositories ?? []);
 
   /** The 6 repositories with the most stars, for the cards. */
   protected readonly popular = computed(() =>
@@ -257,7 +260,8 @@ export class OrganizationOverview {
   protected readonly members = computed(() => ready(this.membersLoader.state()));
 
   // Most-starred repositories (FR-ORG-05).
-  private readonly top = computed(() => ready(this.topRepositories.state()) ?? []);
+  private readonly topData = computed(() => ready(this.topRepositories.state()));
+  private readonly top = computed(() => this.topData()?.repositories ?? []);
   protected readonly topBars = computed((): Bar[] =>
     this.top().map(({ name, path, stars }) => ({ label: name, value: stars, link: path })),
   );
@@ -269,6 +273,16 @@ export class OrganizationOverview {
     table(
       TOP_REPOSITORIES_HEADERS,
       this.top().map(({ name, stars }) => [name, stars]),
+      this.csv(
+        'top-repositories',
+        ['rank', 'repository', 'stars'],
+        this.top().map(({ name, stars }, index) => [
+          index + 1,
+          `${this.data.login()}/${name}`,
+          stars,
+        ]),
+        this.topData(),
+      ),
     ),
   );
 
@@ -283,15 +297,24 @@ export class OrganizationOverview {
         }))
       : [];
   });
-  protected readonly pushTable = computed(() =>
-    table(
+  protected readonly pushTable = computed(() => {
+    const pushes = this.pushes();
+    const periods = Object.keys(LAST_PUSH) as (keyof LastPush)[];
+    return table(
       LAST_PUSH_HEADERS,
       this.pushBars().map(({ label, value }) => [label, value]),
-    ),
-  );
+      this.csv(
+        'last-push',
+        ['period', 'repositories'],
+        pushes ? periods.map((period) => [PERIOD_KEYS[period], pushes[period]]) : [],
+        pushes,
+      ),
+    );
+  });
 
   // Created per year (FR-ORG-06).
-  private readonly years = computed(() => ready(this.createdPerYear.state()) ?? []);
+  private readonly created = computed(() => ready(this.createdPerYear.state()));
+  private readonly years = computed(() => this.created()?.years ?? []);
   protected readonly yearColumns = computed(() =>
     this.years().map(({ year, repositories }) => ({ value: repositories, label: createdIn(year) })),
   );
@@ -303,8 +326,36 @@ export class OrganizationOverview {
     table(
       CREATED_HEADERS,
       this.years().map(({ year, repositories }) => [String(year), repositories]),
+      this.csv(
+        'created-per-year',
+        ['year', 'repositories'],
+        this.years().map(({ year, repositories }) => [year, repositories]),
+        this.created(),
+      ),
     ),
   );
+
+  /**
+   * A chart's data as a CSV file, of `rows` under `columns`, each followed by the account, what
+   * its figures cover and when they were fetched, as `covered` says (FR-EXP-02, FR-EXP-04).
+   */
+  private csv(
+    name: string,
+    columns: string[],
+    rows: Cell[][],
+    covered: Covered<object> | undefined,
+  ): CsvExport | undefined {
+    if (covered === undefined) {
+      return undefined;
+    }
+    const login = this.data.login();
+    const provenance = accountCells(login, covered);
+    return {
+      name: exportName(login, name),
+      columns: [...columns, ...ACCOUNT_COLUMNS],
+      rows: rows.map((row) => [...row, ...provenance]),
+    };
+  }
 
   // Top languages (FR-ORG-04).
   protected readonly languages = computed(() => ready(this.languagesLoader.state()));
@@ -345,13 +396,18 @@ export function ready<T>(state: { status: string; data?: T }): T | undefined {
   return state.status === 'ready' ? state.data : undefined;
 }
 
-/** A chart's table, of `rows` of a label and a count. */
+/** A chart's table, of `rows` of a label and a count, and its data as a CSV file, `csv`. */
 function table(
   headers: readonly [string, string],
   rows: [string, number][],
+  csv?: CsvExport,
 ): ChartTable | undefined {
   return rows.length > 0
-    ? { headers, rows: rows.map(([label, value]) => ({ label, values: [exactNumber(value)] })) }
+    ? {
+        headers,
+        rows: rows.map(([label, value]) => ({ label, values: [exactNumber(value)] })),
+        csv,
+      }
     : undefined;
 }
 

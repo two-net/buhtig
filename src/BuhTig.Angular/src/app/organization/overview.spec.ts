@@ -3,21 +3,27 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { WritableSignal, signal } from '@angular/core';
 import { NEVER } from 'rxjs';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
 import type { Mock } from 'vitest';
 import { AccountData } from '../dashboard/data';
 import {
+  Covered,
+  CreatedPerYear,
   LanguageCounts,
   LastPush,
   ListedRepository,
   Members,
   OrganizationStats,
+  RepositoryList,
+  TopRepositories,
   TopRepository,
   YearCount,
 } from '../dashboard/resources';
 import { compactNumber } from '../format/format';
 import { FAILED } from '../widget/messages';
 import { Load, Loader } from '../widget/load';
+import { Widget } from '../widget/widget';
 import {
   ALL_REPOSITORIES,
   NO_DESCRIPTION,
@@ -54,11 +60,11 @@ class Data {
   readonly displayName = signal('Acme Corp');
   readonly loaders = {
     stats: stub<OrganizationStats>(),
-    repositories: stub<ListedRepository[]>(),
-    languages: stub<LanguageCounts>(),
-    topRepositories: stub<TopRepository[]>(),
-    lastPush: stub<LastPush>(),
-    createdPerYear: stub<YearCount[]>(),
+    repositories: stub<Covered<RepositoryList>>(),
+    languages: stub<Covered<LanguageCounts>>(),
+    topRepositories: stub<Covered<TopRepositories>>(),
+    lastPush: stub<Covered<LastPush>>(),
+    createdPerYear: stub<Covered<CreatedPerYear>>(),
     members: stub<Members>(),
   };
   readonly stats = () => this.loaders.stats;
@@ -72,6 +78,31 @@ class Data {
     language === 'TypeScript' ? 'var(--s1)' : language === 'Rust' ? 'var(--s2)' : 'var(--s-other)',
   );
   readonly activity = () => NEVER;
+}
+
+/** What each part is given as, in the tests, before what it covers is added. */
+interface Given {
+  stats: OrganizationStats;
+  repositories: ListedRepository[];
+  languages: LanguageCounts;
+  topRepositories: TopRepository[];
+  lastPush: LastPush;
+  createdPerYear: YearCount[];
+  members: Members;
+}
+
+/** When the repositories were fetched from GitHub. */
+const FETCHED = new Date('2026-11-09T10:00:00.000Z');
+
+/** `value`, of all of 312 repositories, fetched at `FETCHED`. */
+function covered<T extends object>(value: T): Covered<T> {
+  return {
+    ...value,
+    truncated: false,
+    repositoriesRead: 312,
+    fetchedAt: FETCHED,
+    stale: undefined,
+  };
 }
 
 const STATS: OrganizationStats = {
@@ -165,6 +196,13 @@ describe('OrganizationOverview', () => {
     [...element().querySelectorAll('app-widget')].find(
       (widget) => widget.querySelector('h2')?.textContent?.trim() === heading,
     )!;
+  /** The CSV file that the widget headed `heading` downloads, if it offers one. */
+  const csv = (heading: string) =>
+    fixture.debugElement
+      .queryAll(By.directive(Widget))
+      .map((widget) => widget.componentInstance as Widget)
+      .find((widget) => widget.heading() === heading)
+      ?.table()?.csv;
   /** The bars of the chart in `within`, as their labels and figures. */
   const bars = (within: Element) =>
     [...within.querySelectorAll('.hbars li')].map((bar) => [
@@ -176,14 +214,20 @@ describe('OrganizationOverview', () => {
   const section = (heading: string) =>
     element().querySelector(`section[aria-labelledby="${heading}"]`);
 
-  /** Has the part `part` loaded with `data`. */
-  async function ready<K extends keyof Data['loaders']>(
-    part: K,
-    value: Data['loaders'][K] extends Stub<infer T> ? T : never,
-  ): Promise<void> {
+  /** Has the part `part` loaded with `value`, of all the repositories, fetched at `FETCHED`. */
+  async function ready<K extends keyof Given>(part: K, value: Given[K]): Promise<void> {
+    const loaded: Record<keyof Given, () => unknown> = {
+      stats: () => value,
+      members: () => value,
+      repositories: () => covered({ repositories: value }),
+      topRepositories: () => covered({ repositories: value }),
+      createdPerYear: () => covered({ years: value }),
+      lastPush: () => covered(value as LastPush),
+      languages: () => covered(value as LanguageCounts),
+    };
     (data.loaders[part].state as WritableSignal<Load<unknown>>).set({
       status: 'ready',
-      data: value,
+      data: loaded[part](),
     });
     await fixture.whenStable();
   }
@@ -356,6 +400,67 @@ describe('OrganizationOverview', () => {
           [...row.querySelectorAll('th, td')].map((cell) => cell.textContent?.trim()),
         ),
       ).toEqual([['rocket', '12,345']]);
+    });
+  });
+
+  describe('as CSV files (FR-EXP-02)', () => {
+    /** What follows each row: the account, what its figures cover, and when they were fetched. */
+    const PROVENANCE = ['acme', 'all', 312, FETCHED, undefined];
+    const COLUMNS = ['account', 'coverage', 'repositories_read', 'fetched_at', 'stale'];
+
+    it('download the most-starred repositories, as the table lists them', async () => {
+      await ready('topRepositories', [
+        { name: 'rocket', path: '/acme/rocket', stars: 12_345 },
+        { name: 'widget', path: '/acme/widget', stars: 678 },
+      ]);
+      expect(csv('Most-starred repositories')).toEqual({
+        name: 'acme-top-repositories',
+        columns: ['rank', 'repository', 'stars', ...COLUMNS],
+        rows: [
+          [1, 'acme/rocket', 12_345, ...PROVENANCE],
+          [2, 'acme/widget', 678, ...PROVENANCE],
+        ],
+      });
+    });
+
+    it('download the repositories of each period of their last push, by the same name in every language', async () => {
+      await ready('lastPush', { last7Days: 12, last30Days: 30, last12Months: 100, older: 170 });
+      expect(csv('Last push')).toEqual({
+        name: 'acme-last-push',
+        columns: ['period', 'repositories', ...COLUMNS],
+        rows: [
+          ['last_7_days', 12, ...PROVENANCE],
+          ['last_30_days', 30, ...PROVENANCE],
+          ['last_12_months', 100, ...PROVENANCE],
+          ['older', 170, ...PROVENANCE],
+        ],
+      });
+    });
+
+    it('download the repositories created each year, and say what they cover past the limit (FR-ORG-08)', async () => {
+      const loader = data.loaders.createdPerYear;
+      loader.state.set({
+        status: 'ready',
+        data: {
+          years: [
+            { year: 2024, repositories: 3 },
+            { year: 2025, repositories: 0 },
+          ],
+          truncated: true,
+          repositoriesRead: 1000,
+          fetchedAt: FETCHED,
+          stale: 'held',
+        },
+      });
+      await fixture.whenStable();
+      expect(csv('Repositories created per year')).toEqual({
+        name: 'acme-created-per-year',
+        columns: ['year', 'repositories', ...COLUMNS],
+        rows: [
+          [2024, 3, 'acme', 'most_recently_pushed', 1000, FETCHED, 'held'],
+          [2025, 0, 'acme', 'most_recently_pushed', 1000, FETCHED, 'held'],
+        ],
+      });
     });
   });
 
