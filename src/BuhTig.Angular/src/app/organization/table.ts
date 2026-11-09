@@ -83,22 +83,6 @@ export function pageOf(repositories: ListedRepository[], index: number): Page {
   return { repositories: repositories.slice(start, start + PAGE_SIZE), index: shown, count };
 }
 
-/**
- * The pages that the pager offers, from 0, around the page at `index` of `count`: the first and
- * the last, and those next to it, with `gap` where pages are left out between.
- */
-export function pagesAround(index: number, count: number): (number | 'gap')[] {
-  const pages: (number | 'gap')[] = [];
-  for (let page = 0; page < count; page++) {
-    if (page === 0 || page === count - 1 || Math.abs(page - index) <= 1) {
-      pages.push(page);
-    } else if (pages[pages.length - 1] !== 'gap') {
-      pages.push('gap');
-    }
-  }
-  return pages;
-}
-
 function isOfType(repository: ListedRepository, type: RepositoryType): boolean {
   switch (type) {
     case 'all':

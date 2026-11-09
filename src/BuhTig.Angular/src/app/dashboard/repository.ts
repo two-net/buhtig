@@ -1,6 +1,7 @@
 import {
   Component,
   Injector,
+  Signal,
   afterNextRender,
   computed,
   effect,
@@ -30,7 +31,8 @@ import { RepositoryData, once, sameName } from './data';
 import { FailurePage } from './failure';
 import { NotFoundOrPrivate } from './not-found-or-private';
 import { Notices } from './notices';
-import { Resources } from './resources';
+import { IssueKind, IssueView, issueListParamsOf } from '../repository/issue-query';
+import { Dated, IssuePage, Resources } from './resources';
 import { followSummary } from './summary';
 import { accountTabUrl, urlOf } from './account-tabs';
 import { REPOSITORY_TABS, RepositoryTab, repositoryTabPath } from './tabs';
@@ -102,9 +104,16 @@ export class RepositoryDashboard implements RepositoryData {
     },
   );
 
-  private readonly followed = followSummary(this.resource, (known) =>
-    repositoryTabPath(dashboardPath(known).slice(1), this.tab()),
-  );
+  /**
+   * The dashboard's canonical URL, at the tab shown. The list of the Issues or Pull requests tab
+   * keeps its filters, order and page, so that a link to a view of it opens that view whatever
+   * the letter case of its names, or if the repository was renamed (FR-REPO-06, FR-NAV-04).
+   */
+  private readonly followed = followSummary(this.resource, (known) => {
+    const tab = this.tab();
+    const list = tab === 'issues' || tab === 'pulls' ? issueListParamsOf(this.router.url) : {};
+    return urlOf({ link: repositoryTabPath(dashboardPath(known).slice(1), tab), query: list });
+  });
   protected readonly summary = this.followed.summary;
   protected readonly refreshing = this.followed.refreshing;
 
@@ -148,6 +157,7 @@ export class RepositoryDashboard implements RepositoryData {
   readonly languages = this.part((owner, repo) => this.resources.languages(owner, repo));
   readonly contributors = this.part((owner, repo) => this.resources.contributors(owner, repo));
   readonly issues = this.part((owner, repo) => this.resources.issues(owner, repo));
+  readonly labels = this.part((owner, repo) => this.resources.labels(owner, repo));
   readonly commits = this.part((owner, repo) => this.resources.commits(owner, repo));
   readonly releases = this.part((owner, repo) => this.resources.releases(owner, repo));
   readonly mergeVelocity = this.part((owner, repo) => this.resources.mergeVelocity(owner, repo));
@@ -216,6 +226,17 @@ export class RepositoryDashboard implements RepositoryData {
 
   protected retry(): void {
     this.followed.retry();
+  }
+
+  issueList(kind: Signal<IssueKind>, view: Signal<IssueView>): Loader<Dated<IssuePage>> {
+    return load(() => {
+      this.resources.refreshes();
+      const resource = this.resource();
+      const [listed, shown] = [kind(), view()];
+      return resource.kind === 'repository'
+        ? this.resources.issueList(resource.owner, resource.repo, listed, shown)
+        : this.resources.issueList('', '', listed, shown);
+    });
   }
 
   protected readonly LOADING = LOADING;

@@ -6,7 +6,6 @@ import {
   languagesOf,
   matches,
   pageOf,
-  pagesAround,
   sorted,
 } from './table';
 
@@ -159,24 +158,5 @@ describe('pageOf', () => {
   it('has one page, an empty one, when there are no repositories', () => {
     const page = pageOf([], 0);
     expect([page.repositories, page.index, page.count]).toEqual([[], 0, 1]);
-  });
-});
-
-describe('pagesAround', () => {
-  it('offers every page when there are few', () => {
-    expect(pagesAround(0, 1)).toEqual([0]);
-    expect(pagesAround(0, 3)).toEqual([0, 1, 2]);
-    expect(pagesAround(1, 4)).toEqual([0, 1, 2, 3]);
-  });
-
-  it('offers the first and the last, and those next to the page shown, with gaps between', () => {
-    expect(pagesAround(0, 10)).toEqual([0, 1, 'gap', 9]);
-    expect(pagesAround(5, 10)).toEqual([0, 'gap', 4, 5, 6, 'gap', 9]);
-    expect(pagesAround(9, 10)).toEqual([0, 'gap', 8, 9]);
-  });
-
-  it('puts a gap where a single page is left out too', () => {
-    expect(pagesAround(3, 7)).toEqual([0, 'gap', 2, 3, 4, 'gap', 6]);
-    expect(pagesAround(2, 7)).toEqual([0, 1, 2, 3, 'gap', 6]);
   });
 });

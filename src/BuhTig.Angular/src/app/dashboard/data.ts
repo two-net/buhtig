@@ -1,13 +1,17 @@
 import { Injector, Signal, runInInjectionContext } from '@angular/core';
 import { Observable } from 'rxjs';
+import { IssueKind, IssueView } from '../repository/issue-query';
 import { Loader } from '../widget/load';
 import {
   CodeFrequency,
   CommitActivity,
   Commit,
   Contributors,
+  Dated,
   IssueAge,
+  IssuePage,
   IssuesAndPullRequests,
+  Labels,
   LanguageCounts,
   Languages,
   LastPush,
@@ -40,6 +44,8 @@ export abstract class RepositoryData {
   abstract readonly languages: () => Loader<Languages>;
   abstract readonly contributors: () => Loader<Contributors>;
   abstract readonly issues: () => Loader<IssuesAndPullRequests>;
+  /** FR-REPO-06, for the label filter of its Issues and Pull requests tabs. */
+  abstract readonly labels: () => Loader<Labels>;
   abstract readonly commits: () => Loader<Commit[]>;
   abstract readonly releases: () => Loader<Releases>;
   /** FR-REPO-13, for its Pull requests tab. */
@@ -54,6 +60,13 @@ export abstract class RepositoryData {
   abstract readonly releaseCadence: () => Loader<ReleaseCadence>;
   /** FR-REPO-17, for its Activity tab. */
   abstract readonly trends: () => Loader<Trends>;
+  /**
+   * FR-REPO-06: the page of its issues, or of its pull requests, of `kind`, that `view` shows,
+   * for its Issues or Pull requests tab, loaded anew as either changes, on each refresh, and when
+   * the dashboard moves to another repository. Unlike the parts above, it is made for what asks
+   * for it, where `inject` works, as in a field's initializer, and lasts as long as that does.
+   */
+  abstract issueList(kind: Signal<IssueKind>, view: Signal<IssueView>): Loader<Dated<IssuePage>>;
 }
 
 /**

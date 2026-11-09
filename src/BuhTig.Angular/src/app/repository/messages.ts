@@ -22,6 +22,7 @@ import {
   utcDay,
   weekDate,
 } from '../format/format';
+import { IssueKind, IssueSort, IssueState } from './issue-query';
 import { CommitComparison, Metric } from './observations';
 
 /** "commit" or "commits", as a count of them, such as 12, takes. */
@@ -139,7 +140,6 @@ export const STATE_HEADERS = ['State', 'Count'] as const;
 export const NO_ISSUES_OR_PULL_REQUESTS = 'No issues or pull requests yet.';
 export const NO_ISSUES = 'No issues yet.';
 export const NO_PULL_REQUESTS = 'No pull requests yet.';
-export const NOTHING_RECENT = 'Nothing recent to show.';
 
 /** FR-REPO-06: issues or pull requests that a repository has turned off on GitHub. */
 export const ISSUES_OFF = 'This repository has turned off issues.';
@@ -147,6 +147,102 @@ export const PULL_REQUESTS_OFF = 'This repository has turned off pull requests.'
 
 export const ALL_ISSUES = 'All issues';
 export const ALL_PULL_REQUESTS = 'All pull requests';
+
+/** FR-REPO-06: the states that the list of `kind` offers to show, as its filter names them. */
+export function stateOption(state: IssueState, kind: IssueKind): string {
+  switch (state) {
+    case 'open':
+      return 'Open';
+    case 'closed':
+      return kind === 'issue' ? 'Closed' : 'Closed without merging';
+    case 'merged':
+      return 'Merged';
+    case 'all':
+      return 'All';
+  }
+}
+
+/** FR-REPO-06: the orders of the Issues and Pull requests tabs' lists. */
+export const ISSUE_SORTS: Record<IssueSort, string> = {
+  updated: 'Recently updated',
+  oldest: 'Oldest',
+};
+
+/** FR-REPO-06: the label filter's choice of any label, or none. */
+export const ALL_LABELS = 'All labels';
+
+/**
+ * FR-REPO-06: issues or pull requests of `kind`, as many as `count`, that a list shows by
+ * `state` and `label`, such as "open issues labeled “bug”" or "pull requests closed without
+ * merging".
+ */
+function shownIssues(
+  count: number,
+  kind: IssueKind,
+  state: IssueState,
+  label: string | undefined,
+): string {
+  const one = count === 1;
+  const noun =
+    kind === 'issue' ? (one ? 'issue' : 'issues') : one ? 'pull request' : 'pull requests';
+  const labeled = label === undefined ? '' : ` labeled “${label}”`;
+  switch (state) {
+    case 'all':
+      return `${noun}${labeled}`;
+    case 'closed':
+      return kind === 'issue'
+        ? `closed ${noun}${labeled}`
+        : `${noun}${labeled} closed without merging`;
+    default:
+      return `${state} ${noun}${labeled}`;
+  }
+}
+
+/**
+ * FR-REPO-06: how many issues or pull requests a list holds, and which page of them it shows,
+ * such as "1,234 open issues labeled “bug”, page 2 of 40". `page` counts from 1.
+ */
+export function listedIssues(
+  count: number,
+  kind: IssueKind,
+  state: IssueState,
+  label: string | undefined,
+  page: number,
+  pages: number,
+): string {
+  return (
+    `${exactNumber(count)} ${shownIssues(count, kind, state, label)}, ` +
+    `page ${exactNumber(page)} of ${exactNumber(pages)}`
+  );
+}
+
+/** FR-REPO-06: a list's filters that none passes, such as "No merged pull requests." */
+export function noIssuesMatch(
+  kind: IssueKind,
+  state: IssueState,
+  label: string | undefined,
+): string {
+  return `No ${shownIssues(0, kind, state, label)}.`;
+}
+
+/** FR-REPO-06: the heading of the list of `kind` that shows `state`, such as "Open issues". */
+export function issueListHeading(kind: IssueKind, state: IssueState): string {
+  const noun = kind === 'issue' ? 'issues' : 'pull requests';
+  switch (state) {
+    case 'all':
+      return kind === 'issue' ? 'All issues' : 'All pull requests';
+    case 'closed':
+      return kind === 'issue' ? 'Closed issues' : 'Closed pull requests';
+    default:
+      return `${state === 'open' ? 'Open' : 'Merged'} ${noun}`;
+  }
+}
+
+/** FR-REPO-06: that more match than GitHub's search reaches. */
+export const CAPPED = "GitHub's search shows only the first 1,000 of them.";
+
+/** FR-REPO-06: that GitHub's search ran out of time. */
+export const INCOMPLETE = "GitHub's search ran out of time, so some may be missing.";
 
 /** FR-REPO-08, FR-REPO-11 */
 export const NO_RELEASES = 'No releases published yet.';
@@ -180,6 +276,13 @@ export const MERGE_VELOCITY = 'Merge velocity';
 export const MEDIAN_TIME_TO_MERGE = 'Median time to merge';
 export const MERGE_RATIO = 'Merge ratio';
 export const NO_MERGES = 'No merged or closed pull requests to measure yet.';
+
+/**
+ * FR-REPO-13: what the merge velocity is of, whatever the list of pull requests below it shows,
+ * whose filters do not change it.
+ */
+export const MERGE_VELOCITY_SAMPLE =
+  'These figures are of the 100 pull requests updated last, not of the list below.';
 
 /** FR-REPO-13: how many merged pull requests the median is of, such as "of 61 merged". */
 export function ofMerged(count: number): string {
@@ -216,6 +319,14 @@ export function mergeVelocityDescription(velocity: MergeVelocity): string {
 export const ISSUE_AGE = 'Open issue age';
 export const MEDIAN_AGE = 'Median age';
 export const NO_OPEN_ISSUES = 'No open issues to measure.';
+
+/**
+ * FR-REPO-13: what the open issues' age is of, whatever the list of issues below it shows, whose
+ * filters do not change it.
+ */
+export const ISSUE_AGE_SAMPLE =
+  'This figure is of the open issues among the 100 open issues and pull requests updated ' +
+  'last, not of the list below.';
 
 /** FR-REPO-13: how many open issues the age is of, such as "of 37 open issues". */
 export function ofOpenIssues(count: number): string {

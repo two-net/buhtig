@@ -115,7 +115,11 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   visitors run into the rate limit soon. Repository dashboards also count issues and pull
   requests with GitHub's search API, which has a separate, much lower rate limit: up to
   five searches per repository per `cache.ttl` (open, merged and closed pull requests,
-  closed issues, and the pull requests updated last, for merge velocity). A comparison of
+  closed issues, and the pull requests updated last, for merge velocity). The Issues and
+  Pull requests tabs list theirs with the search API too, one search per page of 25 shown,
+  each cached apart for `cache.ttl` in the viewer's scope, and never the pages before it.
+  GitHub's search reaches only the first 1,000 that match, so the lists have at most 40
+  pages, and say so. A comparison of
   two repositories searches for the open pull requests and those updated last of each as
   it loads. When it runs out, the stat cards, the issues and pull requests widget and
   merge velocity show cached figures, or an error until it resets. GitHub
@@ -258,7 +262,13 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   A repository list's search, type, language, order and page are in its query, as on GitHub,
   such as `/orgs/{org}/repositories?q=api&type=source&language=rust&sort=stargazers&page=2`,
   so that a view of it can be bookmarked, shared with its Copy link button, and opened from
-  GitHub's own link. Whoever opens it sees what their own access shows.
+  GitHub's own link. Whoever opens it sees what their own access shows. So are the state,
+  label, order and page of the Issues and Pull requests tabs' lists, in the syntax of
+  GitHub's own lists, such as
+  `/{owner}/{repo}/issues?q=is:issue+is:open+label:bug+sort:created-asc&page=2`: BuhTig
+  reads the state (`is:open`, `is:closed`, `is:merged`, `is:closed is:unmerged`), one
+  `label:`, and `sort:updated-desc` or `sort:created-asc`, and opens the rest of such a
+  link as the list starts, with the open ones updated last first.
   `/users/{user}/…` leads to the user's dashboard, and `/{user}/repositories` to their
   Repositories tab, unless they have a repository of that name. So replacing `github.com`, or `github.host`, with BuhTig's host in a GitHub link opens
   the matching tab: deeper paths redirect to the tab that shows the same, such as

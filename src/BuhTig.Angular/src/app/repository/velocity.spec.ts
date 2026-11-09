@@ -8,10 +8,12 @@ import { Load } from '../widget/load';
 import { FAILED } from '../widget/messages';
 import {
   ISSUE_AGE,
+  ISSUE_AGE_SAMPLE,
   MEDIAN_AGE,
   MEDIAN_TIME_TO_MERGE,
   MERGE_RATIO,
   MERGE_VELOCITY,
+  MERGE_VELOCITY_SAMPLE,
   NO_FIGURE,
   NO_MERGES,
   NO_OPEN_ISSUES,
@@ -82,6 +84,8 @@ describe('RepositoryMergeVelocity', () => {
     expect(element().querySelector('.w-sub')?.textContent?.trim()).toBe(
       mergeVelocityDescription(VELOCITY),
     );
+    // Whatever the list of pull requests below shows.
+    expect(element().querySelector('.Box-footer')?.textContent?.trim()).toBe(MERGE_VELOCITY_SAMPLE);
   });
 
   it('tells no time to merge when none were merged, and a ratio of none', async () => {
@@ -140,6 +144,8 @@ describe('RepositoryIssueAge', () => {
       [MEDIAN_AGE, duration(AGE.medianAge!), 'of 37 open issues'],
     ]);
     expect(element().querySelector('.w-sub')?.textContent?.trim()).toBe(issueAgeDescription(AGE));
+    // Whatever the list of issues below shows.
+    expect(element().querySelector('.Box-footer')?.textContent?.trim()).toBe(ISSUE_AGE_SAMPLE);
   });
 
   it('says when there are no open issues to measure (FR-REPO-11)', async () => {

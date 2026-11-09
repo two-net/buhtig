@@ -8,10 +8,12 @@ import { Loaded, Widget } from '../widget/widget';
 import { mergeRatio, nothingMerged, nothingOpen } from './metrics';
 import {
   ISSUE_AGE,
+  ISSUE_AGE_SAMPLE,
   MEDIAN_AGE,
   MEDIAN_TIME_TO_MERGE,
   MERGE_RATIO,
   MERGE_VELOCITY,
+  MERGE_VELOCITY_SAMPLE,
   NO_FIGURE,
   NO_MERGES,
   NO_OPEN_ISSUES,
@@ -26,7 +28,8 @@ import {
  * How a repository's pull requests updated last came to an end, on its Pull requests tab
  * (FR-REPO-13): the median time from opening to merging of those merged, and the merge ratio,
  * the share of those that ended that were merged. Its sentence says how many pull requests the
- * figures are of. Without any merged or closed, there is nothing to measure.
+ * figures are of, and a note below that they are not of the list below them, whose filters do
+ * not change them. Without any merged or closed, there is nothing to measure.
  */
 @Component({
   selector: 'app-repository-merge-velocity',
@@ -54,6 +57,7 @@ import {
           </div>
         </dl>
       </ng-template>
+      <div class="Box-footer sample" footer>{{ MERGE_VELOCITY_SAMPLE }}</div>
     </app-widget>
   `,
 })
@@ -82,11 +86,13 @@ export class RepositoryMergeVelocity {
   protected readonly MEDIAN_TIME_TO_MERGE = MEDIAN_TIME_TO_MERGE;
   protected readonly MERGE_RATIO = MERGE_RATIO;
   protected readonly NO_MERGES = NO_MERGES;
+  protected readonly MERGE_VELOCITY_SAMPLE = MERGE_VELOCITY_SAMPLE;
 }
 
 /**
  * How long a repository's open issues updated last have been open, on its Issues tab
- * (FR-REPO-13): their median age, with a sentence that says how many issues it is of.
+ * (FR-REPO-13): their median age, with a sentence that says how many issues it is of, and a note
+ * below that it is not of the list below it, whose filters do not change it.
  */
 @Component({
   selector: 'app-repository-issue-age',
@@ -109,6 +115,7 @@ export class RepositoryMergeVelocity {
           </div>
         </dl>
       </ng-template>
+      <div class="Box-footer sample" footer>{{ ISSUE_AGE_SAMPLE }}</div>
     </app-widget>
   `,
 })
@@ -130,4 +137,5 @@ export class RepositoryIssueAge {
   protected readonly ISSUE_AGE = ISSUE_AGE;
   protected readonly MEDIAN_AGE = MEDIAN_AGE;
   protected readonly NO_OPEN_ISSUES = NO_OPEN_ISSUES;
+  protected readonly ISSUE_AGE_SAMPLE = ISSUE_AGE_SAMPLE;
 }

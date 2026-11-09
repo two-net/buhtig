@@ -159,6 +159,18 @@ pub struct Source {
     pub pat: Option<i64>,
 }
 
+/// One page of what GitHub's search found.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Page {
+    /// The items on the page, in the order the search gave them.
+    pub items: Vec<Value>,
+    /// How many items the search found in all, on every page, as GitHub counts them.
+    pub total: u64,
+    /// Whether GitHub says that its search ran out of time, so that it may have found fewer
+    /// than there are.
+    pub incomplete: bool,
+}
+
 impl<T> Cached<T> {
     /// `fetched_at` as the UI is told it (FR-DATA-06), as [`iso`] tells it.
     pub fn fetched_at_iso(&self) -> String {
@@ -257,20 +269,31 @@ enum Fetch<'a> {
     },
     /// How many items a list has, such as an organization's members.
     Count(&'a Path),
+    /// One page of what GitHub's search finds, the one that `path` asks for, and how many
+    /// it found in all.
+    Page {
+        path: &'a Path,
+        /// The members kept of each item, or all of them if there are none.
+        fields: &'a [&'a str],
+    },
 }
 
 impl Fetch<'_> {
     /// The `resource_key` of its cache entries, such as `/repos/owner/repo/languages`,
     /// `/repos/owner/repo/releases/latest optional` for a resource that may not exist,
     /// `/orgs/org/repos?sort=pushed limit=1000` for a list, with ` fields=name,language`
-    /// after it if only those members of each item are kept, or
-    /// `/orgs/org/public_members count` for how many items a list has. A path has no
-    /// spaces, since they are percent-encoded, so the kinds of key cannot meet.
+    /// after it if only those members of each item are kept,
+    /// `/orgs/org/public_members count` for how many items a list has, or
+    /// `/search/issues?q=…&page=2 page` for a page of what a search finds, with its
+    /// ` fields=…` too. A path has no spaces, since they are percent-encoded, so the kinds of
+    /// key cannot meet.
     fn key(&self) -> String {
         match self {
             Fetch::One(path) => path.to_string(),
             Fetch::Optional(path) => format!("{path} optional"),
             Fetch::Count(path) => format!("{path} count"),
+            Fetch::Page { path, fields: [] } => format!("{path} page"),
+            Fetch::Page { path, fields } => format!("{path} page fields={}", fields.join(",")),
             Fetch::List {
                 path,
                 limit,
@@ -294,6 +317,13 @@ impl Fetch<'_> {
                     && data.get("truncated").is_some_and(Value::is_boolean)
             }
             Fetch::Count(_) => data.get("count").is_some_and(Value::is_u64),
+            Fetch::Page { .. } => {
+                data.get("items").is_some_and(Value::is_array)
+                    && data.get("total_count").is_some_and(Value::is_u64)
+                    && data
+                        .get("incomplete_results")
+                        .is_some_and(Value::is_boolean)
+            }
         }
     }
 
@@ -322,12 +352,25 @@ impl Fetch<'_> {
                 .count(credential, path)
                 .await?
                 .map(|count| serde_json::json!({ "count": count }))),
+            Fetch::Page { path, .. } => match github.get(credential, path, etag).await? {
+                Reply::Fresh {
+                    data,
+                    etag,
+                    redirected,
+                } => Ok(Reply::Fresh {
+                    data: page_value(data)?,
+                    etag,
+                    redirected,
+                }),
+                reply => Ok(reply),
+            },
         }
     }
 
-    /// Leaves only the members of each item of a list that it keeps, if it names them.
+    /// Leaves only the members of each item of a list or a page that it keeps, if it names
+    /// them.
     fn trim(&self, data: &mut Value) {
-        let Fetch::List { fields, .. } = self else {
+        let (Fetch::List { fields, .. } | Fetch::Page { fields, .. }) = self else {
             return;
         };
         if fields.is_empty() {
@@ -551,6 +594,24 @@ impl Cache {
         path: &Path,
     ) -> Result<Outcome<u64>, Error> {
         self.count(viewer, dashboard, path, &ChronoUtc::now).await
+    }
+
+    /// One page of what GitHub's search finds, for a dashboard, as [`Cache::get`]: the page
+    /// that `path` asks for with its `page` and `per_page`, such as a repository's issues
+    /// at `/search/issues?q=…&per_page=25&page=3`, with only the members `fields` of each
+    /// item, and how many the search found in all. Only that page is asked for, never the
+    /// pages before it, and each page is cached apart, conditionally refreshed as one
+    /// resource is (FR-DATA-09). Whether GitHub marks an item private is still told from all
+    /// that it gave (FR-DATA-04).
+    pub async fn get_page_of(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+        fields: &[&str],
+    ) -> Result<Outcome<Page>, Error> {
+        self.page(viewer, dashboard, path, fields, &ChronoUtc::now)
+            .await
     }
 
     /// Makes the next requests for a dashboard's data ask GitHub, conditionally, however
@@ -790,6 +851,39 @@ impl Cache {
                 let data = value_list(data).ok_or_else(|| {
                     Error::GitHub(github::Error::Invalid(
                         "a cached list is not one".to_owned(),
+                    ))
+                })?;
+                Ok(Outcome::Data(Cached {
+                    data,
+                    fetched_at,
+                    stale,
+                    source,
+                }))
+            }
+        }
+    }
+
+    async fn page(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+        fields: &[&str],
+        clock: &Clock,
+    ) -> Result<Outcome<Page>, Error> {
+        let fetch = Fetch::Page { path, fields };
+        match self.lookup(viewer, dashboard, fetch, clock).await? {
+            Outcome::Computing => Ok(Outcome::Computing),
+            Outcome::Data(Cached {
+                data,
+                fetched_at,
+                stale,
+                source,
+            }) => {
+                // `lookup` only returns data that `fetch.holds`.
+                let data = value_page(data).ok_or_else(|| {
+                    Error::GitHub(github::Error::Invalid(
+                        "a cached page is not one".to_owned(),
                     ))
                 })?;
                 Ok(Outcome::Data(Cached {
@@ -1446,6 +1540,46 @@ fn list_value(list: List) -> Value {
     serde_json::json!({ "items": list.items, "truncated": list.truncated })
 }
 
+/// What a page of a search's results is stored as: GitHub's answer, with only its items,
+/// how many it found, and whether it ran out of time, which GitHub may leave out when it
+/// did not. Not a page if it lacks the items or their count.
+fn page_value(data: Value) -> Result<Value, github::Error> {
+    let not_a_page = || github::Error::Invalid("the body is not a page of a search".to_owned());
+    let Value::Object(mut object) = data else {
+        return Err(not_a_page());
+    };
+    let total = object
+        .get("total_count")
+        .and_then(Value::as_u64)
+        .ok_or_else(not_a_page)?;
+    let incomplete = object.get("incomplete_results") == Some(&Value::Bool(true));
+    let items = match object.remove("items") {
+        Some(items @ Value::Array(_)) => items,
+        _ => return Err(not_a_page()),
+    };
+    Ok(serde_json::json!({
+        "items": items,
+        "total_count": total,
+        "incomplete_results": incomplete,
+    }))
+}
+
+fn value_page(value: Value) -> Option<Page> {
+    let Value::Object(mut object) = value else {
+        return None;
+    };
+    let total = object.get("total_count")?.as_u64()?;
+    let incomplete = object.get("incomplete_results")?.as_bool()?;
+    let Value::Array(items) = object.remove("items")? else {
+        return None;
+    };
+    Some(Page {
+        items,
+        total,
+        incomplete,
+    })
+}
+
 fn value_list(value: Value) -> Option<List> {
     let Value::Object(mut object) = value else {
         return None;
@@ -1672,6 +1806,19 @@ mod tests {
             now: DateTimeUtc,
         ) -> Result<Outcome<List>, Error> {
             self.own_list(viewer, dashboard, path, 100, &[], &move || now)
+                .await
+        }
+
+        /// [`Cache::get_page_of`] at `now`.
+        async fn get_page_of_at(
+            &self,
+            viewer: &Viewer,
+            dashboard: &str,
+            path: &Path,
+            fields: &[&str],
+            now: DateTimeUtc,
+        ) -> Result<Outcome<Page>, Error> {
+            self.page(viewer, dashboard, path, fields, &move || now)
                 .await
         }
 
@@ -3170,6 +3317,174 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].scope, format!("user:{}", setup.alice));
         assert_eq!(rows[0].data["items"], json!([{"name": "a"}, {"name": "b"}]));
+    }
+
+    /// The search for the second page of a repository's open issues, 2 to a page.
+    fn second_page() -> Path {
+        path(&["search", "issues"])
+            .query("q", "repo:owner/repo is:issue is:open")
+            .query("per_page", "2")
+            .query("page", "2")
+    }
+
+    #[tokio::test]
+    async fn a_page_of_a_search_keeps_its_count_and_only_some_fields() {
+        let setup = setup().await;
+        setup.answer(|request| match header(request, IF_NONE_MATCH) {
+            Some(r#"W/"p2""#) => answer(304, &[], ""),
+            _ => answer(
+                200,
+                &[("etag", r#"W/"p2""#)],
+                r#"{"total_count": 1234, "incomplete_results": false,
+                    "items": [{"number": 3, "body": "Long", "user": {"login": "alice", "id": 1}},
+                              {"number": 4, "body": null, "user": null}]}"#,
+            ),
+        });
+        let page = second_page();
+        let fields = ["number", "user.login"];
+        let items = vec![
+            json!({"number": 3, "user": {"login": "alice"}}),
+            json!({"number": 4, "user": null}),
+        ];
+
+        let first = data(
+            setup
+                .cache
+                .get_page_of_at(&visitor(), DASHBOARD, &page, &fields, at(0))
+                .await,
+        );
+        assert_eq!(
+            first.data,
+            Page {
+                items: items.clone(),
+                total: 1234,
+                incomplete: false,
+            }
+        );
+        // Only the page asked for, as it was asked for.
+        assert_eq!(
+            setup.stub.urls(),
+            [
+                "https://api.github.com/search/issues?q=repo%3Aowner%2Frepo+is%3Aissue+is%3Aopen&per_page=2&page=2"
+            ]
+        );
+        let rows = setup.rows().await;
+        assert_eq!(
+            rows[0].resource_key,
+            "/search/issues?q=repo%3Aowner%2Frepo+is%3Aissue+is%3Aopen&per_page=2&page=2 page fields=number,user.login"
+        );
+        assert_eq!(
+            rows[0].data,
+            json!({"items": items, "total_count": 1234, "incomplete_results": false})
+        );
+
+        // Within the TTL, from the cache.
+        let again = setup
+            .cache
+            .get_page_of_at(&visitor(), DASHBOARD, &page, &fields, at(14))
+            .await;
+        assert_eq!(data(again).data.items, items);
+        assert_eq!(setup.stub.requests().len(), 1);
+
+        // After it, conditionally, as one resource is.
+        let confirmed = data(
+            setup
+                .cache
+                .get_page_of_at(&visitor(), DASHBOARD, &page, &fields, at(16))
+                .await,
+        );
+        assert_eq!((confirmed.data.total, confirmed.fetched_at), (1234, at(16)));
+        let requests = setup.stub.requests();
+        assert_eq!(
+            sent_header(&requests[1].1, IF_NONE_MATCH),
+            Some(r#"W/"p2""#)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_page_tells_whether_the_search_ran_out_of_time() {
+        let setup = setup().await;
+        setup.answer(|_| {
+            answer(
+                200,
+                &[],
+                r#"{"total_count": 7, "incomplete_results": true, "items": []}"#,
+            )
+        });
+        let page = data(
+            setup
+                .cache
+                .get_page_of_at(&visitor(), DASHBOARD, &second_page(), &[], at(0))
+                .await,
+        );
+        assert_eq!(
+            page.data,
+            Page {
+                items: vec![],
+                total: 7,
+                incomplete: true,
+            }
+        );
+        assert_eq!(
+            setup.rows().await[0].resource_key,
+            "/search/issues?q=repo%3Aowner%2Frepo+is%3Aissue+is%3Aopen&per_page=2&page=2 page"
+        );
+    }
+
+    #[tokio::test]
+    async fn what_is_not_a_page_of_a_search_is_not_cached_as_one() {
+        let setup = setup().await;
+        for body in [
+            "[]",
+            r#"{"items": []}"#,
+            r#"{"total_count": 3}"#,
+            r#"{"total_count": 3, "items": {}}"#,
+        ] {
+            setup.answer(move |_| answer(200, &[], body));
+            let error = github_error(
+                setup
+                    .cache
+                    .get_page_of_at(&visitor(), DASHBOARD, &second_page(), &[], at(0))
+                    .await,
+            );
+            assert!(
+                matches!(error, github::Error::Invalid(_)),
+                "{body}: {error:?}"
+            );
+        }
+        assert!(setup.rows().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn pages_are_cached_in_each_viewers_scope() {
+        let setup = setup().await;
+        setup.answer(|_| {
+            answer(
+                200,
+                &[],
+                r#"{"total_count": 1, "incomplete_results": false, "items": [{"number": 1}]}"#,
+            )
+        });
+        let page = second_page();
+        for viewer in [visitor(), setup.alice(), setup.alice()] {
+            data(
+                setup
+                    .cache
+                    .get_page_of_at(&viewer, DASHBOARD, &page, &["number"], at(0))
+                    .await,
+            );
+        }
+        assert_eq!(setup.stub.requests().len(), 2);
+        let scopes: Vec<String> = setup
+            .rows()
+            .await
+            .into_iter()
+            .map(|row| row.scope)
+            .collect();
+        assert_eq!(
+            scopes,
+            ["shared".to_owned(), format!("user:{}", setup.alice)]
+        );
     }
 
     #[tokio::test]

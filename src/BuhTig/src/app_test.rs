@@ -89,7 +89,12 @@ fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
                             .contains(&name)
                             .then(|| (name.to_owned(), qualifiers.to_owned()))
                     });
+                let paged = query.split('&').any(|pair| pair.starts_with("page="));
                 match searched {
+                    // A page of the Issues or Pull requests tab's list (FR-REPO-06).
+                    Some((name, _)) if paged => {
+                        answer(200, ETAG, &under(&name, "listed").to_string())
+                    }
                     Some((name, qualifiers)) if qualifiers == "is:pr" => {
                         answer(200, &[], &under(&name, "pulls").to_string())
                     }
@@ -149,16 +154,22 @@ fn repository(name: &str) -> Value {
     })
 }
 
-/// What GitHub gives under Octo's repository `name` at `what` (FR-REPO-13, FR-REPO-14,
-/// FR-REPO-16): its pull requests as searched for, its open issues, its releases, the latest
-/// of them, and its workflow runs, which GitHub gives with the repository, marked private as it is.
+/// What GitHub gives under Octo's repository `name` at `what` (FR-REPO-06, FR-REPO-13,
+/// FR-REPO-14, FR-REPO-16): its pull requests as searched for, a page of its issues or pull
+/// requests as its tabs list them, its open issues, its labels, its releases, the latest of
+/// them, and its workflow runs, which GitHub gives with the repository, marked private as it is.
 fn under(name: &str, what: &str) -> Value {
     let at = "2026-10-01T00:00:00Z";
     match what {
         "pulls" => json!({"total_count": 1, "incomplete_results": false, "items": [
             {"created_at": at, "closed_at": at, "pull_request": {"merged_at": at}}
         ]}),
+        "listed" => json!({"total_count": 1, "incomplete_results": false, "items": [
+            {"number": 1, "title": "Octo", "state": "open", "created_at": at,
+             "html_url": format!("https://github.com/octo/{name}/issues/1")}
+        ]}),
         "issues" => json!([{"created_at": at}]),
+        "labels" => json!([{"name": "bug", "color": "d73a4a"}]),
         "releases" => json!([{"tag_name": "v1", "draft": false, "prerelease": false,
                               "published_at": at, "assets": []}]),
         "releases/latest" => json!({"tag_name": "v1", "published_at": at,
@@ -971,6 +982,15 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
             "/-/api/repositories/octo/secret/release-cadence",
             "/-/api/repositories/octo/inner/merge-velocity",
             "/-/api/repositories/octo/inner/workflow-runs",
+            // A page of each of their tabs' lists, and their labels (FR-REPO-06).
+            "/-/api/repositories/octo/public/issue-list",
+            "/-/api/repositories/octo/public/pull-list?state=merged&page=2",
+            "/-/api/repositories/octo/public/labels",
+            "/-/api/repositories/octo/secret/issue-list?label=bug&sort=oldest",
+            "/-/api/repositories/octo/secret/pull-list",
+            "/-/api/repositories/octo/secret/labels",
+            "/-/api/repositories/octo/inner/issue-list",
+            "/-/api/repositories/octo/inner/labels",
             // What is observed of them (FR-DATA-13).
             "/-/api/repositories/octo/public/trends",
             "/-/api/repositories/octo/secret/trends",
@@ -987,6 +1007,14 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
         let leaky = served.get(viewer, "/-/api/repositories/octo/leaky").await;
         let expected = if viewer.0 == hubot.0 { 200 } else { 404 };
         assert_eq!(leaky.status, expected, "{leaky:?}");
+        // Nor does any list of a private repository's issues tell anyone else anything of it.
+        let listed = served
+            .get(
+                viewer,
+                "/-/api/repositories/octo/secret/issue-list?label=bug&sort=oldest",
+            )
+            .await;
+        assert_eq!(listed.status, expected, "{listed:?}");
     }
 
     const PRIVATE: &str = r#"jsonb_path_exists(data, 'lax $.** ? (@.private == true || @.visibility == "private" || @.visibility == "internal")')"#;
@@ -1019,13 +1047,14 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
         "0"
     );
     // The repository, and its runs, open issues, releases, pull requests searched for, and
-    // the count of those open, which its trends observe.
+    // the count of those open, which its trends observe, and a page of each of its tabs'
+    // lists, and its labels.
     assert_eq!(
         served.psql(
             "SELECT count(*) FROM cache_entries \
              WHERE scope <> 'shared' AND resource_key LIKE '%secret%'"
         ),
-        "6"
+        "9"
     );
     let hubot = served.psql("SELECT id FROM users WHERE login = 'hubot'");
     let pat = served.psql(&format!(

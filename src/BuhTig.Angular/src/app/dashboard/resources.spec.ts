@@ -490,6 +490,107 @@ describe('Resources', () => {
     });
   });
 
+  it('gives a page of the issues or pull requests that a view of a tab shows (FR-REPO-06)', () => {
+    const view = {
+      state: 'merged' as const,
+      label: 'good first issue',
+      sort: 'oldest' as const,
+      page: 1,
+    };
+    const seen = outcome(resources.issueList('acme', 'widget', 'pull_request', view));
+    const request = http.expectOne((request) => request.url === `${WIDGET}/pull-list`);
+    // The view alone, never the URL's query.
+    expect(request.request.urlWithParams).toBe(
+      `${WIDGET}/pull-list?state=merged&sort=oldest&page=2&label=good%20first%20issue`,
+    );
+    request.flush({
+      items: [
+        {
+          number: 49,
+          title: 'Steady the widgets',
+          kind: 'pull_request',
+          state: 'merged',
+          author: 'bob',
+          created_at: '2026-10-19T08:00:00Z',
+          updated_at: '2026-10-21T08:00:00Z',
+          url: 'https://github.com/acme/widget/pull/49',
+        },
+        // Of the other kind, as no answer should have.
+        {
+          number: 50,
+          title: 'Widgets wobble',
+          kind: 'issue',
+          state: 'open',
+          author: null,
+          created_at: null,
+          url: null,
+        },
+      ],
+      total: 1234,
+      page: 2,
+      pages: 40,
+      per_page: 25,
+      capped: true,
+      incomplete: false,
+      off: false,
+      fetched_at: '2026-10-22T12:00:00.000Z',
+      stale: null,
+    });
+    expect(seen.value).toEqual({
+      view,
+      items: [
+        {
+          number: 49,
+          title: 'Steady the widgets',
+          kind: 'pull_request',
+          state: 'merged',
+          author: 'bob',
+          createdAt: new Date('2026-10-19T08:00:00Z'),
+          updatedAt: new Date('2026-10-21T08:00:00Z'),
+          url: 'https://github.com/acme/widget/pull/49',
+        },
+      ],
+      total: 1234,
+      page: 1,
+      pages: 40,
+      capped: true,
+      incomplete: false,
+      off: false,
+      fetchedAt: new Date('2026-10-22T12:00:00.000Z'),
+      stale: undefined,
+    });
+
+    // Issues, as the list starts, of a repository that has turned them off.
+    const off = outcome(
+      resources.issueList('acme', 'widget', 'issue', {
+        state: 'open',
+        label: undefined,
+        sort: 'updated',
+        page: 0,
+      }),
+    );
+    http.expectOne(`${WIDGET}/issue-list?state=open&sort=updated&page=1`).flush({
+      items: [],
+      total: 0,
+      page: 1,
+      pages: 1,
+      capped: false,
+      incomplete: false,
+      off: true,
+    });
+    expect(off.value).toEqual(
+      expect.objectContaining({ items: [], total: 0, page: 0, pages: 1, off: true }),
+    );
+  });
+
+  it("gives the repository's labels, leaving out what is no label's name", () => {
+    const seen = outcome(resources.labels('acme', 'widget'));
+    http
+      .expectOne(`${WIDGET}/labels`)
+      .flush({ labels: ['bug', '', 'good first issue', 7], truncated: true });
+    expect(seen.value).toEqual({ names: ['bug', 'good first issue'], truncated: true });
+  });
+
   it("gives the latest commits, with their author's avatar", () => {
     const seen = outcome(resources.commits('acme', 'widget'));
     http.expectOne(`${WIDGET}/commits`).flush({

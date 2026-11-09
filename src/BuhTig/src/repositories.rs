@@ -13,7 +13,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
@@ -23,7 +23,7 @@ use tracing::error;
 use url::Url;
 
 use crate::accounts::is_account_name;
-use crate::cache::{self, Cache, Cached, Outcome, Refused, Source, Stale, Viewer};
+use crate::cache::{self, Cache, Cached, Outcome, Page, Refused, Source, Stale, Viewer};
 use crate::entity::cache_entry::Scope;
 use crate::github::{self, List};
 use crate::trends::{self, Figures, Observation};
@@ -40,9 +40,34 @@ const LANGUAGES: usize = 8;
 /// FR-REPO-05: the contributors the widget lists.
 const CONTRIBUTORS: usize = 10;
 
-/// FR-REPO-06: the issues and pull requests the widget lists, and the issues and pull
-/// requests tabs too.
-const RECENT: usize = 20;
+/// FR-REPO-06: the issues and pull requests that the overview's widget lists.
+const RECENT: usize = 6;
+
+/// FR-REPO-06: the issues or pull requests on each page of the Issues and Pull requests
+/// tabs' lists.
+const PAGE_SIZE: u64 = 25;
+
+/// FR-REPO-06: how many of what it finds GitHub's search gives, on its first pages, and so
+/// how far the tabs' lists reach: 40 pages.
+const SEARCH_REACH: u64 = 1000;
+
+/// FR-REPO-06: what is kept of each issue or pull request that the tabs list, as the search
+/// for them finds them.
+const LIST_FIELDS: &[&str] = &[
+    "number",
+    "title",
+    "state",
+    "user.login",
+    "created_at",
+    "updated_at",
+    "html_url",
+    "pull_request.merged_at",
+];
+
+/// FR-REPO-06: the labels that the tabs' label filter offers, and the longest name that
+/// GitHub gives a label.
+const LABELS: usize = 100;
+const MAX_LABEL: usize = 50;
 
 /// FR-REPO-07: the commits the widget lists.
 const COMMITS: usize = 10;
@@ -475,7 +500,7 @@ fn listed(list: &List) -> u64 {
 }
 
 /// `/-/api/repositories/{owner}/{repo}/issues`: how many issues and pull requests the
-/// repository has in each state, and the 20 updated last (FR-REPO-06), latest first,
+/// repository has in each state, and the 6 updated last (FR-REPO-06), latest first,
 ///
 /// ```json
 /// {"issues": {"open": …, "closed": …} | null,
@@ -505,6 +530,109 @@ pub async fn issues(
         Ok(body) => respond(body),
         Err(code) => status(code),
     }
+}
+
+/// `/-/api/repositories/{owner}/{repo}/issue-list?state=…&label=…&sort=…&page=…`: a page of
+/// 25 of the repository's issues, without its pull requests, as its Issues tab lists them
+/// (FR-REPO-06),
+///
+/// ```json
+/// {"items": [{"number": …, "title": …, "kind": "issue", "state": "open" | "closed",
+///             "author": …, "created_at": …, "updated_at": …, "url": …}, …],
+///  "total": 1234, "page": 2, "pages": 40, "per_page": 25, "capped": true,
+///  "incomplete": false, "off": false, "fetched_at": …, "stale": null | "held" | "github"}
+/// ```
+///
+/// The query picks which, each part left out for its default, as [`ListView::of`] reads it:
+/// `state`, `open` (the default), `closed` or `all`; `label`, one label they must have;
+/// `sort`, `updated`, those updated last first (the default), or `oldest`, those opened
+/// first first; and `page`, from 1 to 40. Any other value is 400, and GitHub is not asked.
+///
+/// They are found by GitHub's search, which tells issues from pull requests, as the list of
+/// a repository's issues does not, and filters and orders all of them, not one page: only
+/// the page asked for is read, in one request, cached in the viewer's scope as every other
+/// (FR-DATA-04). `total` is how many the search found, `pages` how many pages of them it
+/// reaches, which is no more than 40, since GitHub's search gives only the first 1,000 that
+/// it finds: `capped` says that it found more. `incomplete` says that GitHub's search ran
+/// out of time, so that it may have found fewer than there are. A repository that has turned
+/// issues off on GitHub has none, `off` says so, and GitHub is not asked. Items are as
+/// [`issues`] lists them, and `fetched_at` and `stale` say when the page was fetched, as
+/// [`dated`] tells it, or the repository when GitHub was not asked.
+///
+/// Its other statuses are those of [`commit_activity`].
+pub async fn issue_list(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    tab_list(&cache, viewer, &owner, &repo, Kind::Issue, &query).await
+}
+
+/// `/-/api/repositories/{owner}/{repo}/pull-list?state=…&label=…&sort=…&page=…`: a page of
+/// 25 of the repository's pull requests, as its Pull requests tab lists them (FR-REPO-06),
+/// as [`issue_list`] lists issues, each with `"kind": "pull_request"` and its `state`,
+/// `open`, `merged`, or `closed`, without being merged. Its `state` may be `open` (the
+/// default), `merged`, `closed`, those closed without being merged, or `all`.
+///
+/// Its statuses are those of [`issue_list`].
+pub async fn pull_list(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    tab_list(&cache, viewer, &owner, &repo, Kind::PullRequest, &query).await
+}
+
+/// `/-/api/repositories/{owner}/{repo}/labels`: the names of up to 100 of the repository's
+/// labels, which its Issues and Pull requests tabs offer to filter by (FR-REPO-06), in
+/// alphabetical order whatever their letter case,
+///
+/// ```json
+/// {"labels": ["bug", "good first issue", …], "truncated": false}
+/// ```
+///
+/// `truncated` says that it has more. A label whose name the search for issues cannot take,
+/// as [`is_label`] tells, is left out.
+///
+/// Its statuses are those of [`commit_activity`].
+pub async fn labels(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    let path = repository.path(&["labels"]);
+    let list = cache
+        .get_list_of(
+            &repository.viewer,
+            &repository.dashboard,
+            &path,
+            LABELS,
+            &["name"],
+        )
+        .await;
+    let list = match data(list) {
+        Ok(list) => list.data,
+        Err(code) => return status(code),
+    };
+    let mut names: Vec<&str> = list
+        .items
+        .iter()
+        .filter_map(|label| text(label, "name"))
+        .filter(|name| is_label(name))
+        .collect();
+    names.sort_by(|one, other| {
+        one.to_lowercase()
+            .cmp(&other.to_lowercase())
+            .then(one.cmp(other))
+    });
+    names.dedup();
+    respond(json!({ "labels": names, "truncated": list.truncated }))
 }
 
 /// `/-/api/repositories/{owner}/{repo}/commits`: the 10 latest commits on the repository's
@@ -1232,9 +1360,220 @@ async fn issues_and_pulls(cache: &Cache, repository: &Under) -> Result<Value, St
         .data
         .items
         .iter()
-        .filter_map(|item| recent_item(item, cache.github_host()))
+        .filter_map(|item| listed_item(item, cache.github_host()))
         .collect();
     Ok(json!({ "issues": issues, "pull_requests": pull_requests, "recent": recent }))
+}
+
+/// What the Issues or the Pull requests tab lists (FR-REPO-06).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Issue,
+    PullRequest,
+}
+
+impl Kind {
+    /// The qualifier that has GitHub's search find only these.
+    fn qualifier(self) -> &'static str {
+        match self {
+            Kind::Issue => "is:issue",
+            Kind::PullRequest => "is:pr",
+        }
+    }
+
+    /// The feature of a repository that it may turn off on GitHub.
+    fn feature(self) -> &'static str {
+        match self {
+            Kind::Issue => "has_issues",
+            Kind::PullRequest => "has_pull_requests",
+        }
+    }
+
+    /// The `kind` of an item of the kind, as [`listed_item`] tells it.
+    fn name(self) -> &'static str {
+        match self {
+            Kind::Issue => "issue",
+            Kind::PullRequest => "pull_request",
+        }
+    }
+}
+
+/// Which issues or pull requests a tab's list shows, by state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Shown {
+    Open,
+    /// Closed issues, or pull requests closed without being merged.
+    Closed,
+    /// Merged pull requests. Issues are never merged.
+    Merged,
+    All,
+}
+
+/// The order of a tab's list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Order {
+    /// Those updated last first.
+    Updated,
+    /// Those opened first first.
+    Oldest,
+}
+
+/// What a tab's list shows (FR-REPO-06): which issues or pull requests, in which order,
+/// and which page of them, from 1.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ListView {
+    shown: Shown,
+    label: Option<String>,
+    order: Order,
+    page: u64,
+}
+
+impl ListView {
+    /// The view of the list of `kind` that `query` asks for, each part it leaves out at its
+    /// default, the first page of the open ones, updated last first, or `None` if it asks for
+    /// one that the list cannot show: a state, order or page it does not know, a state of the
+    /// other kind, such as merged issues, a page past the 40 that GitHub's search reaches, or
+    /// a label that the search cannot take, as [`is_label`] tells.
+    fn of(kind: Kind, query: &HashMap<String, String>) -> Option<ListView> {
+        let shown = match (query.get("state").map(String::as_str), kind) {
+            (None | Some("open"), _) => Shown::Open,
+            (Some("closed"), _) => Shown::Closed,
+            (Some("merged"), Kind::PullRequest) => Shown::Merged,
+            (Some("all"), _) => Shown::All,
+            _ => return None,
+        };
+        let label = match query.get("label") {
+            Some(label) if is_label(label) => Some(label.clone()),
+            Some(_) => return None,
+            None => None,
+        };
+        let order = match query.get("sort").map(String::as_str) {
+            None | Some("updated") => Order::Updated,
+            Some("oldest") => Order::Oldest,
+            _ => return None,
+        };
+        let page = match query.get("page") {
+            None => 1,
+            Some(page) if page.bytes().all(|byte| byte.is_ascii_digit()) => page
+                .parse::<u64>()
+                .ok()
+                .filter(|page| (1..=SEARCH_REACH / PAGE_SIZE).contains(page))?,
+            Some(_) => return None,
+        };
+        Some(ListView {
+            shown,
+            label,
+            order,
+            page,
+        })
+    }
+}
+
+/// Whether `name` can be a label's that GitHub's search for issues can take, quoted: one of
+/// up to 50 characters, without quotes or control characters.
+fn is_label(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= MAX_LABEL
+        && !name.chars().any(|char| char == '"' || char.is_control())
+}
+
+/// What [`issue_list`] or [`pull_list`] answers for the repository `owner/repo`, of `kind`,
+/// as `query` asks for it.
+async fn tab_list(
+    cache: &Cache,
+    viewer: Viewer,
+    owner: &str,
+    repo: &str,
+    kind: Kind,
+    query: &HashMap<String, String>,
+) -> Response {
+    let Some(view) = ListView::of(kind, query) else {
+        return status(StatusCode::BAD_REQUEST);
+    };
+    let repository = match under(cache, viewer, owner, repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    if !enabled(&repository.data, kind.feature()) {
+        let none = Page::default();
+        return respond(repository.dated(list_page(kind, &view, &none, true, "")));
+    }
+    let path = list_search(&repository.name, kind, &view);
+    let page = cache
+        .get_page_of(
+            &repository.viewer,
+            &repository.dashboard,
+            &path,
+            LIST_FIELDS,
+        )
+        .await;
+    match data(page) {
+        Ok(page) => respond(dated_by(
+            list_page(kind, &view, &page.data, false, cache.github_host()),
+            &page,
+        )),
+        Err(code) => status(code),
+    }
+}
+
+/// The search for the issues or pull requests of the repository `name`, as `owner/repo`, of
+/// `kind`, that a tab's list shows as `view`: the page of 25 that it shows, of all of them
+/// that it shows, in its order. Its qualifiers are as [`search_qualifiers`] makes them.
+fn list_search(name: &str, kind: Kind, view: &ListView) -> github::Path {
+    let (sort, order) = match view.order {
+        Order::Updated => ("updated", "desc"),
+        Order::Oldest => ("created", "asc"),
+    };
+    github::Path::new(["search", "issues"])
+        .expect("names are neither empty nor dots")
+        .query("q", &search_qualifiers(name, kind, view))
+        .query("sort", sort)
+        .query("order", order)
+        .query("per_page", &PAGE_SIZE.to_string())
+        .query("page", &view.page.to_string())
+}
+
+/// The query of GitHub's search for the issues or pull requests of the repository `name`, of
+/// `kind`, that `view` shows, such as `repo:owner/repo is:pr is:closed is:unmerged
+/// label:"good first issue"`. The label is quoted, and can hold no quote (see [`is_label`]),
+/// so that it is one qualifier whatever it holds.
+fn search_qualifiers(name: &str, kind: Kind, view: &ListView) -> String {
+    let state = match (view.shown, kind) {
+        (Shown::Open, _) => " is:open",
+        (Shown::Closed, Kind::Issue) => " is:closed",
+        (Shown::Closed, Kind::PullRequest) => " is:closed is:unmerged",
+        (Shown::Merged, _) => " is:merged",
+        (Shown::All, _) => "",
+    };
+    let label = view
+        .label
+        .as_deref()
+        .map(|label| format!(" label:\"{label}\""))
+        .unwrap_or_default();
+    format!("repo:{name} {}{state}{label}", kind.qualifier())
+}
+
+/// What [`issue_list`] answers of `page`, the page of what the search for the list of
+/// `kind`, as `view` shows it, found, or that the repository has turned the kind `off`. An
+/// item of the other kind is left out, as a safeguard.
+fn list_page(kind: Kind, view: &ListView, page: &Page, off: bool, host: &str) -> Value {
+    let items: Vec<Value> = page
+        .items
+        .iter()
+        .filter_map(|item| listed_item(item, host))
+        .filter(|item| item["kind"] == kind.name())
+        .collect();
+    let pages = page.total.min(SEARCH_REACH).div_ceil(PAGE_SIZE).max(1);
+    json!({
+        "items": items,
+        "total": page.total,
+        "page": view.page,
+        "pages": pages,
+        "per_page": PAGE_SIZE,
+        "capped": page.total > SEARCH_REACH,
+        "incomplete": page.incomplete,
+        "off": off,
+    })
 }
 
 /// How many of the repository's issues or pull requests the search for `qualifiers` finds,
@@ -1382,9 +1721,9 @@ fn contributor(contributor: &Value, host: &str) -> Option<(u64, Value)> {
     ))
 }
 
-/// An issue or pull request as the widget lists it, unless GitHub left out its number or
-/// title, or gave it a state that BuhTig does not know.
-fn recent_item(item: &Value, host: &str) -> Option<Value> {
+/// An issue or pull request as the widget and the tabs list it, unless GitHub left out its
+/// number or title, or gave it a state that BuhTig does not know.
+fn listed_item(item: &Value, host: &str) -> Option<Value> {
     let pull_request = item.get("pull_request").filter(|pull| pull.is_object());
     let state = match (text(item, "state")?, pull_request) {
         ("open", _) => "open",
@@ -1972,6 +2311,86 @@ mod tests {
     /// A stub GitHub with the repositories `Acme/Widget`, `acme/bare` and `acme/odd`, two
     /// with issues or pull requests turned off, one that was renamed to `Acme/Widget`, and a
     /// few odd answers. Like GitHub, it ignores the case of names in paths.
+    /// A page of what GitHub's search finds of `Acme/Widget`'s issues or pull requests, as
+    /// `query` asks for it, as the Issues and Pull requests tabs list them, or `None` for a
+    /// search it does not know. The repository has many more pull requests than issues, all
+    /// of them updated after its issues: 30 open issues and 4 closed, 3 of the open ones
+    /// labeled `bug` and 2 `slow`, which GitHub's search runs out of time finding, and 1,234
+    /// open pull requests, 300 merged and 40 closed without being merged. Each is numbered by
+    /// when it was opened, and listed in the order asked for.
+    fn searched(query: &HashMap<String, String>) -> Option<Value> {
+        let q = query.get("q")?.strip_prefix("repo:Acme/Widget ")?;
+        let per_page: u64 = query.get("per_page")?.parse().ok()?;
+        let page: u64 = query.get("page")?.parse().ok()?;
+        let oldest = match (query.get("sort")?.as_str(), query.get("order")?.as_str()) {
+            ("updated", "desc") => false,
+            ("created", "asc") => true,
+            _ => return None,
+        };
+        let (pulls, states, label) = match q.split_once(" label:") {
+            Some((kind, label)) => (kind.starts_with("is:pr"), kind, Some(label)),
+            None => (q.starts_with("is:pr"), q, None),
+        };
+        // The states of those found, how many of each, and the numbers they start from.
+        let found: &[(&str, u64, u64)] = match (states, label) {
+            ("is:issue is:open", None) => &[("open", 30, 1)],
+            ("is:issue is:open", Some(r#""bug""#)) => &[("open", 3, 1)],
+            ("is:issue is:open", Some(r#""slow""#)) => &[("open", 2, 1)],
+            ("is:issue is:closed", None) => &[("closed", 4, 31)],
+            ("is:issue", None) => &[("open", 30, 1), ("closed", 4, 31)],
+            ("is:pr is:open", None) => &[("open", 1234, 1000)],
+            ("is:pr is:merged", None) => &[("merged", 300, 3000)],
+            ("is:pr is:closed is:unmerged", None) => &[("closed", 40, 4000)],
+            ("is:pr", None) => &[
+                ("open", 1234, 1000),
+                ("merged", 300, 3000),
+                ("closed", 40, 4000),
+            ],
+            (_, Some(_)) => &[],
+            _ => return None,
+        };
+        let mut all: Vec<(&str, u64)> = found
+            .iter()
+            .flat_map(|(state, count, first)| (*first..first + count).map(|n| (*state, n)))
+            .collect();
+        // Opened first first, or else updated last first, which is opened last first here.
+        all.sort_by_key(|(_, number)| *number);
+        if !oldest {
+            all.reverse();
+        }
+        let start = usize::try_from((page - 1) * per_page).ok()?;
+        let items: Vec<Value> = all
+            .iter()
+            .skip(start)
+            .take(usize::try_from(per_page).ok()?)
+            .map(|(state, number)| {
+                let mut item = json!({
+                    "number": number,
+                    "title": format!("Widgets {number}"),
+                    "state": if *state == "open" { "open" } else { "closed" },
+                    "user": {"login": "alice", "id": 2},
+                    "body": "What it says",
+                    "created_at": "2026-10-01T08:00:00Z",
+                    "updated_at": "2026-10-22T08:00:00Z",
+                    "html_url": format!(
+                        "https://github.com/Acme/Widget/{}/{number}",
+                        if pulls { "pull" } else { "issues" }
+                    ),
+                });
+                if pulls {
+                    let merged = (*state == "merged").then_some("2026-10-21T08:00:00Z");
+                    item["pull_request"] = json!({"merged_at": merged, "url": "…"});
+                }
+                item
+            })
+            .collect();
+        Some(json!({
+            "total_count": all.len(),
+            "incomplete_results": label == Some(r#""slow""#),
+            "items": items,
+        }))
+    }
+
     fn github() -> Arc<Stub> {
         Stub::new(|request| {
             let query: HashMap<String, String> =
@@ -2160,6 +2579,18 @@ mod tests {
                         "published_at": "2026-10-01T12:00:00Z",
                         "draft": false, "prerelease": false}"#,
                 ),
+                // What the Issues and Pull requests tabs list, a page at a time.
+                "/search/issues" if query.contains_key("page") => match searched(&query) {
+                    Some(page) => answer(200, &[], &page.to_string()),
+                    None => answer(500, &[], r#"{"message": "Server Error"}"#),
+                },
+                "/repos/acme/widget/labels" => answer(
+                    200,
+                    &[],
+                    r#"[{"name": "bug", "color": "d73a4a"}, {"name": "Docs"},
+                        {"name": "good first issue"}, {"name": "say \"hi\""}, {"name": ""},
+                        {"name": "area/api"}, {"color": "ffffff"}]"#,
+                ),
                 "/search/issues" => match query.get("q").map(String::as_str) {
                     Some("repo:Acme/Widget is:pr is:open") => answer(
                         200,
@@ -2240,10 +2671,14 @@ mod tests {
         CodeFrequency,
         ReleaseCadence,
         Trends,
+        /// At their defaults: the first page of the open ones, updated last first.
+        IssueList,
+        PullList,
+        Labels,
     }
 
     impl Api {
-        const ALL: [Api; 14] = [
+        const ALL: [Api; 17] = [
             Api::Summary,
             Api::Stats,
             Api::CommitActivity,
@@ -2258,6 +2693,9 @@ mod tests {
             Api::CodeFrequency,
             Api::ReleaseCadence,
             Api::Trends,
+            Api::IssueList,
+            Api::PullList,
+            Api::Labels,
         ];
     }
 
@@ -2303,6 +2741,9 @@ mod tests {
                 Api::CodeFrequency => code_frequency(cache, visitor, names).await,
                 Api::ReleaseCadence => release_cadence(cache, visitor, names).await,
                 Api::Trends => trends(cache, visitor, names).await,
+                Api::IssueList => issue_list(cache, visitor, names, Query(HashMap::new())).await,
+                Api::PullList => pull_list(cache, visitor, names, Query(HashMap::new())).await,
+                Api::Labels => labels(cache, visitor, names).await,
             }
         })
         .await;
@@ -2328,6 +2769,63 @@ mod tests {
             body.as_object_mut().unwrap().remove("fetched_at");
         }
         (status, body)
+    }
+
+    /// The status and body, as [`ask`] gives them, of a visitor's request for the list of
+    /// `owner/repo`'s issues, or its pull requests, with `query`.
+    async fn ask_list(
+        cache: &Arc<Cache>,
+        kind: Kind,
+        owner: &str,
+        repo: &str,
+        query: &[(&str, &str)],
+    ) -> (StatusCode, Value) {
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let names = Path((owner.to_owned(), repo.to_owned()));
+        let query = Query(
+            query
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        );
+        let cache = State(cache.clone());
+        let response = Box::pin(async move {
+            match kind {
+                Kind::Issue => issue_list(cache, visitor, names, query).await,
+                Kind::PullRequest => pull_list(cache, visitor, names, query).await,
+            }
+        })
+        .await;
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        if body.is_empty() {
+            return (status, Value::Null);
+        }
+        let mut body: Value = serde_json::from_slice(&body).unwrap();
+        fetched_at(&body);
+        body.as_object_mut().unwrap().remove("fetched_at");
+        (status, body)
+    }
+
+    /// The numbers of the items of a list's page, and their states.
+    fn listed_states(page: &Value) -> Vec<(u64, String)> {
+        page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| {
+                (
+                    item["number"].as_u64().unwrap(),
+                    item["state"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
     }
 
     /// The time of fetching in `body`, which must be as JavaScript writes it.
@@ -3369,11 +3867,405 @@ mod tests {
         );
         assert!(
             stub.urls().contains(
-                &"https://api.github.com/repos/Acme/Widget/issues?state=all&sort=updated&direction=desc&per_page=20"
+                &"https://api.github.com/repos/Acme/Widget/issues?state=all&sort=updated&direction=desc&per_page=6"
                     .to_owned()
             ),
             "{:?}",
             stub.urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn each_tab_lists_a_full_page_of_its_own_kind() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        // Its 1,234 open pull requests were all updated after its issues.
+        let (status, first) = ask_list(&cache, Kind::Issue, "acme", "widget", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        let items = first["items"].as_array().unwrap();
+        assert_eq!(items.len(), 25);
+        assert!(items.iter().all(|item| item["kind"] == "issue"), "{first}");
+        assert_eq!(
+            items[0],
+            json!({
+                "number": 30,
+                "title": "Widgets 30",
+                "kind": "issue",
+                "state": "open",
+                "author": "alice",
+                "created_at": "2026-10-01T08:00:00Z",
+                "updated_at": "2026-10-22T08:00:00Z",
+                "url": "https://github.com/Acme/Widget/issues/30",
+            })
+        );
+        let mut rest = first.clone();
+        rest.as_object_mut().unwrap().remove("items");
+        assert_eq!(
+            rest,
+            json!({
+                "total": 30, "page": 1, "pages": 2, "per_page": 25, "capped": false,
+                "incomplete": false, "off": false, "stale": null,
+            })
+        );
+        // The last page has the rest.
+        let (_, last) = ask_list(&cache, Kind::Issue, "acme", "widget", &[("page", "2")]).await;
+        assert_eq!(
+            listed_states(&last),
+            (1..=5)
+                .rev()
+                .map(|n| (n, "open".to_owned()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!((&last["page"], &last["pages"]), (&json!(2), &json!(2)));
+        // Only the pages asked for, as GitHub's search finds them.
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://api.github.com/repos/acme/widget",
+                "https://api.github.com/search/issues?q=repo%3AAcme%2FWidget+is%3Aissue+is%3Aopen&sort=updated&order=desc&per_page=25&page=1",
+                "https://api.github.com/search/issues?q=repo%3AAcme%2FWidget+is%3Aissue+is%3Aopen&sort=updated&order=desc&per_page=25&page=2",
+            ]
+        );
+        // Each page is cached.
+        ask_list(&cache, Kind::Issue, "acme", "widget", &[("page", "2")]).await;
+        assert_eq!(stub.urls().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn pull_requests_are_listed_by_how_they_ended() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let list = |state| {
+            let cache = cache.clone();
+            async move {
+                let (status, page) = ask_list(
+                    &cache,
+                    Kind::PullRequest,
+                    "acme",
+                    "widget",
+                    &[("state", state)],
+                )
+                .await;
+                assert_eq!(status, StatusCode::OK, "{state}");
+                page
+            }
+        };
+
+        let merged = list("merged").await;
+        assert_eq!(merged["total"], 300);
+        assert_eq!(merged["items"][0]["kind"], "pull_request");
+        assert_eq!(
+            merged["items"][0]["url"],
+            "https://github.com/Acme/Widget/pull/3299"
+        );
+        assert!(
+            listed_states(&merged)
+                .iter()
+                .all(|(_, state)| state == "merged")
+        );
+
+        // Closed without being merged.
+        let closed = list("closed").await;
+        assert_eq!(closed["total"], 40);
+        assert!(
+            listed_states(&closed)
+                .iter()
+                .all(|(_, state)| state == "closed")
+        );
+
+        // More than GitHub's search reaches: 40 pages of them.
+        let open = list("open").await;
+        assert_eq!(
+            (&open["total"], &open["pages"], &open["capped"]),
+            (&json!(1234), &json!(40), &json!(true))
+        );
+
+        let all = list("all").await;
+        assert_eq!(all["total"], 1574);
+        assert_eq!(listed_states(&all)[0], (4039, "closed".to_owned()));
+
+        let searched: Vec<String> = stub
+            .urls()
+            .into_iter()
+            .filter_map(|url| {
+                let query = Url::parse(&url).ok()?;
+                let q = query.query_pairs().find(|(key, _)| key == "q")?.1;
+                Some(q.into_owned())
+            })
+            .collect();
+        assert_eq!(
+            searched,
+            [
+                "repo:Acme/Widget is:pr is:merged",
+                "repo:Acme/Widget is:pr is:closed is:unmerged",
+                "repo:Acme/Widget is:pr is:open",
+                "repo:Acme/Widget is:pr",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_oldest_and_those_of_a_label_are_found_by_the_search() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let (_, oldest) =
+            ask_list(&cache, Kind::Issue, "acme", "widget", &[("sort", "oldest")]).await;
+        assert_eq!(listed_states(&oldest)[0], (1, "open".to_owned()));
+
+        let (_, bugs) = ask_list(
+            &cache,
+            Kind::Issue,
+            "acme",
+            "widget",
+            &[
+                ("label", "bug"),
+                ("state", "open"),
+                ("sort", "updated"),
+                ("page", "1"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            listed_states(&bugs),
+            [
+                (3, "open".to_owned()),
+                (2, "open".to_owned()),
+                (1, "open".to_owned())
+            ]
+        );
+        assert_eq!((&bugs["total"], &bugs["pages"]), (&json!(3), &json!(1)));
+
+        // A label with spaces, quoted, as one qualifier. None has it.
+        let (status, none) = ask_list(
+            &cache,
+            Kind::Issue,
+            "acme",
+            "widget",
+            &[("label", "good first issue"), ("state", "all")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            (&none["items"], &none["total"], &none["pages"]),
+            (&json!([]), &json!(0), &json!(1))
+        );
+        let searches: Vec<String> = stub
+            .urls()
+            .into_iter()
+            .filter(|url| url.contains("/search/"))
+            .collect();
+        assert_eq!(
+            searches,
+            [
+                "https://api.github.com/search/issues?q=repo%3AAcme%2FWidget+is%3Aissue+is%3Aopen&sort=created&order=asc&per_page=25&page=1",
+                "https://api.github.com/search/issues?q=repo%3AAcme%2FWidget+is%3Aissue+is%3Aopen+label%3A%22bug%22&sort=updated&order=desc&per_page=25&page=1",
+                "https://api.github.com/search/issues?q=repo%3AAcme%2FWidget+is%3Aissue+label%3A%22good+first+issue%22&sort=updated&order=desc&per_page=25&page=1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_search_that_ran_out_of_time_says_so() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let (_, slow) = ask_list(&cache, Kind::Issue, "acme", "widget", &[("label", "slow")]).await;
+        assert_eq!(
+            (&slow["total"], &slow["incomplete"]),
+            (&json!(2), &json!(true))
+        );
+    }
+
+    #[tokio::test]
+    async fn views_the_lists_cannot_show_are_not_asked_for() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let long = "l".repeat(51);
+        for (kind, query) in [
+            // Issues are never merged.
+            (Kind::Issue, ("state", "merged")),
+            (Kind::PullRequest, ("state", "draft")),
+            (Kind::PullRequest, ("state", "")),
+            (Kind::Issue, ("sort", "newest")),
+            (Kind::Issue, ("page", "0")),
+            // Past the 1,000 that GitHub's search reaches.
+            (Kind::Issue, ("page", "41")),
+            (Kind::Issue, ("page", "two")),
+            (Kind::Issue, ("page", "+2")),
+            (Kind::Issue, ("page", "")),
+            (Kind::Issue, ("label", "")),
+            // What would end the quoted label, and add qualifiers of its own.
+            (Kind::Issue, ("label", "x\" repo:acme/secret")),
+            (Kind::Issue, ("label", "line\nbreak")),
+            (Kind::Issue, ("label", &long)),
+        ] {
+            assert_eq!(
+                ask_list(&cache, kind, "acme", "widget", &[query]).await,
+                (StatusCode::BAD_REQUEST, Value::Null),
+                "{kind:?} {query:?}"
+            );
+        }
+        assert_eq!(stub.urls(), Vec::<String>::new());
+
+        // The longest a label's name can be, whatever its letters.
+        let longest = "é".repeat(50);
+        let page = ask_list(
+            &cache,
+            Kind::Issue,
+            "acme",
+            "widget",
+            &[("label", &longest)],
+        )
+        .await;
+        assert_eq!(page.0, StatusCode::OK);
+        assert_eq!(
+            ask_list(
+                &cache,
+                Kind::PullRequest,
+                "acme",
+                "widget",
+                &[("page", "40")]
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn lists_turned_off_are_said_to_be_and_not_searched() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let off = json!({
+            "items": [], "total": 0, "page": 1, "pages": 1, "per_page": 25, "capped": false,
+            "incomplete": false, "off": true, "stale": null,
+        });
+        assert_eq!(
+            ask_list(&cache, Kind::Issue, "acme", "mirror", &[]).await,
+            (StatusCode::OK, off.clone())
+        );
+        assert_eq!(
+            ask_list(&cache, Kind::PullRequest, "acme", "locked", &[]).await,
+            (StatusCode::OK, off)
+        );
+        assert!(
+            stub.urls().iter().all(|url| !url.contains("/search/")),
+            "{:?}",
+            stub.urls()
+        );
+    }
+
+    #[tokio::test]
+    async fn labels_are_listed_by_name() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Labels, "acme", "widget").await,
+            (
+                StatusCode::OK,
+                // Without those the search cannot take, nor any without a name.
+                json!({
+                    "labels": ["area/api", "bug", "Docs", "good first issue"],
+                    "truncated": false,
+                })
+            )
+        );
+        assert!(
+            stub.urls().contains(
+                &"https://api.github.com/repos/Acme/Widget/labels?per_page=100".to_owned()
+            ),
+            "{:?}",
+            stub.urls()
+        );
+    }
+
+    #[test]
+    fn the_search_for_a_list_has_the_qualifiers_of_its_view() {
+        let view = |shown, label: Option<&str>| ListView {
+            shown,
+            label: label.map(str::to_owned),
+            order: Order::Updated,
+            page: 1,
+        };
+        for (kind, shown, label, expected) in [
+            (Kind::Issue, Shown::Open, None, "repo:o/r is:issue is:open"),
+            (
+                Kind::Issue,
+                Shown::Closed,
+                None,
+                "repo:o/r is:issue is:closed",
+            ),
+            (
+                Kind::Issue,
+                Shown::All,
+                Some("bug"),
+                r#"repo:o/r is:issue label:"bug""#,
+            ),
+            (
+                Kind::PullRequest,
+                Shown::Open,
+                None,
+                "repo:o/r is:pr is:open",
+            ),
+            (
+                Kind::PullRequest,
+                Shown::Merged,
+                None,
+                "repo:o/r is:pr is:merged",
+            ),
+            (
+                Kind::PullRequest,
+                Shown::Closed,
+                Some("good first issue"),
+                r#"repo:o/r is:pr is:closed is:unmerged label:"good first issue""#,
+            ),
+            (Kind::PullRequest, Shown::All, None, "repo:o/r is:pr"),
+        ] {
+            assert_eq!(
+                search_qualifiers("o/r", kind, &view(shown, label)),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn a_list_reads_its_view_from_its_query() {
+        let query = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect()
+        };
+        assert_eq!(
+            ListView::of(Kind::Issue, &query(&[])),
+            Some(ListView {
+                shown: Shown::Open,
+                label: None,
+                order: Order::Updated,
+                page: 1,
+            })
+        );
+        assert_eq!(
+            ListView::of(
+                Kind::PullRequest,
+                &query(&[
+                    ("state", "merged"),
+                    ("label", "area/api"),
+                    ("sort", "oldest"),
+                    ("page", "40"),
+                    // What it does not know of is no part of it.
+                    ("q", "is:pr"),
+                ])
+            ),
+            Some(ListView {
+                shown: Shown::Merged,
+                label: Some("area/api".to_owned()),
+                order: Order::Oldest,
+                page: 40,
+            })
+        );
+        assert_eq!(
+            ListView::of(Kind::Issue, &query(&[("state", "merged")])),
+            None
         );
     }
 

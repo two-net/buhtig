@@ -236,6 +236,18 @@ pub fn router(
             get(repositories::issues).with_state(cache.clone()),
         )
         .route(
+            "/-/api/repositories/{owner}/{repo}/issue-list",
+            get(repositories::issue_list).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/pull-list",
+            get(repositories::pull_list).with_state(cache.clone()),
+        )
+        .route(
+            "/-/api/repositories/{owner}/{repo}/labels",
+            get(repositories::labels).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}/commits",
             get(repositories::commits).with_state(cache.clone()),
         )

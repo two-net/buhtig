@@ -13,9 +13,9 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, NavigationEnd, NavigationStart, Router } from '@angular/router';
 import { AccountData } from '../dashboard/data';
 import { ListedRepository } from '../dashboard/resources';
-import { exactNumber } from '../format/format';
 import { Icon } from '../icon/icon';
 import { Motion } from '../motion/motion';
+import { Pager } from '../pager/pager';
 import { Toasts } from '../toast/toasts';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
@@ -40,7 +40,6 @@ import {
   languagesOf,
   matches,
   pageOf,
-  pagesAround,
   sameLanguage,
   sorted,
 } from './table';
@@ -64,7 +63,7 @@ const LIST_EDIT = Symbol('repository list edit');
  */
 @Component({
   selector: 'app-organization-repositories-tab',
-  imports: [Icon, Loaded, RepositoryRow, Widget],
+  imports: [Icon, Loaded, Pager, RepositoryRow, Widget],
   templateUrl: './repositories.html',
   styles: `
     .panel {
@@ -140,7 +139,6 @@ export class OrganizationRepositoriesTab {
     ),
   );
   protected readonly page = computed(() => pageOf(this.matching(), this.view().page));
-  protected readonly pages = computed(() => pagesAround(this.page().index, this.page().count));
 
   protected readonly status = computed(() => {
     const count = this.matching().length;
@@ -258,7 +256,6 @@ export class OrganizationRepositoriesTab {
     });
   }
 
-  protected readonly page1 = (index: number) => exactNumber(index + 1);
   protected readonly TYPES = TYPES;
   protected readonly SORTS = SORTS;
   protected readonly sortKeys = Object.keys(SORTS) as Sort[];

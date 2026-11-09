@@ -54,34 +54,7 @@
           <li class="empty-note">{{ noMatch() }}</li>
         }
       </ul>
-      @if (page().count > 1) {
-        <nav class="pager" aria-label="Pages">
-          <button type="button" [disabled]="page().index === 0" (click)="go(page().index - 1)">
-            <app-icon name="chevl" />Previous
-          </button>
-          @for (item of pages(); track $index) {
-            @if (item === 'gap') {
-              <span class="gap" aria-hidden="true">…</span>
-            } @else {
-              <button
-                type="button"
-                [attr.aria-current]="item === page().index ? 'page' : null"
-                [attr.aria-label]="'Page ' + page1(item)"
-                (click)="go(item)"
-              >
-                {{ page1(item) }}
-              </button>
-            }
-          }
-          <button
-            type="button"
-            [disabled]="page().index >= page().count - 1"
-            (click)="go(page().index + 1)"
-          >
-            Next<app-icon name="chevr" />
-          </button>
-        </nav>
-      }
+      <app-pager [index]="page().index" [count]="page().count" (go)="go($event)" />
     </ng-template>
   </app-widget>
 </section>

@@ -68,7 +68,7 @@ const RELEASES: usize = 42;
 
 /// What a repository dashboard asks for, besides its summary, and how each is reported:
 /// what its overview shows, and what its other tabs add, as of a user who opens each.
-const REPOSITORY_WIDGETS: [(&str, &str); 13] = [
+const REPOSITORY_WIDGETS: [(&str, &str); 16] = [
     ("stats", "repository stats"),
     ("commit-activity", "repository commit-activity"),
     ("languages", "repository languages"),
@@ -78,6 +78,9 @@ const REPOSITORY_WIDGETS: [(&str, &str); 13] = [
     ("releases", "repository releases"),
     ("merge-velocity", "repository merge-velocity"),
     ("issue-age", "repository issue-age"),
+    ("issue-list", "repository issue-list"),
+    ("pull-list", "repository pull-list"),
+    ("labels", "repository labels"),
     ("workflow-runs", "repository workflow-runs"),
     ("code-frequency", "repository code-frequency"),
     ("release-cadence", "repository release-cadence"),
@@ -766,6 +769,17 @@ fn github(path: &str, query: &HashMap<String, String>) -> (u16, Option<String>, 
         ["search", "issues"] if query.get("per_page").map(String::as_str) == Some("100") => {
             let pulls: Vec<Value> = (0..100).map(|n| issue(OWNER, "repo", 2 * n + 1)).collect();
             ok(json!({"total_count": 1_234, "incomplete_results": false, "items": pulls}))
+        }
+        // A page of the Issues or Pull requests tab's list.
+        ["search", "issues"] if query.contains_key("page") => {
+            let items: Vec<Value> = (0..25).map(|n| issue(OWNER, "repo", n)).collect();
+            ok(json!({"total_count": 1_234, "incomplete_results": false, "items": items}))
+        }
+        ["repos", _, _, "labels"] => {
+            ok(["bug", "documentation", "enhancement", "good first issue"]
+                .iter()
+                .map(|name| json!({"name": name, "color": "d73a4a"}))
+                .collect())
         }
         ["search", "issues"] => ok(json!({
             "total_count": 1_234, "incomplete_results": false, "items": []

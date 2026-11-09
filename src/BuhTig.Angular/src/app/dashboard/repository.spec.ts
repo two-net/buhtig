@@ -143,6 +143,9 @@ describe('RepositoryDashboard', () => {
       truncated: false,
     },
     'issue-age': { sampled: 12, median_age: 86_400, truncated: false },
+    'issue-list': { items: [], total: 0, page: 1, pages: 1, capped: false, incomplete: false },
+    'pull-list': { items: [], total: 0, page: 1, pages: 1, capped: false, incomplete: false },
+    labels: { labels: ['bug'], truncated: false },
     'workflow-runs': {
       branch: 'main',
       sampled: 2,
@@ -323,8 +326,20 @@ describe('RepositoryDashboard', () => {
         'trends',
         'workflow-runs',
       ],
-      '/acme/widget/issues': ['app-repository-issues-tab', 'issue-age', 'issues'],
-      '/acme/widget/pulls': ['app-repository-issues-tab', 'issues', 'merge-velocity'],
+      '/acme/widget/issues': [
+        'app-repository-issues-tab',
+        'issue-age',
+        'issue-list',
+        'issues',
+        'labels',
+      ],
+      '/acme/widget/pulls': [
+        'app-repository-issues-tab',
+        'issues',
+        'labels',
+        'merge-velocity',
+        'pull-list',
+      ],
       '/acme/widget/graphs/contributors': ['app-repository-contributors-tab'],
       '/acme/widget/releases': ['app-repository-releases-tab', 'release-cadence'],
     };
@@ -350,10 +365,10 @@ describe('RepositoryDashboard', () => {
       [...page().querySelectorAll('app-repository-issues-tab h2')].map((heading) =>
         heading.textContent?.trim(),
       );
-    expect(headings()).toEqual(['Open issue age', 'Issues']);
+    expect(headings()).toEqual(['Open issue age', 'Issues', 'Open issues']);
     await harness.navigateByUrl('/acme/widget/pulls');
-    expect(headings()).toEqual(['Merge velocity', 'Pull requests']);
-    expect(await answerParts()).toEqual(['merge-velocity']);
+    expect(headings()).toEqual(['Merge velocity', 'Pull requests', 'Open pull requests']);
+    expect(await answerParts()).toEqual(['merge-velocity', 'pull-list']);
   });
 
   it('loads each part once, however many tabs show it', async () => {
@@ -363,10 +378,11 @@ describe('RepositoryDashboard', () => {
     // Each tab asks only for what no tab before it did.
     for (const [url, parts] of [
       ['/acme/widget/activity', ['code-frequency', 'trends', 'workflow-runs']],
-      ['/acme/widget/issues', ['issue-age']],
+      ['/acme/widget/issues', ['issue-age', 'issue-list', 'labels']],
       ['/acme/widget', []],
       ['/acme/widget/activity', []],
-      ['/acme/widget/issues', []],
+      // But the page of the list, which loads for its tab, as the view it shows.
+      ['/acme/widget/issues', ['issue-list']],
     ] as const) {
       await harness.navigateByUrl(url);
       await harness.fixture.whenStable();
@@ -394,6 +410,19 @@ describe('RepositoryDashboard', () => {
       true,
     );
     expect(toasts()).toEqual([]);
+  });
+
+  it("keeps the view of the Issues or Pull requests tab's list as it moves (FR-NAV-04, FR-REPO-06)", async () => {
+    await open(
+      '/angular/Angular/pulls?q=is%3Apr+is%3Amerged+sort%3Aupdated-desc&page=2&utm_source=chat',
+      '/-/api/repositories/angular/Angular',
+      { name: 'angular/angular' },
+    );
+    await vi.waitFor(() => expect(router.url.split('?')[0]).toBe('/angular/angular/pulls'));
+    expect(Object.fromEntries(new URLSearchParams(router.url.split('?')[1]))).toEqual({
+      q: 'is:pr is:merged sort:updated-desc',
+      page: '2',
+    });
   });
 
   it('moves to the new name of a renamed or transferred repository, and says so (FR-NAV-05)', async () => {

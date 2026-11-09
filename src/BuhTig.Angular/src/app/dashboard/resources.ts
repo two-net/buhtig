@@ -1,10 +1,11 @@
-import { HttpClient, HttpErrorResponse, HttpStatusCode } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, HttpParams, HttpStatusCode } from '@angular/common/http';
 import { Injectable, inject, signal } from '@angular/core';
 import { Observable, catchError, map, of, switchMap, tap, throwError } from 'rxjs';
 import { Known, Owner, Resource, dashboardPath, parseName } from '../search/parse';
 import { Computing, Failure, failureOf } from '../widget/load';
 import { organizationUrl, repositoryUrl, resourceUrl, userUrl } from './urls';
 import { GITHUB_HOST } from '../github/host';
+import { IssueKind, IssueView } from '../repository/issue-query';
 
 /** What a dashboard learns of its repository, organization or user before its widgets load. */
 export interface Summary {
@@ -321,14 +322,14 @@ export interface IssuesAndPullRequests {
    * the repository has turned them off on GitHub.
    */
   pullRequests: { open: number; merged: number; closed: number } | undefined;
-  /** Up to 20, those updated last first. */
+  /** Up to 6, those updated last first, for the overview. */
   recent: IssueOrPullRequest[];
 }
 
 export interface IssueOrPullRequest {
   number: number;
   title: string;
-  kind: 'issue' | 'pull_request';
+  kind: IssueKind;
   /** Only a pull request is `merged`. One that is `closed` was not. */
   state: 'open' | 'closed' | 'merged';
   /** The login of whoever opened it. */
@@ -339,6 +340,37 @@ export interface IssueOrPullRequest {
   updatedAt: Date | undefined;
   /** Its page on GitHub (FR-REPO-12). */
   url: string | undefined;
+}
+
+/**
+ * A page of a repository's issues, or of its pull requests, as its Issues or Pull requests tab
+ * lists them (FR-REPO-06), as GitHub's search finds them.
+ */
+export interface IssuePage {
+  /** The view of the list that it is a page of, as it was asked for. */
+  view: IssueView;
+  /** Up to 25, of the tab's kind alone. */
+  items: IssueOrPullRequest[];
+  /** How many match, on every page. */
+  total: number;
+  /** The page, from 0. */
+  page: number;
+  /** How many pages there are, at least one, and at most the 40 that GitHub's search reaches. */
+  pages: number;
+  /** Whether more match than GitHub's search reaches, its first 1,000. */
+  capped: boolean;
+  /** Whether GitHub's search ran out of time, so that it may have found fewer than there are. */
+  incomplete: boolean;
+  /** Whether the repository has turned them off on GitHub, so that there are none. */
+  off: boolean;
+}
+
+/** The labels of a repository that its tabs' lists offer to filter by (FR-REPO-06). */
+export interface Labels {
+  /** Up to 100 of their names, in alphabetical order. */
+  names: string[];
+  /** Whether it has more. */
+  truncated: boolean;
 }
 
 /** One of the latest commits on a repository's default branch (FR-REPO-07). */
@@ -744,20 +776,40 @@ interface ContributorsAnswer {
   count?: number | null;
 }
 
+/** The server's answer about an issue or a pull request, as it lists them. */
+interface IssueAnswer {
+  number: number;
+  title: string;
+  kind: string;
+  state: string;
+  author: string | null;
+  created_at: string | null;
+  updated_at?: string | null;
+  url: string | null;
+}
+
 /** The server's answer about a repository, for its issues and pull requests. */
 interface IssuesAnswer {
   issues: { open: number; closed: number } | null;
   pull_requests: { open: number; merged: number; closed: number } | null;
-  recent: {
-    number: number;
-    title: string;
-    kind: string;
-    state: string;
-    author: string | null;
-    created_at: string | null;
-    updated_at?: string | null;
-    url: string | null;
-  }[];
+  recent: IssueAnswer[];
+}
+
+/** The server's answer about a page of a repository's issues, or of its pull requests. */
+interface IssuePageAnswer extends DatedAnswer {
+  items: IssueAnswer[];
+  total: number;
+  page: number;
+  pages: number;
+  capped: boolean;
+  incomplete: boolean;
+  off: boolean;
+}
+
+/** The server's answer about a repository's labels. */
+interface LabelsAnswer {
+  labels: string[];
+  truncated: boolean;
 }
 
 /** The server's answer about a repository, for its recent commits. */
@@ -1239,16 +1291,52 @@ export class Resources {
       map((answer): IssuesAndPullRequests => ({
         issues: answer.issues ?? undefined,
         pullRequests: answer.pull_requests ?? undefined,
-        recent: answer.recent.map((item) => ({
-          number: item.number,
-          title: item.title,
-          kind: item.kind === 'pull_request' ? 'pull_request' : 'issue',
-          state: item.state === 'closed' || item.state === 'merged' ? item.state : 'open',
-          author: item.author || undefined,
-          createdAt: date(item.created_at),
-          updatedAt: date(item.updated_at),
-          url: link(item.url, ['https:']),
-        })),
+        recent: answer.recent.map(issueOrPullRequest),
+      })),
+    );
+  }
+
+  /**
+   * The page of the issues, or of the pull requests, of `kind` of the repository `owner/repo`
+   * that `view` shows (FR-REPO-06), which fails as `commitActivity` does. The server is told only
+   * what the view is, never what the URL's query said, so that it alone tells GitHub what to
+   * search for. Items of the other kind are left out.
+   */
+  issueList(
+    owner: string,
+    repo: string,
+    kind: IssueKind,
+    view: IssueView,
+  ): Observable<Dated<IssuePage>> {
+    let params = new HttpParams()
+      .set('state', view.state)
+      .set('sort', view.sort)
+      .set('page', String(view.page + 1));
+    if (view.label !== undefined) {
+      params = params.set('label', view.label);
+    }
+    const part = kind === 'issue' ? 'issue-list' : 'pull-list';
+    return this.computed<IssuePageAnswer>(`${repositoryUrl(owner, repo)}/${part}`, params).pipe(
+      map((answer) => ({
+        view,
+        items: answer.items.map(issueOrPullRequest).filter((item) => item.kind === kind),
+        total: count(answer.total),
+        page: Math.max(count(answer.page) - 1, 0),
+        pages: Math.max(count(answer.pages), 1),
+        capped: answer.capped === true,
+        incomplete: answer.incomplete === true,
+        off: answer.off === true,
+        ...freshness(answer),
+      })),
+    );
+  }
+
+  /** The labels of the repository `owner/repo`, which fail as `commitActivity` does. */
+  labels(owner: string, repo: string): Observable<Labels> {
+    return this.part<LabelsAnswer>(owner, repo, 'labels').pipe(
+      map((answer) => ({
+        names: (answer.labels ?? []).filter((name) => typeof name === 'string' && name !== ''),
+        truncated: answer.truncated === true,
       })),
     );
   }
@@ -1408,9 +1496,12 @@ export class Resources {
     return this.computed<T>(`${repositoryUrl(owner, repo)}/${part}`);
   }
 
-  /** The server's answer at `url`, which fails with `Computing` while GitHub computes it. */
-  private computed<T>(url: string): Observable<T> {
-    return this.http.get<T>(url, { observe: 'response' }).pipe(
+  /**
+   * The server's answer at `url`, with `params` as its query, which fails with `Computing` while
+   * GitHub computes it.
+   */
+  private computed<T>(url: string, params?: HttpParams): Observable<T> {
+    return this.http.get<T>(url, { observe: 'response', params }).pipe(
       map((response) => {
         if (response.status === HttpStatusCode.Accepted) {
           throw new Computing();
@@ -1522,6 +1613,20 @@ function workflowRuns(answer: WorkflowRunsAnswer): Dated<WorkflowRuns> {
       : undefined,
     hidden: answer.hidden === true,
     ...freshness(answer),
+  };
+}
+
+/** The issue or pull request that the server describes as `answer` (FR-REPO-06). */
+function issueOrPullRequest(answer: IssueAnswer): IssueOrPullRequest {
+  return {
+    number: answer.number,
+    title: answer.title,
+    kind: answer.kind === 'pull_request' ? 'pull_request' : 'issue',
+    state: answer.state === 'closed' || answer.state === 'merged' ? answer.state : 'open',
+    author: answer.author || undefined,
+    createdAt: date(answer.created_at),
+    updatedAt: date(answer.updated_at),
+    url: link(answer.url, ['https:']),
   };
 }
 
