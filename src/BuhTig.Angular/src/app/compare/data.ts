@@ -1,11 +1,16 @@
 import { Signal } from '@angular/core';
 import {
   CommitActivity,
+  Dated,
+  IssueAge,
   LanguageCounts,
   Languages,
   LastPush,
+  MergeVelocity,
   OrganizationStats,
+  ReleaseCadence,
   Stats,
+  WorkflowRuns,
   YearCount,
 } from '../dashboard/resources';
 import { Loader } from '../widget/load';
@@ -25,6 +30,17 @@ export abstract class ComparisonData {
   abstract readonly stats: () => Loader<[Stats, Stats]>;
   /** Of two repositories, their commit activity (FR-REPO-03). */
   abstract readonly activity: () => Loader<[CommitActivity, CommitActivity]>;
+  /**
+   * Of two repositories, how their pull requests updated last came to an end (FR-REPO-13), and
+   * when that was fetched (FR-CMP-06), as each of the next three.
+   */
+  abstract readonly mergeVelocity: () => Loader<[Dated<MergeVelocity>, Dated<MergeVelocity>]>;
+  /** Of two repositories, how long their open issues updated last have been open (FR-REPO-13). */
+  abstract readonly issueAge: () => Loader<[Dated<IssueAge>, Dated<IssueAge>]>;
+  /** Of two repositories, how their latest workflow runs fared (FR-REPO-14). */
+  abstract readonly workflowRuns: () => Loader<[Dated<WorkflowRuns>, Dated<WorkflowRuns>]>;
+  /** Of two repositories, how often they were released (FR-REPO-16). */
+  abstract readonly releaseCadence: () => Loader<[Dated<ReleaseCadence>, Dated<ReleaseCadence>]>;
   /** Of two accounts, their stat cards' figures (FR-ORG-02, FR-USER-02). */
   abstract readonly accountStats: () => Loader<[OrganizationStats, OrganizationStats]>;
   /** Of two accounts, their repositories by last push (FR-ORG-06). */

@@ -12,6 +12,7 @@ import {
   issuesDescription,
   languagesDescription,
   moreReleases,
+  onAverageOf,
   pullRequestsDescription,
   weekOf,
 } from './messages';
@@ -246,6 +247,22 @@ describe('repository messages', () => {
     ).toBe(
       `Of its 3 releases, 3 are stable and 0 are pre-releases, one every ${duration(day)} on ` +
         'average. None of them has files attached.',
+    );
+  });
+
+  it('says what the time between releases is of (FR-REPO-16)', () => {
+    const cadence = {
+      sampled: 100,
+      stable: 100,
+      prereleases: 0,
+      averageInterval: 60,
+      assets: 0,
+      downloads: 0,
+      truncated: true,
+    };
+    expect(onAverageOf(cadence)).toBe('on average, of the 100 latest');
+    expect(onAverageOf({ ...cadence, sampled: 7, truncated: false })).toBe(
+      'on average, of all releases',
     );
   });
 });

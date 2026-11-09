@@ -5,6 +5,7 @@ import { duration, percent } from '../format/format';
 import { Icon } from '../icon/icon';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
+import { mergeRatio, nothingMerged, nothingOpen } from './metrics';
 import {
   ISSUE_AGE,
   MEDIAN_AGE,
@@ -59,10 +60,7 @@ import {
 export class RepositoryMergeVelocity {
   private readonly data = inject(RepositoryData);
 
-  protected readonly velocity = emptyWhen(
-    this.data.mergeVelocity(),
-    (velocity) => velocity.merged + velocity.closed === 0,
-  );
+  protected readonly velocity = emptyWhen(this.data.mergeVelocity(), nothingMerged);
 
   protected readonly summary = computed(() => {
     const state = this.velocity.state();
@@ -73,8 +71,9 @@ export class RepositoryMergeVelocity {
     return medianTimeToMerge === undefined ? NO_FIGURE : duration(medianTimeToMerge);
   }
 
-  protected ratio({ merged, closed }: MergeVelocity): string {
-    return percent(merged / (merged + closed));
+  protected ratio(velocity: MergeVelocity): string {
+    const ratio = mergeRatio(velocity);
+    return ratio === undefined ? NO_FIGURE : percent(ratio);
   }
 
   protected readonly ofMerged = ofMerged;
@@ -116,7 +115,7 @@ export class RepositoryMergeVelocity {
 export class RepositoryIssueAge {
   private readonly data = inject(RepositoryData);
 
-  protected readonly age = emptyWhen(this.data.issueAge(), (age) => age.medianAge === undefined);
+  protected readonly age = emptyWhen(this.data.issueAge(), nothingOpen);
 
   protected readonly summary = computed(() => {
     const state = this.age.state();

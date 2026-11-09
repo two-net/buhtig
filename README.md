@@ -102,7 +102,8 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   so the proxy needn't compress anything. The proxy should pass `Accept-Encoding` on, send
   compressed responses as they are, and keep `Vary` if it caches. BuhTig speaks HTTP/1.1,
   over which browsers open at most 6 connections to a host, and a dashboard asks for about
-  10 things at once, so have the proxy speak HTTP/2 to browsers.
+  10 things at once, and a comparison of two repositories about 16, so have the proxy
+  speak HTTP/2 to browsers.
 - **GitHub:** BuhTig only reads from GitHub, through `api.github.com` over HTTPS, and
   signs users in through `github.com`, unless `github.host` names a GitHub Enterprise
   Server (below). It checks GitHub's certificate against the root certificates built into
@@ -113,9 +114,11 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   requests. GitHub ignores a client ID it does not know, so check `github.client_id` if
   visitors run into the rate limit soon. Repository dashboards also count issues and pull
   requests with GitHub's search API, which has a separate, much lower rate limit: up to
-  four searches per repository per `cache.ttl` (open, merged and closed pull requests, and
-  closed issues). When it runs out, the stat cards and the issues and pull requests widget
-  show cached figures, or an error until it resets. GitHub
+  five searches per repository per `cache.ttl` (open, merged and closed pull requests,
+  closed issues, and the pull requests updated last, for merge velocity). A comparison of
+  two repositories searches for the open pull requests and those updated last of each as
+  it loads. When it runs out, the stat cards, the issues and pull requests widget and
+  merge velocity show cached figures, or an error until it resets. GitHub
   computes a repository's commit activity when it is first asked for, so its chart may say
   "Calculating on GitHub…" for up to a minute while BuhTig asks again. GitHub does not list
   the contributors of its very largest repositories, and their dashboards say so.

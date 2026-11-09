@@ -138,12 +138,17 @@ pub struct Cached<T> {
 }
 
 impl<T> Cached<T> {
-    /// `fetched_at` as the UI is told it (FR-DATA-06): in UTC to the millisecond, such as
-    /// `2026-10-22T12:00:00.123Z`, the format of JavaScript's `Date.toISOString`, which
-    /// every browser parses.
+    /// `fetched_at` as the UI is told it (FR-DATA-06), as [`iso`] tells it.
     pub fn fetched_at_iso(&self) -> String {
-        self.fetched_at.to_rfc3339_opts(SecondsFormat::Millis, true)
+        iso(self.fetched_at)
     }
+}
+
+/// `at` as the UI is told when data was fetched (FR-DATA-06): in UTC to the millisecond,
+/// such as `2026-10-22T12:00:00.123Z`, the format of JavaScript's `Date.toISOString`, which
+/// every browser parses.
+pub fn iso(at: DateTimeUtc) -> String {
+    at.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// Why GitHub was not asked for newer data, or had none.

@@ -51,6 +51,21 @@ export interface Summary {
 /** Why a dashboard shows saved data, older than `cache.ttl`. */
 export type Stale = 'held' | 'github';
 
+/**
+ * When the data that a figure was made from was fetched, and why it is no newer, as a
+ * comparison tells of each of its sections (FR-CMP-06), whose data may be fetched at other
+ * times than the resource's.
+ */
+export interface Freshness {
+  /** When BuhTig fetched the data from GitHub (FR-DATA-06), unless the server says not. */
+  fetchedAt: Date | undefined;
+  /** Why the data is older than `cache.ttl`, if it is (FR-DATA-05), as of a `Summary`. */
+  stale: Stale | undefined;
+}
+
+/** `T`, with when the data it was made from was fetched. */
+export type Dated<T> = T & Freshness;
+
 /** What came of a request to refresh a dashboard (FR-DATA-07). */
 export type Refreshed =
   | { status: 'refreshed' }
@@ -657,8 +672,14 @@ interface ReleasesAnswer {
   count?: number;
 }
 
+/** The server's answer about a figure of a repository, with when its data was fetched. */
+interface DatedAnswer {
+  fetched_at?: string | null;
+  stale?: string | null;
+}
+
 /** The server's answer about a repository, for how its pull requests are merged. */
-interface MergeVelocityAnswer {
+interface MergeVelocityAnswer extends DatedAnswer {
   sampled: number;
   merged: number;
   closed: number;
@@ -667,14 +688,14 @@ interface MergeVelocityAnswer {
 }
 
 /** The server's answer about a repository, for how long its open issues have been open. */
-interface IssueAgeAnswer {
+interface IssueAgeAnswer extends DatedAnswer {
   sampled: number;
   median_age: number | null;
   truncated: boolean;
 }
 
 /** The server's answer about a repository, for how its workflow runs fared. */
-interface WorkflowRunsAnswer {
+interface WorkflowRunsAnswer extends DatedAnswer {
   branch: string | null;
   sampled: number;
   passed: number;
@@ -697,7 +718,7 @@ interface CodeFrequencyAnswer {
 }
 
 /** The server's answer about a repository, for how often it is released. */
-interface ReleaseCadenceAnswer {
+interface ReleaseCadenceAnswer extends DatedAnswer {
   sampled: number;
   stable: number;
   prereleases: number;
@@ -736,7 +757,7 @@ export class Resources {
           path,
           resource: known,
           fetchedAt: date(answer.fetched_at),
-          stale: answer.stale === 'held' || answer.stale === 'github' ? answer.stale : undefined,
+          stale: staleOf(answer.stale),
           failure: undefined,
           repository:
             answer.repository !== undefined && known ? header(answer.repository) : undefined,
@@ -1091,7 +1112,7 @@ export class Resources {
    * How the pull requests of the repository `owner/repo` updated last came to an end, which
    * fails as `commitActivity` does (FR-REPO-13).
    */
-  mergeVelocity(owner: string, repo: string): Observable<MergeVelocity> {
+  mergeVelocity(owner: string, repo: string): Observable<Dated<MergeVelocity>> {
     return this.part<MergeVelocityAnswer>(owner, repo, 'merge-velocity').pipe(
       map((answer) => ({
         sampled: count(answer.sampled),
@@ -1099,6 +1120,7 @@ export class Resources {
         closed: count(answer.closed),
         medianTimeToMerge: seconds(answer.median_time_to_merge),
         truncated: answer.truncated === true,
+        ...freshness(answer),
       })),
     );
   }
@@ -1107,12 +1129,13 @@ export class Resources {
    * How long the open issues of the repository `owner/repo` updated last have been open, which
    * fails as `commitActivity` does (FR-REPO-13).
    */
-  issueAge(owner: string, repo: string): Observable<IssueAge> {
+  issueAge(owner: string, repo: string): Observable<Dated<IssueAge>> {
     return this.part<IssueAgeAnswer>(owner, repo, 'issue-age').pipe(
       map((answer) => ({
         sampled: count(answer.sampled),
         medianAge: seconds(answer.median_age),
         truncated: answer.truncated === true,
+        ...freshness(answer),
       })),
     );
   }
@@ -1121,7 +1144,7 @@ export class Resources {
    * How the latest workflow runs on the default branch of the repository `owner/repo` fared,
    * which fail as `commitActivity` does (FR-REPO-14).
    */
-  workflowRuns(owner: string, repo: string): Observable<WorkflowRuns> {
+  workflowRuns(owner: string, repo: string): Observable<Dated<WorkflowRuns>> {
     return this.part<WorkflowRunsAnswer>(owner, repo, 'workflow-runs').pipe(
       map((answer) => {
         const latest = answer.latest;
@@ -1141,6 +1164,7 @@ export class Resources {
               }
             : undefined,
           hidden: answer.hidden === true,
+          ...freshness(answer),
         };
       }),
     );
@@ -1174,7 +1198,7 @@ export class Resources {
    * How often the repository `owner/repo` was released, and downloaded, over its latest
    * releases, which fails as `commitActivity` does (FR-REPO-16).
    */
-  releaseCadence(owner: string, repo: string): Observable<ReleaseCadence> {
+  releaseCadence(owner: string, repo: string): Observable<Dated<ReleaseCadence>> {
     return this.part<ReleaseCadenceAnswer>(owner, repo, 'release-cadence').pipe(
       map((answer) => ({
         sampled: count(answer.sampled),
@@ -1184,6 +1208,7 @@ export class Resources {
         assets: count(answer.assets),
         downloads: count(answer.downloads),
         truncated: answer.truncated === true,
+        ...freshness(answer),
       })),
     );
   }
@@ -1361,6 +1386,16 @@ function count(value: unknown): number {
 /** `value` if it is a span of time in seconds, or else none. */
 function seconds(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/** Why data is no newer, as the server tells it, if it tells one BuhTig knows (FR-DATA-05). */
+function staleOf(value: unknown): Stale | undefined {
+  return value === 'held' || value === 'github' ? value : undefined;
+}
+
+/** When the data of `answer` was fetched, and why it is no newer, as the server tells them. */
+function freshness(answer: DatedAnswer): Freshness {
+  return { fetchedAt: date(answer.fetched_at), stale: staleOf(answer.stale) };
 }
 
 /** The time `text` tells, if it tells one. */

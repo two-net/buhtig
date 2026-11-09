@@ -3,9 +3,15 @@ import {
   activityComparison,
   asMany,
   bothSides,
+  higherThan,
   lastPushComparison,
+  longer,
+  longerThan,
   moreThan,
   newerThan,
+  pointsHigher,
+  runsHidden,
+  sameMeasure,
   sideCreated,
   sideLanguages,
 } from './messages';
@@ -62,5 +68,31 @@ describe('compare messages (NFR-UX-07)', () => {
       ]),
     ).toBe('acme created 3 repositories since 2019');
     expect(sideCreated('mona', [])).toBe('mona has no repositories yet');
+  });
+
+  it('says which maintenance figure is higher or longer, with units, ranking neither (FR-CMP-06)', () => {
+    expect(longer('2 days')).toBe('2 days longer');
+    expect(longerThan('timeToMerge', 'a/b', '2 days', 'c/d')).toBe(
+      "a/b's median time to merge is 2 days longer than c/d's.",
+    );
+    expect(longerThan('releaseInterval', 'a/b', '3 weeks', 'c/d')).toBe(
+      "a/b's average time between releases is 3 weeks longer than c/d's.",
+    );
+    expect(pointsHigher('12.5')).toBe('12.5 points higher');
+    expect(higherThan('passRate', 'a/b', '12.5', 'c/d')).toBe(
+      "a/b's pass rate is 12.5 percentage points higher than c/d's.",
+    );
+    expect(sameMeasure('issueAge', 'a/b', 'c/d')).toBe(
+      'a/b and c/d have the same median open issue age.',
+    );
+    expect(moreThan('stableReleases', 'a/b', 1, 'c/d')).toBe(
+      'a/b has 1 more stable release than c/d.',
+    );
+  });
+
+  it("says what one repository's token needs to see its workflow runs (FR-CMP-06, FR-PAT-08)", () => {
+    expect(runsHidden('a/b')).toBe(
+      "GitHub won't show a/b's workflow runs to your personal access token. Give it read access to Actions to see them here.",
+    );
   });
 });

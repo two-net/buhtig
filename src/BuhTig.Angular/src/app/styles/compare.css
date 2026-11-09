@@ -209,3 +209,34 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Maintenance figures of both (FR-CMP-06): wider cards than the stat cards', for spans of time
+   such as "2.3 months", with what each figure is of on as many lines as it takes. */
+.cmp-stats.measures {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.cmp-stats.measures .cmp-val .sub {
+  white-space: normal;
+}
+/* Under them, what each side's figures are of, one side to a line, and when they were
+   fetched. */
+.Box-footer.cmp-notes {
+  flex-direction: column;
+  gap: 6px;
+}
+.cmp-note {
+  margin: 0;
+}
+.cmp-note-name {
+  color: var(--fg);
+  font-weight: 600;
+}
+.cmp-fresh {
+  margin-left: 4px;
+}
+.cmp-fresh app-icon {
+  --icon: 12px;
+  margin-right: 4px;
+  color: var(--fg-attention);
+  vertical-align: -1px;
+}

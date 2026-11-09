@@ -1,51 +1,22 @@
 import { Component, Signal, computed, inject } from '@angular/core';
 import { OrganizationStats, Release, Stats } from '../dashboard/resources';
-import { CompactNumber } from '../format/compact-number';
-import { duration, signedCompactNumber } from '../format/format';
-import { RelativeTime } from '../format/relative-time';
-import { Icon, IconName } from '../icon/icon';
+import { duration } from '../format/format';
+import { Icon } from '../icon/icon';
 import { truncated } from '../organization/messages';
-import { Load, Loader } from '../widget/load';
+import { Loader } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
+import { Card, CompareCards, Delta, Value, cardsOf, countCard } from './cards';
 import { ComparisonData } from './data';
 import {
-  FIGURES,
-  Figure,
   LATEST_RELEASE,
   NONE,
   OVERVIEW,
-  SAME,
   TOP_LANGUAGE,
-  asMany,
-  moreThan,
   newer,
   newerThan,
   sameDay,
   sameLanguage,
-  sideOf,
 } from './messages';
-
-/** What one side shows on a card: a count, a release, or words, such as a language. */
-export type Value =
-  | { kind: 'count'; value: number }
-  | { kind: 'release'; release: Release }
-  | { kind: 'text'; text: string };
-
-/**
- * How two sides differ on a card: which is ahead, by how much in short, and in a sentence for
- * assistive technology; or that they are the same. What is `wide`, such as "5.8 months newer",
- * takes the card's width, from the side of the one ahead, rather than its column's.
- */
-export type Delta =
-  { ahead: 0 | 1; shown: string; said: string; wide?: boolean } | { ahead: 'same'; said: string };
-
-/** One stat card of a comparison: what it is of, what each side has, and how they differ. */
-export interface Card {
-  label: string;
-  icon: IconName;
-  values: [Value, Value];
-  delta: Delta | undefined;
-}
 
 /** How far apart two releases must be to be on different days. */
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -62,65 +33,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 @Component({
   selector: 'app-compare-stats',
-  imports: [CompactNumber, Icon, Loaded, RelativeTime, Widget],
+  imports: [CompareCards, Icon, Loaded, Widget],
   template: `
     <app-widget [heading]="OVERVIEW" [empty]="NONE" skeleton="figures" [flush]="true">
       <ng-template [appLoaded]="cards" let-cards>
-        <div class="cmp-stats-wrap">
-          <dl class="cmp-stats">
-            @for (card of cards; track card.label) {
-              <div class="cmp-stat">
-                <dt><app-icon [name]="card.icon" />{{ card.label }}</dt>
-                <dd class="cmp-vals">
-                  @for (value of card.values; track $index) {
-                    <div class="cmp-val">
-                      <span class="sr">{{ sideOf(names()[$index]) }}</span>
-                      @if (value.kind === 'count') {
-                        <span class="val">
-                          <app-compact-number [value]="value.value" [countUp]="true" />
-                        </span>
-                      } @else if (value.kind === 'release') {
-                        <span class="val txt" [title]="value.release.tag">
-                          @if (value.release.url; as url) {
-                            <a [href]="url">{{ value.release.tag }}</a>
-                          } @else {
-                            {{ value.release.tag }}
-                          }
-                        </span>
-                        @if (value.release.publishedAt; as publishedAt) {
-                          <span class="sub"><app-relative-time [value]="publishedAt" /></span>
-                        }
-                      } @else {
-                        <span class="val txt">{{ value.text }}</span>
-                      }
-                      @if (ahead(card, $index); as shown) {
-                        <span class="cmp-delta" aria-hidden="true"
-                          ><app-icon name="up" />{{ shown }}</span
-                        >
-                      }
-                    </div>
-                  }
-                  @if (wide(card); as delta) {
-                    <span
-                      class="cmp-delta wide"
-                      [class.second]="delta.ahead === 1"
-                      aria-hidden="true"
-                      ><app-icon name="up" />{{ delta.shown }}</span
-                    >
-                  }
-                </dd>
-                @if (card.delta; as delta) {
-                  @if (delta.ahead === 'same') {
-                    <dd class="cmp-delta same" aria-hidden="true">
-                      <app-icon name="equal" />{{ SAME }}
-                    </dd>
-                  }
-                  <dd class="sr">{{ delta.said }}</dd>
-                }
-              </div>
-            }
-          </dl>
-        </div>
+        <app-compare-cards [cards]="cards" [names]="names()" />
       </ng-template>
       @if (notes().length > 0) {
         <div class="Box-footer" footer>
@@ -159,33 +76,8 @@ export class CompareStats {
       : [];
   });
 
-  /** By how much the side at `index` is ahead on `card`, in short, if it is, under its figure. */
-  protected ahead(card: Card, index: number): string | undefined {
-    const delta = card.delta;
-    return delta && delta.ahead === index && !delta.wide ? delta.shown : undefined;
-  }
-
-  /** How either side is ahead on `card`, if it is by more than its column fits. */
-  protected wide(card: Card): Extract<Delta, { shown: string }> | undefined {
-    const delta = card.delta;
-    return delta && delta.ahead !== 'same' && delta.wide ? delta : undefined;
-  }
-
-  protected readonly sideOf = sideOf;
   protected readonly OVERVIEW = OVERVIEW;
   protected readonly NONE = NONE;
-  protected readonly SAME = SAME;
-}
-
-/** `loader`, with its data made into cards by `make` once it has loaded. */
-function cardsOf<T>(loader: Loader<T>, make: (data: T) => Card[]): Loader<Card[]> {
-  return {
-    state: computed((): Load<Card[]> => {
-      const state = loader.state();
-      return state.status === 'ready' ? { status: 'ready', data: make(state.data) } : state;
-    }),
-    retry: () => loader.retry(),
-  };
 }
 
 /** The cards of two repositories, named `names` (FR-CMP-03). */
@@ -218,41 +110,6 @@ export function accountCards(
     ),
     languageCard(a.topLanguage, b.topLanguage, names),
   ];
-}
-
-/** A card of a count, `a` of the first side's and `b` of the second's. */
-function countCard(
-  figure: Figure,
-  icon: IconName,
-  a: number,
-  b: number,
-  [first, second]: readonly [string, string],
-): Card {
-  let delta: Delta;
-  if (a === b) {
-    delta = { ahead: 'same', said: asMany(figure, first, second) };
-  } else if (a > b) {
-    delta = {
-      ahead: 0,
-      shown: signedCompactNumber(a - b),
-      said: moreThan(figure, first, a - b, second),
-    };
-  } else {
-    delta = {
-      ahead: 1,
-      shown: signedCompactNumber(b - a),
-      said: moreThan(figure, second, b - a, first),
-    };
-  }
-  return {
-    label: FIGURES[figure].label,
-    icon,
-    values: [
-      { kind: 'count', value: a },
-      { kind: 'count', value: b },
-    ],
-    delta,
-  };
 }
 
 /**

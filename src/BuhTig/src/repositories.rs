@@ -499,7 +499,7 @@ pub async fn releases(
 ///
 /// ```json
 /// {"sampled": 100, "merged": 61, "closed": 9, "median_time_to_merge": 172800 | null,
-///  "truncated": true}
+///  "truncated": true, "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// `sampled` is how many pull requests were read, `merged` how many of them were merged,
@@ -507,6 +507,8 @@ pub async fn releases(
 /// median time, in seconds, from opening to merging of those merged, `null` if none were.
 /// `truncated` says whether the repository has more pull requests than were read. One that
 /// has turned pull requests off on GitHub has none, and GitHub is not asked.
+/// `fetched_at` and `stale` say when the pull requests were fetched, as [`dated`] tells it,
+/// or the repository when GitHub was not asked.
 ///
 /// They are searched for, as issues, rather than listed as pull requests: GitHub's list
 /// gives each pull request's head repository, which GitHub may mark private, as a fork
@@ -523,7 +525,7 @@ pub async fn merge_velocity(
         Err(code) => return status(code),
     };
     if !enabled(&repository.data, "has_pull_requests") {
-        return respond(merges(&List::default()));
+        return respond(repository.dated(merges(&List::default())));
     }
     let path = github::Path::new(["search", "issues"])
         .expect("names are neither empty nor dots")
@@ -540,7 +542,7 @@ pub async fn merge_velocity(
         )
         .await;
     match data(list) {
-        Ok(list) => respond(merges(&list.data)),
+        Ok(list) => respond(dated_by(merges(&list.data), &list)),
         Err(code) => status(code),
     }
 }
@@ -549,13 +551,15 @@ pub async fn merge_velocity(
 /// repository's 100 open issues and pull requests updated last have been open (FR-REPO-13),
 ///
 /// ```json
-/// {"sampled": 37, "median_age": 5184000 | null, "truncated": true}
+/// {"sampled": 37, "median_age": 5184000 | null, "truncated": true,
+///  "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// `sampled` is how many open issues were read, and `median_age` the median time, in
 /// seconds, since they were opened, `null` if there were none. `truncated` says whether the
 /// repository has more open issues and pull requests than were read. One that has turned
-/// issues off on GitHub has none, and GitHub is not asked.
+/// issues off on GitHub has none, and GitHub is not asked. `fetched_at` and `stale` say when
+/// the issues were fetched, as [`dated`] tells it, or the repository when GitHub was not asked.
 ///
 /// Its statuses are those of [`commit_activity`].
 pub async fn issue_age(
@@ -568,7 +572,7 @@ pub async fn issue_age(
         Err(code) => return status(code),
     };
     if !enabled(&repository.data, "has_issues") {
-        return respond(ages(&List::default(), ChronoUtc::now()));
+        return respond(repository.dated(ages(&List::default(), ChronoUtc::now())));
     }
     let path = repository
         .path(&["issues"])
@@ -585,7 +589,7 @@ pub async fn issue_age(
         )
         .await;
     match data(list) {
-        Ok(list) => respond(ages(&list.data, ChronoUtc::now())),
+        Ok(list) => respond(dated_by(ages(&list.data, ChronoUtc::now()), &list)),
         Err(code) => status(code),
     }
 }
@@ -598,7 +602,7 @@ pub async fn issue_age(
 ///  "average_duration": 252 | null,
 ///  "latest": {"name": "CI", "status": "completed", "conclusion": "success",
 ///             "started_at": …, "url": …} | null,
-///  "hidden": false}
+///  "hidden": false, "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// Only runs for pushes are read: a run for a pull request from a fork's branch of the same
@@ -611,7 +615,9 @@ pub async fn issue_age(
 /// conclusion as GitHub names them, and `url` its page on GitHub (FR-REPO-12). A
 /// repository without a default branch has no runs, and GitHub is not asked. `hidden` says
 /// that GitHub refused to list the runs to the viewer's credential, as to a fine-grained
-/// personal access token without access to Actions.
+/// personal access token without access to Actions. `fetched_at` and `stale` say when the
+/// runs were fetched, as [`dated`] tells it, the repository when GitHub was not asked, and
+/// now when GitHub refused, since nothing is cached of a refusal.
 ///
 /// Its statuses are those of [`commit_activity`].
 pub async fn workflow_runs(
@@ -625,7 +631,7 @@ pub async fn workflow_runs(
     };
     let host = cache.github_host();
     let Some(branch) = text(&repository.data, "default_branch") else {
-        return respond(health(None, &List::default(), false, host));
+        return respond(repository.dated(health(None, &List::default(), false, host)));
     };
     let path = repository
         .path(&["actions", "runs"])
@@ -642,11 +648,17 @@ pub async fn workflow_runs(
         )
         .await;
     match list {
-        Err(error) if refused(&error) => {
-            respond(health(Some(branch), &List::default(), true, host))
-        }
+        // GitHub just answered, and nothing is cached of a refusal.
+        Err(error) if refused(&error) => respond(dated(
+            health(Some(branch), &List::default(), true, host),
+            ChronoUtc::now(),
+            None,
+        )),
         list => match data(list) {
-            Ok(list) => respond(health(Some(branch), &list.data, false, host)),
+            Ok(list) => respond(dated_by(
+                health(Some(branch), &list.data, false, host),
+                &list,
+            )),
             Err(code) => status(code),
         },
     }
@@ -703,7 +715,8 @@ pub async fn code_frequency(
 ///
 /// ```json
 /// {"sampled": 100, "stable": 80, "prereleases": 20, "average_interval": 1036800 | null,
-///  "assets": 240, "downloads": 123456, "truncated": true}
+///  "assets": 240, "downloads": 123456, "truncated": true,
+///  "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// Drafts are left out, as from the releases widget, and so are releases without a tag.
@@ -711,7 +724,8 @@ pub async fn code_frequency(
 /// each. `average_interval` is the mean time, in seconds, between one release and the next,
 /// `null` with fewer than two. `assets` is how many files they have, and `downloads` how many
 /// times all were downloaded.
-/// `truncated` says whether the repository has more releases than were read.
+/// `truncated` says whether the repository has more releases than were read. `fetched_at` and
+/// `stale` say when the releases were fetched, as [`dated`] tells it.
 ///
 /// Its statuses are those of [`commit_activity`].
 pub async fn release_cadence(
@@ -734,7 +748,7 @@ pub async fn release_cadence(
         )
         .await;
     match data(list) {
-        Ok(list) => respond(cadence(&list.data)),
+        Ok(list) => respond(dated_by(cadence(&list.data), &list)),
         Err(code) => status(code),
     }
 }
@@ -799,9 +813,18 @@ struct Under {
     name: String,
     /// The repository, as GitHub gave it.
     data: Value,
+    /// When GitHub gave the repository, and why it is no newer, as [`stale`] tells it.
+    fetched_at: DateTimeUtc,
+    stale: Option<&'static str>,
 }
 
 impl Under {
+    /// `body`, made from the repository alone without asking GitHub more, with when the
+    /// repository was fetched, as [`dated`] tells it.
+    fn dated(&self, body: Value) -> Value {
+        dated(body, self.fetched_at, self.stale)
+    }
+
     /// The path of what is under the repository on GitHub, such as `["languages"]`, by the
     /// names GitHub gave: so that it is cached once whatever case the dashboard was opened
     /// in, and under the new names of a repository that was renamed or transferred.
@@ -824,7 +847,9 @@ async fn under(
     if !is_account_name(owner) || !is_repository_name(repo) {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let data = repository(cache, &viewer, owner, repo).await?.data;
+    let cached = repository(cache, &viewer, owner, repo).await?;
+    let (fetched_at, stale) = (cached.fetched_at, stale(&cached));
+    let data = cached.data;
     let name = data
         .get("full_name")
         .and_then(Value::as_str)
@@ -836,7 +861,26 @@ async fn under(
         dashboard: format!("/{owner}/{repo}"),
         name,
         data,
+        fetched_at,
+        stale,
     })
+}
+
+/// `body`, a figure of what is under a repository, with when GitHub gave the data it was
+/// made from, as `fetched_at`, and why that is no newer, as `stale`, as the summary tells
+/// them (FR-DATA-05, FR-DATA-06): so that a comparison can say so of each of its sections,
+/// whose data may be fetched at other times than the repository (FR-CMP-06).
+fn dated(mut body: Value, fetched_at: DateTimeUtc, stale: Option<&'static str>) -> Value {
+    if let Some(fields) = body.as_object_mut() {
+        fields.insert("fetched_at".into(), cache::iso(fetched_at).into());
+        fields.insert("stale".into(), stale.into());
+    }
+    body
+}
+
+/// `body`, made from `cached`, with when it was fetched, as [`dated`] tells it.
+fn dated_by<T>(body: Value, cached: &Cached<T>) -> Value {
+    dated(body, cached.fetched_at, stale(cached))
 }
 
 /// The repository `owner/repo`, as the cache has it for the viewer, or the status that
@@ -1448,7 +1492,7 @@ mod tests {
 
     use axum::http::HeaderMap;
     use sea_orm::entity::prelude::{ChronoUtc, DateTimeUtc};
-    use sea_orm::sea_query::prelude::chrono::TimeDelta;
+    use sea_orm::sea_query::prelude::chrono::{SubsecRound, TimeDelta};
     use url::form_urlencoded;
 
     use super::*;
@@ -2003,6 +2047,17 @@ mod tests {
             "203.0.113.1".parse().unwrap(),
             &HeaderMap::new(),
         ));
+        request_as(cache, visitor, api, owner, repo).await
+    }
+
+    /// The status and body of `visitor`'s request to `api` for `owner/repo`.
+    async fn request_as(
+        cache: &Arc<Cache>,
+        visitor: Viewer,
+        api: Api,
+        owner: &str,
+        repo: &str,
+    ) -> (StatusCode, String) {
         let names = Path((owner.to_owned(), repo.to_owned()));
         let cache = State(cache.clone());
         // Boxed, so that a test that asks for many is not as large as all their handlers'
@@ -2041,7 +2096,7 @@ mod tests {
             return (status, Value::Null);
         }
         let mut body: Value = serde_json::from_str(&body).unwrap();
-        // Only the summary tells it.
+        // The summary tells it, and the figures of what is under the repository.
         if body.get("fetched_at").is_some() {
             fetched_at(&body);
             body.as_object_mut().unwrap().remove("fetched_at");
@@ -2232,6 +2287,101 @@ mod tests {
             (StatusCode::OK, json!("github"), fetched)
         );
         assert_eq!(stub.urls().len(), 2);
+    }
+
+    /// FR-CMP-06, FR-DATA-05, FR-DATA-06: the figures of what is under a repository say when
+    /// their data was fetched, which may be at another time than the repository, and why it
+    /// is no newer, as the summary does, so that a comparison can say so of each section.
+    #[tokio::test]
+    async fn maintenance_figures_say_when_fetched_and_why_no_newer() {
+        let down = Arc::new(AtomicBool::new(false));
+        let stub = Stub::new({
+            let down = down.clone();
+            move |request| {
+                if down.load(Ordering::Relaxed) {
+                    return answer(502, &[], r#"{"message": "Server Error"}"#);
+                }
+                match request.uri().path() {
+                    "/repos/acme/widget" => answer(200, &[], WIDGET),
+                    "/search/issues" => answer(200, &[], PULLS),
+                    "/repos/Acme/Widget/issues" => answer(200, &[], OPEN_ISSUES),
+                    "/repos/Acme/Widget/actions/runs" => answer(200, &[], RUNS),
+                    "/repos/Acme/Widget/releases" => answer(200, &[], RELEASES),
+                    _ => answer(404, &[], r#"{"message": "Not Found"}"#),
+                }
+            }
+        });
+        // Nothing is fresh, and visitors may fetch nothing.
+        let cache = cache_for(&stub, 0, Duration::ZERO).await;
+        let signed_in = Viewer::SignedIn {
+            user_id: 1,
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let ask = async |viewer: &Viewer, api: Api| {
+            let (status, body) = request_as(&cache, viewer.clone(), api, "acme", "widget").await;
+            let body: Value = serde_json::from_str(&body).unwrap();
+            (status, body["stale"].clone(), fetched_at(&body))
+        };
+        let apis = [
+            Api::MergeVelocity,
+            Api::IssueAge,
+            Api::WorkflowRuns,
+            Api::ReleaseCadence,
+        ];
+
+        for api in apis {
+            // Just fetched: as fresh as can be, to the millisecond that it is told in.
+            let before = ChronoUtc::now().trunc_subsecs(3);
+            let (status, stale, fetched) = ask(&signed_in, api).await;
+            assert_eq!((status, stale), (StatusCode::OK, Value::Null), "{api:?}");
+            assert!(before <= fetched && fetched <= ChronoUtc::now(), "{api:?}");
+            // A visitor who may not fetch from GitHub now is served what is cached, and told
+            // why it is no newer.
+            assert_eq!(
+                ask(&visitor, api).await,
+                (StatusCode::OK, json!("held"), fetched),
+                "{api:?}"
+            );
+            // GitHub fails: what is cached is served, with why it is no newer.
+            down.store(true, Ordering::Relaxed);
+            assert_eq!(
+                ask(&signed_in, api).await,
+                (StatusCode::OK, json!("github"), fetched),
+                "{api:?}"
+            );
+            down.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// FR-CMP-06: what is told without asking GitHub more is as fresh as the repository it is
+    /// told from, and that GitHub refused to list workflow runs is as fresh as can be, since
+    /// nothing is cached of it.
+    #[tokio::test]
+    async fn figures_told_without_asking_are_as_fresh_as_what_they_are_told_from() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let fetched = |body: &str| fetched_at(&serde_json::from_str(body).unwrap());
+        let repository = fetched(&request(&cache, Api::Summary, "acme", "locked").await.1);
+        for api in [Api::MergeVelocity, Api::IssueAge] {
+            let (status, body) = request(&cache, api, "acme", "locked").await;
+            assert_eq!(
+                (status, fetched(&body)),
+                (StatusCode::OK, repository),
+                "{api:?}"
+            );
+        }
+        let before = ChronoUtc::now().trunc_subsecs(3);
+        let (status, body) = request(&cache, Api::WorkflowRuns, "acme", "guarded").await;
+        let refused = fetched(&body);
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            before <= refused && refused <= ChronoUtc::now(),
+            "{refused}"
+        );
     }
 
     #[test]
@@ -2863,19 +3013,19 @@ mod tests {
     /// What [`merge_velocity`] answers without pull requests.
     fn no_merges() -> Value {
         json!({"sampled": 0, "merged": 0, "closed": 0, "median_time_to_merge": null,
-               "truncated": false})
+               "truncated": false, "stale": null})
     }
 
     /// What [`issue_age`] answers without open issues.
     fn no_ages() -> Value {
-        json!({"sampled": 0, "median_age": null, "truncated": false})
+        json!({"sampled": 0, "median_age": null, "truncated": false, "stale": null})
     }
 
     /// What [`workflow_runs`] answers without workflow runs on `branch`, or when GitHub
     /// refused to list them, if `hidden`.
     fn no_runs(branch: Option<&str>, hidden: bool) -> Value {
         json!({"branch": branch, "sampled": 0, "passed": 0, "failed": 0,
-               "average_duration": null, "latest": null, "hidden": hidden})
+               "average_duration": null, "latest": null, "hidden": hidden, "stale": null})
     }
 
     #[tokio::test]
@@ -2895,6 +3045,7 @@ mod tests {
                     // Of an hour, two days and four days.
                     "median_time_to_merge": 2 * 24 * 60 * 60,
                     "truncated": false,
+                    "stale": null,
                 })
             )
         );
@@ -2984,6 +3135,7 @@ mod tests {
                         "url": "https://github.com/Acme/Widget/actions/runs/7",
                     },
                     "hidden": false,
+                    "stale": null,
                 })
             )
         );
@@ -3121,6 +3273,7 @@ mod tests {
                     "assets": 4,
                     "downloads": 5 + 7 + 100,
                     "truncated": false,
+                    "stale": null,
                 })
             )
         );
@@ -3138,7 +3291,7 @@ mod tests {
                 StatusCode::OK,
                 json!({"sampled": 100, "stable": 100, "prereleases": 0,
                        "average_interval": null, "assets": 0, "downloads": 0,
-                       "truncated": true})
+                       "truncated": true, "stale": null})
             )
         );
     }
@@ -3235,7 +3388,7 @@ mod tests {
             (
                 StatusCode::OK,
                 json!({"sampled": 0, "stable": 0, "prereleases": 0, "average_interval": null,
-                       "assets": 0, "downloads": 0, "truncated": false})
+                       "assets": 0, "downloads": 0, "truncated": false, "stale": null})
             )
         );
     }

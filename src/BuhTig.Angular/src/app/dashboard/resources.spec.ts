@@ -567,6 +567,15 @@ describe('Resources', () => {
     expect(seen.value?.releases.map((release) => release.target)).toEqual([undefined, undefined]);
   });
 
+  /** The server's answer of merge velocity for a few pull requests. */
+  const MERGES = {
+    sampled: 3,
+    merged: 2,
+    closed: 1,
+    median_time_to_merge: 3_600,
+    truncated: false,
+  };
+
   it('gives how the pull requests updated last came to an end (FR-REPO-13)', () => {
     const seen = outcome(resources.mergeVelocity('acme', 'widget'));
     http.expectOne(`${WIDGET}/merge-velocity`).flush({
@@ -718,6 +727,54 @@ describe('Resources', () => {
       downloads: 123_456,
       truncated: true,
     });
+  });
+
+  it('tells when the data of each figure was fetched, and why it is no newer (FR-CMP-06)', () => {
+    const fetchedAt = '2026-10-22T12:00:00.123Z';
+    const velocity = outcome(resources.mergeVelocity('acme', 'widget'));
+    http
+      .expectOne(`${WIDGET}/merge-velocity`)
+      .flush({ ...MERGES, fetched_at: fetchedAt, stale: null });
+    expect(velocity.value).toMatchObject({ fetchedAt: new Date(fetchedAt), stale: undefined });
+
+    const age = outcome(resources.issueAge('acme', 'widget'));
+    http.expectOne(`${WIDGET}/issue-age`).flush({
+      sampled: 1,
+      median_age: 60,
+      truncated: false,
+      fetched_at: fetchedAt,
+      stale: 'github',
+    });
+    expect(age.value).toMatchObject({ fetchedAt: new Date(fetchedAt), stale: 'github' });
+
+    const runs = outcome(resources.workflowRuns('acme', 'widget'));
+    http.expectOne(`${WIDGET}/workflow-runs`).flush({
+      branch: 'main',
+      sampled: 0,
+      passed: 0,
+      failed: 0,
+      average_duration: null,
+      latest: null,
+      hidden: true,
+      fetched_at: fetchedAt,
+      stale: 'held',
+    });
+    expect(runs.value).toMatchObject({ fetchedAt: new Date(fetchedAt), stale: 'held' });
+
+    // What the server does not tell, or tells in a form BuhTig does not know, is not told.
+    const cadence = outcome(resources.releaseCadence('acme', 'widget'));
+    http.expectOne(`${WIDGET}/release-cadence`).flush({
+      sampled: 0,
+      stable: 0,
+      prereleases: 0,
+      average_interval: null,
+      assets: 0,
+      downloads: 0,
+      truncated: false,
+      fetched_at: 'yesterday',
+      stale: 'later',
+    });
+    expect(cadence.value).toMatchObject({ fetchedAt: undefined, stale: undefined });
   });
 
   it("gives an organization's or a user's repository's commit activity, or Computing", () => {

@@ -5,7 +5,7 @@
 import { CommitActivity, LastPush, YearCount } from '../dashboard/resources';
 import { exactNumber, percent } from '../format/format';
 import { repositoryCount } from '../organization/messages';
-import { commitsLabel } from '../repository/messages';
+import { STABLE, commitsLabel } from '../repository/messages';
 import { Compared } from './route';
 
 /** UI-04: a comparison's title, after its two resources' names, such as "a/b vs c/d · BuhTig". */
@@ -85,6 +85,7 @@ export const FIGURES = {
     one: 'open issue or pull request',
     many: 'open issues and pull requests',
   },
+  stableReleases: { label: STABLE, one: 'stable release', many: 'stable releases' },
 } as const;
 
 export type Figure = keyof typeof FIGURES;
@@ -278,3 +279,100 @@ export function sideCreated(name: string, years: YearCount[]): string {
   const total = years.reduce((total, year) => total + year.repositories, 0);
   return `${name} created ${repositoryCount(total)} since ${years[0].year}`;
 }
+
+/**
+ * FR-CMP-06: what each maintenance figure measures, as a sentence names it, such as "median time
+ * to merge".
+ */
+export const MEASURES = {
+  timeToMerge: 'median time to merge',
+  mergeRatio: 'merge ratio',
+  issueAge: 'median open issue age',
+  passRate: 'pass rate',
+  runDuration: 'average run duration',
+  releaseInterval: 'average time between releases',
+} as const;
+
+export type Measure = keyof typeof MEASURES;
+
+/** FR-CMP-06: by how much one span of time is longer than the other's, such as "2 days longer". */
+export function longer(span: string): string {
+  return `${span} longer`;
+}
+
+/**
+ * FR-CMP-06: by how much one span of time is longer, for assistive technology, such as
+ * "acme/widget's median time to merge is 2 days longer than acme/gadget's." Longer is neither
+ * better nor worse.
+ */
+export function longerThan(
+  measure: Measure,
+  longer: string,
+  span: string,
+  shorter: string,
+): string {
+  return `${longer}'s ${MEASURES[measure]} is ${span} longer than ${shorter}'s.`;
+}
+
+/** FR-CMP-06: by how much one share is higher than the other, such as "12.5 points higher". */
+export function pointsHigher(points: string): string {
+  return `${points} points higher`;
+}
+
+/**
+ * FR-CMP-06: by how much one share is higher, for assistive technology, such as "acme/widget's
+ * merge ratio is 12.5 percentage points higher than acme/gadget's."
+ */
+export function higherThan(
+  measure: Measure,
+  higher: string,
+  points: string,
+  lower: string,
+): string {
+  return `${higher}'s ${MEASURES[measure]} is ${points} percentage points higher than ${lower}'s.`;
+}
+
+/** FR-CMP-06: two figures that show the same, for assistive technology. */
+export function sameMeasure(measure: Measure, first: string, second: string): string {
+  return `${first} and ${second} have the same ${MEASURES[measure]}.`;
+}
+
+/**
+ * FR-CMP-06: what each section's figures are of, as samples of the latest items of each, rather
+ * than of all that happened over a period of time.
+ */
+export const MERGES_SAMPLED =
+  "Of each repository's 100 pull requests updated last: a sample of recent ones, not a count over a period of time.";
+export const ISSUES_SAMPLED =
+  "Of the open issues among each repository's 100 open issues and pull requests updated last: a sample of recent ones, not a count over a period of time.";
+export const RUNS_SAMPLED =
+  "Of each repository's 50 latest GitHub Actions workflow runs for pushes to its default branch: a sample of recent ones, not a count over a period of time.";
+export const RELEASES_SAMPLED =
+  "Of each repository's 100 latest releases, without drafts: a sample of recent ones, not a count over a period of time.";
+
+/** FR-CMP-06: why one side has no figure, under where it would be, kept short. */
+export const NONE_ENDED = 'None merged or closed';
+export const NONE_MERGED = 'None merged';
+export const NO_OPEN_ISSUES_SHORT = 'No open issues';
+export const RUNS_HIDDEN_SHORT = 'Hidden from your token';
+export const NO_RUNS_SHORT = 'No runs yet';
+export const NONE_COMPLETED = 'None completed';
+export const NO_RELEASES_SHORT = 'No releases yet';
+
+/**
+ * FR-CMP-06, FR-PAT-08: GitHub would not list one repository's workflow runs to the viewer's
+ * token, and what to give the token.
+ */
+export function runsHidden(name: string): string {
+  return `GitHub won't show ${name}'s workflow runs to your personal access token. Give it read access to Actions to see them here.`;
+}
+
+/** FR-CMP-06: neither repository has anything to measure in a section. */
+export const NO_MERGES_EITHER =
+  'Neither repository has merged or closed pull requests to measure yet.';
+export const NO_OPEN_ISSUES_EITHER = 'Neither repository has open issues to measure.';
+export const NO_RUNS_EITHER =
+  'Neither repository has GitHub Actions workflow runs for pushes to its default branch yet.';
+export const RUNS_HIDDEN_EITHER =
+  "GitHub won't show either repository's workflow runs to your personal access token. Give it read access to Actions to see them here.";
+export const NO_RELEASES_EITHER = 'Neither repository has published a release yet.';

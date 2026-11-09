@@ -40,7 +40,9 @@ const APP: &str = "Basic Y2xpZW50LWlkOmNsaWVudC1zZWNyZXQ=";
 /// which GitHub lists to Hubot's PAT alone, at `/user/repos`. There, any other credential
 /// gets a list of public repositories, as GitHub lists the sign-in credential's user's, so
 /// that one read without the PAT would be seen in the shared cache. Once `revoked`, GitHub
-/// rejects Hubot's PAT. Anything else is not found.
+/// rejects Hubot's PAT. Octo's repositories have pull requests, open issues, releases and
+/// workflow runs, to whoever GitHub finds the repository for, as [`under`] tells them.
+/// Anything else is not found.
 fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
     Stub::new(move |request: &Request<_>| {
         let pat = request
@@ -76,10 +78,29 @@ fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
                 let list: Vec<Value> = visible.iter().map(|name| repository(name)).collect();
                 answer(200, &[], &Value::from(list).to_string())
             }
+            "/search/issues" => {
+                let query = request.uri().query().unwrap_or_default();
+                let searched = url::form_urlencoded::parse(query.as_bytes())
+                    .find(|(key, _)| key == "q")
+                    .and_then(|(_, q)| {
+                        let name = q.strip_prefix("repo:octo/")?.strip_suffix(" is:pr")?;
+                        visible.contains(&name).then(|| name.to_owned())
+                    });
+                match searched {
+                    Some(name) => answer(200, &[], &under(&name, "pulls").to_string()),
+                    None => answer(422, &[], r#"{"message": "Validation Failed"}"#),
+                }
+            }
             path => match path.strip_prefix("/repos/octo/") {
                 Some(name) if visible.contains(&name) || name == "leaky" => {
                     answer(200, &[], &repository(name).to_string())
                 }
+                Some(rest) => match rest.split_once('/') {
+                    Some((name, what)) if visible.contains(&name) => {
+                        answer(200, &[], &under(name, what).to_string())
+                    }
+                    _ => answer(404, &[], r#"{"message": "Not Found"}"#),
+                },
                 _ => answer(404, &[], r#"{"message": "Not Found"}"#),
             },
         }
@@ -103,6 +124,28 @@ fn repository(name: &str) -> Value {
         "default_branch": "main",
         "pushed_at": "2026-10-01T00:00:00Z",
     })
+}
+
+/// What GitHub gives under Octo's repository `name` at `what` (FR-REPO-13, FR-REPO-14,
+/// FR-REPO-16): its pull requests as searched for, its open issues, its releases and its
+/// workflow runs, which GitHub gives with the repository, marked private as it is.
+fn under(name: &str, what: &str) -> Value {
+    let at = "2026-10-01T00:00:00Z";
+    match what {
+        "pulls" => json!({"total_count": 1, "incomplete_results": false, "items": [
+            {"created_at": at, "closed_at": at, "pull_request": {"merged_at": at}}
+        ]}),
+        "issues" => json!([{"created_at": at}]),
+        "releases" => json!([{"tag_name": "v1", "draft": false, "prerelease": false,
+                              "published_at": at, "assets": []}]),
+        "actions/runs" => json!({"total_count": 1, "workflow_runs": [{
+            "name": "CI", "status": "completed", "conclusion": "success",
+            "run_started_at": at, "created_at": at, "updated_at": at,
+            "html_url": format!("https://github.com/octo/{name}/actions/runs/1"),
+            "repository": repository(name),
+        }]}),
+        _ => json!({"message": "Not Found"}),
+    }
 }
 
 /// The user `login`'s repository `name`, as GitHub gives it: `diary` is private, and pushed
@@ -514,6 +557,7 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
     for path in [
         "/-/api/repositories/octo/public",
         "/-/api/repositories/octo/public/stats",
+        "/-/api/repositories/octo/public/merge-velocity",
         "/-/api/organizations/octo",
         "/-/api/organizations/octo/repositories",
         "/-/api/organizations/octo/repositories/public/commit-activity",
@@ -880,6 +924,17 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
             "/-/api/repositories/octo/secret",
             "/-/api/repositories/octo/inner",
             "/-/api/repositories/octo/missing",
+            // As a comparison of two of them reads them (FR-CMP-05, FR-CMP-06).
+            "/-/api/repositories/octo/public/merge-velocity",
+            "/-/api/repositories/octo/public/issue-age",
+            "/-/api/repositories/octo/public/workflow-runs",
+            "/-/api/repositories/octo/public/release-cadence",
+            "/-/api/repositories/octo/secret/merge-velocity",
+            "/-/api/repositories/octo/secret/issue-age",
+            "/-/api/repositories/octo/secret/workflow-runs",
+            "/-/api/repositories/octo/secret/release-cadence",
+            "/-/api/repositories/octo/inner/merge-velocity",
+            "/-/api/repositories/octo/inner/workflow-runs",
             "/-/api/accounts/hubot",
             "/-/api/users/hubot",
             "/-/api/users/hubot/stats",
@@ -911,6 +966,24 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
              WHERE scope = 'shared' AND resource_key LIKE '/user/%'"
         ),
         "0"
+    );
+    // Nor anything under Octo's private and internal repositories, which a comparison of
+    // them reads with Hubot's PAT alone (FR-CMP-05, FR-CMP-06): what it read of them, its
+    // figures among them, is in Hubot's private cache.
+    assert_eq!(
+        served.psql(
+            "SELECT count(*) FROM cache_entries WHERE scope = 'shared' \
+             AND (resource_key LIKE '%secret%' OR resource_key LIKE '%inner%')"
+        ),
+        "0"
+    );
+    // The repository, and its runs, open issues, releases and pull requests searched for.
+    assert_eq!(
+        served.psql(
+            "SELECT count(*) FROM cache_entries \
+             WHERE scope <> 'shared' AND resource_key LIKE '%secret%'"
+        ),
+        "5"
     );
     let hubot = served.psql("SELECT id FROM users WHERE login = 'hubot'");
     let pat = served.psql(&format!(

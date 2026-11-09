@@ -5,19 +5,19 @@ import { duration } from '../format/format';
 import { Icon } from '../icon/icon';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
+import { nothingReleased } from './metrics';
 import {
   DOWNLOADS,
   NO_FIGURE,
   NO_FILES,
   NO_RELEASES,
   OF_ALL_FILES,
-  ON_AVERAGE,
   ONE_RELEASE,
   RELEASED_EVERY,
   RELEASE_CADENCE,
   STABLE,
   andPrereleases,
-  ofReleases,
+  onAverageOf,
   releaseCadenceDescription,
 } from './messages';
 
@@ -46,7 +46,7 @@ import {
             <dt><app-icon name="calendar" />{{ RELEASED_EVERY }}</dt>
             @if (cadence.averageInterval !== undefined) {
               <dd class="val">{{ duration(cadence.averageInterval) }}</dd>
-              <dd class="sub">{{ ON_AVERAGE }}, {{ ofReleases(cadence) }}</dd>
+              <dd class="sub">{{ onAverageOf(cadence) }}</dd>
             } @else {
               <dd class="val">{{ NO_FIGURE }}</dd>
               <dd class="sub">{{ ONE_RELEASE }}</dd>
@@ -77,10 +77,7 @@ import {
 export class RepositoryReleaseCadence {
   private readonly data = inject(RepositoryData);
 
-  protected readonly cadence = emptyWhen(
-    this.data.releaseCadence(),
-    (cadence) => cadence.sampled === 0,
-  );
+  protected readonly cadence = emptyWhen(this.data.releaseCadence(), nothingReleased);
 
   protected readonly summary = computed(() => {
     const state = this.cadence.state();
@@ -88,11 +85,10 @@ export class RepositoryReleaseCadence {
   });
 
   protected readonly duration = duration;
-  protected readonly ofReleases = ofReleases;
+  protected readonly onAverageOf = onAverageOf;
   protected readonly andPrereleases = andPrereleases;
   protected readonly RELEASE_CADENCE = RELEASE_CADENCE;
   protected readonly RELEASED_EVERY = RELEASED_EVERY;
-  protected readonly ON_AVERAGE = ON_AVERAGE;
   protected readonly ONE_RELEASE = ONE_RELEASE;
   protected readonly STABLE = STABLE;
   protected readonly DOWNLOADS = DOWNLOADS;

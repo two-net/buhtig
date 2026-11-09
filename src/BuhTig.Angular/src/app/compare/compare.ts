@@ -32,6 +32,12 @@ import { CompareActivity } from './activity';
 import { ComparisonData, bytesShares, repositoryShares } from './data';
 import { CompareHead } from './head';
 import { CompareLanguages } from './languages';
+import {
+  CompareIssueAge,
+  CompareMergeVelocity,
+  CompareReleaseCadence,
+  CompareWorkflowRuns,
+} from './maintenance';
 import { COMPARE, VS, comparisonLoaded } from './messages';
 import { Compared, comparePath } from './route';
 import { CompareStats } from './stats';
@@ -45,9 +51,11 @@ type Problem =
  * Two repositories, or two accounts, side by side (FR-CMP-01): each one's head, with when its
  * data was fetched (FR-DATA-06), then their stat cards, each with how they differ (FR-CMP-03),
  * and their charts against one scale, each with a sentence and a table (FR-CMP-04). Of two
- * repositories, their commit activity and languages; of two accounts, which may each be an
- * organization or a user, their languages, and their repositories by last push and by year
- * created.
+ * repositories, their commit activity and languages, then how they are maintained: how their
+ * pull requests are merged, how old their open issues are, how their workflow runs fare and how
+ * often they are released, each section of samples that it describes, with when it was fetched
+ * (FR-CMP-06); of two accounts, which may each be an organization or a user, their languages,
+ * and their repositories by last push and by year created.
  *
  * Each side comes from the same endpoints and cache as its dashboard, so as the viewer's own
  * credentials allow, and counts as a load of its dashboard (FR-CMP-05). When GitHub says there is
@@ -61,10 +69,14 @@ type Problem =
     CompareActivity,
     CompareCreated,
     CompareHead,
+    CompareIssueAge,
     CompareLanguages,
     CompareLastPush,
+    CompareMergeVelocity,
+    CompareReleaseCadence,
     CompareStats,
     CompareStyles,
+    CompareWorkflowRuns,
     DashboardStyles,
     FailurePage,
     Header,
@@ -145,6 +157,16 @@ export class Comparison implements ComparisonData {
   readonly stats = this.repositories((owner, repo) => this.resources.stats(owner, repo));
   readonly activity = this.repositories((owner, repo) =>
     this.resources.commitActivity(owner, repo),
+  );
+  readonly mergeVelocity = this.repositories((owner, repo) =>
+    this.resources.mergeVelocity(owner, repo),
+  );
+  readonly issueAge = this.repositories((owner, repo) => this.resources.issueAge(owner, repo));
+  readonly workflowRuns = this.repositories((owner, repo) =>
+    this.resources.workflowRuns(owner, repo),
+  );
+  readonly releaseCadence = this.repositories((owner, repo) =>
+    this.resources.releaseCadence(owner, repo),
   );
   readonly accountStats = this.accounts((owner) => this.resources.accountStats(owner));
   readonly lastPush = this.accounts((owner) => this.resources.lastPush(owner));

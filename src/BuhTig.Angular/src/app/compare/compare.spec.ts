@@ -8,20 +8,64 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import type { MockInstance } from 'vitest';
 import { routes } from '../app.routes';
 import { TITLES } from '../messages';
-import { NOT_FOUND_OR_PRIVATE, OPEN_ON_GITHUB, notFoundForVisitor } from '../dashboard/messages';
+import {
+  NOT_FOUND_OR_PRIVATE,
+  OPEN_ON_GITHUB,
+  UPDATED,
+  notFoundForVisitor,
+  staleData,
+} from '../dashboard/messages';
 import { Clock } from '../format/clock';
 import { Announcer } from '../live/announcer';
-import { exactNumber, percent, signedCompactNumber, weekDate } from '../format/format';
+import {
+  duration,
+  exactNumber,
+  percent,
+  percentagePoints,
+  relativeTime,
+  signedCompactNumber,
+  weekDate,
+} from '../format/format';
 import { truncated } from '../organization/messages';
+import {
+  NO_OPEN_ISSUES,
+  NO_RELEASES,
+  PER_COMPLETED_RUN,
+  andPrereleases,
+  issueAgeDescription,
+  mergeVelocityDescription,
+  mergedAndClosed,
+  ofMerged,
+  ofOpenIssues,
+  onAverageOf,
+  passedOf,
+  releaseCadenceDescription,
+  workflowRunsDescription,
+} from '../repository/messages';
 import { Toasts } from '../toast/toasts';
+import { FAILED } from '../widget/messages';
 import {
   IN_OTHER,
+  ISSUES_SAMPLED,
+  MERGES_SAMPLED,
   NO_FIGURE,
+  NO_OPEN_ISSUES_SHORT,
+  NO_RELEASES_EITHER,
+  NO_RELEASES_SHORT,
+  RELEASES_SAMPLED,
+  RUNS_HIDDEN_EITHER,
+  RUNS_HIDDEN_SHORT,
+  RUNS_SAMPLED,
   activityComparison,
   bothSides,
   comparisonLoaded,
+  higherThan,
   lastPushComparison,
+  longer,
+  longerThan,
   moreThan,
+  pointsHigher,
+  runsHidden,
   sideCreated,
   sideLanguages,
 } from './messages';
@@ -107,8 +151,98 @@ describe('Comparison', () => {
     visibility: 'private',
   };
 
+  const DAY = 24 * 60 * 60;
+  /** When the server fetched the maintenance figures of each, at other times than the heads'. */
+  const WIDGET_FIGURES_AT = '2026-10-22T12:01:00.000Z';
+  const GADGET_FIGURES_AT = '2026-10-22T11:30:00.000Z';
+
+  /**
+   * What the server says of how each repository is maintained (FR-CMP-06): of the widget, of
+   * samples cut short at their limits; of the gadget, of fewer pull requests, saved while GitHub
+   * fails, with no open issues and no releases, and runs that GitHub hides from the token.
+   */
+  const MAINTENANCE_PARTS: Record<string, object> = {
+    '/-/api/repositories/acme/widget/merge-velocity': {
+      sampled: 100,
+      merged: 61,
+      closed: 9,
+      median_time_to_merge: 2 * DAY,
+      truncated: true,
+      fetched_at: WIDGET_FIGURES_AT,
+      stale: null,
+    },
+    '/-/api/repositories/umbrella/gadget/merge-velocity': {
+      sampled: 6,
+      merged: 4,
+      closed: 1,
+      median_time_to_merge: 3 * 60 * 60,
+      truncated: false,
+      fetched_at: GADGET_FIGURES_AT,
+      stale: 'github',
+    },
+    '/-/api/repositories/acme/widget/issue-age': {
+      sampled: 37,
+      median_age: 60 * DAY,
+      truncated: true,
+      fetched_at: WIDGET_FIGURES_AT,
+      stale: null,
+    },
+    '/-/api/repositories/umbrella/gadget/issue-age': {
+      sampled: 0,
+      median_age: null,
+      truncated: false,
+      fetched_at: GADGET_FIGURES_AT,
+      stale: null,
+    },
+    '/-/api/repositories/acme/widget/workflow-runs': {
+      branch: 'main',
+      sampled: 50,
+      passed: 45,
+      failed: 3,
+      average_duration: 252,
+      latest: null,
+      hidden: false,
+      fetched_at: WIDGET_FIGURES_AT,
+      stale: null,
+    },
+    '/-/api/repositories/umbrella/gadget/workflow-runs': {
+      branch: 'trunk',
+      sampled: 0,
+      passed: 0,
+      failed: 0,
+      average_duration: null,
+      latest: null,
+      hidden: true,
+      fetched_at: GADGET_FIGURES_AT,
+      stale: null,
+    },
+    '/-/api/repositories/acme/widget/release-cadence': {
+      sampled: 100,
+      stable: 80,
+      prereleases: 20,
+      average_interval: 12 * DAY,
+      assets: 0,
+      downloads: 0,
+      truncated: true,
+      fetched_at: WIDGET_FIGURES_AT,
+      stale: null,
+    },
+    '/-/api/repositories/umbrella/gadget/release-cadence': {
+      sampled: 0,
+      stable: 0,
+      prereleases: 0,
+      average_interval: null,
+      assets: 0,
+      downloads: 0,
+      truncated: false,
+      fetched_at: GADGET_FIGURES_AT,
+      stale: null,
+    },
+  };
+
   /** What the server says of each part of each repository, by its URL. */
   const REPOSITORY_PARTS: Record<string, object> = {
+    ...MAINTENANCE_PARTS,
     '/-/api/repositories/acme/widget/stats': {
       stars: 12_345,
       forks: 40,
@@ -236,7 +370,7 @@ describe('Comparison', () => {
   it('shows each figure of both, and marks the one with more by how much (FR-CMP-03)', async () => {
     await open('/-/compare/acme/widget...umbrella/gadget');
     await answerParts(REPOSITORY_PARTS);
-    const cards = [...page().querySelectorAll('.cmp-stat')];
+    const cards = [...widget('Overview').querySelectorAll('.cmp-stat')];
     const card = (label: string) =>
       cards.find((card) => shown(card.querySelector('dt')!) === label)!;
     expect(cards.map((card) => shown(card.querySelector('dt')!))).toEqual([
@@ -375,6 +509,240 @@ describe('Comparison', () => {
     expect(announce).toHaveBeenCalledOnce();
   });
 
+  /** The cards of the widget headed `heading`, each as its label, both values and how they differ. */
+  function cardsOf(heading: string) {
+    return [...widget(heading).querySelectorAll('.cmp-stat')].map((card) => ({
+      label: shown(card.querySelector('dt')!),
+      // Each value's figure, or dash, and what it is of, or why it has none.
+      values: [...card.querySelectorAll('.cmp-val')].map((value) =>
+        [...value.querySelectorAll(':scope > .val, :scope > .sub')]
+          .map((part) => shown(part))
+          .join(' '),
+      ),
+      delta: card.querySelector('.cmp-delta')
+        ? shown(card.querySelector('.cmp-delta')!)
+        : undefined,
+      second: card.querySelector('.cmp-delta.wide.second') !== null,
+      said: card.querySelector('dd.sr')?.textContent,
+    }));
+  }
+
+  /** What the widget headed `heading` says of each side under its cards, a line each. */
+  function notesOf(heading: string): string[] {
+    return [...widget(heading).querySelectorAll('.cmp-note')].map((note) => shown(note));
+  }
+
+  /** The maintenance figures the server gives of each repository, as `Resources` gives them. */
+  const WIDGET_VELOCITY = {
+    sampled: 100,
+    merged: 61,
+    closed: 9,
+    medianTimeToMerge: 2 * DAY,
+    truncated: true,
+  };
+  const GADGET_VELOCITY = {
+    sampled: 6,
+    merged: 4,
+    closed: 1,
+    medianTimeToMerge: 3 * 60 * 60,
+    truncated: false,
+  };
+
+  it('compares how both are maintained, with units, in words that rank neither (FR-CMP-06)', async () => {
+    await open('/-/compare/acme/widget...umbrella/gadget');
+    await answerParts(REPOSITORY_PARTS);
+    // The same sections as their dashboards', each of samples it says what they are of.
+    const velocity = widget('Merge velocity');
+    expect(velocity.querySelector('.w-sub')!.textContent?.trim()).toBe(MERGES_SAMPLED);
+    expect(widget('Open issue age').querySelector('.w-sub')!.textContent?.trim()).toBe(
+      ISSUES_SAMPLED,
+    );
+    expect(widget('Workflow runs').querySelector('.w-sub')!.textContent?.trim()).toBe(RUNS_SAMPLED);
+    expect(widget('Release cadence').querySelector('.w-sub')!.textContent?.trim()).toBe(
+      RELEASES_SAMPLED,
+    );
+
+    // The longer time is marked by how much longer, from its side, and said so: longer, not
+    // better or worse. The higher share by how many percentage points higher.
+    const span = duration(2 * DAY - 3 * 60 * 60);
+    const points = percentagePoints(61 / 70, 4 / 5);
+    expect(cardsOf('Merge velocity')).toEqual([
+      {
+        label: 'Median time to merge',
+        values: [`${duration(2 * DAY)} ${ofMerged(61)}`, `${duration(3 * 60 * 60)} ${ofMerged(4)}`],
+        delta: longer(span),
+        second: false,
+        said: longerThan('timeToMerge', 'acme/widget', span, 'umbrella/gadget'),
+      },
+      {
+        label: 'Merge ratio',
+        values: [
+          `${percent(61 / 70)} ${mergedAndClosed(61, 9)}`,
+          `${percent(4 / 5)} ${mergedAndClosed(4, 1)}`,
+        ],
+        delta: pointsHigher(points),
+        second: false,
+        said: higherThan('mergeRatio', 'acme/widget', points, 'umbrella/gadget'),
+      },
+    ]);
+
+    // Under them, what each side's figures are of, as its dashboard says it, and when they were
+    // fetched, which may be other than its head's, or that they are saved data, and why.
+    const age = relativeTime(new Date(GADGET_FIGURES_AT), now);
+    expect(notesOf('Merge velocity')).toEqual([
+      `acme/widget ${mergeVelocityDescription(WIDGET_VELOCITY)} ${UPDATED} ` +
+        shown(velocity.querySelector('.cmp-note app-relative-time')!),
+      `umbrella/gadget ${mergeVelocityDescription(GADGET_VELOCITY)} ${staleData(age)}`,
+    ]);
+    expect(
+      [...velocity.querySelectorAll('.cmp-note time')].map((time) => time.getAttribute('datetime')),
+    ).toEqual([WIDGET_FIGURES_AT]);
+
+    // The branch of each one's runs, in its sentence.
+    expect(notesOf('Workflow runs')[0]).toContain(
+      workflowRunsDescription({
+        branch: 'main',
+        sampled: 50,
+        passed: 45,
+        failed: 3,
+        averageDuration: 252,
+        latest: undefined,
+        hidden: false,
+      }),
+    );
+  });
+
+  it('says why one has no figure, rather than show a zero, and hides nothing else (FR-CMP-06)', async () => {
+    await open('/-/compare/acme/widget...umbrella/gadget');
+    await answerParts(REPOSITORY_PARTS);
+    // A dash and why under it, and no difference to tell.
+    expect(cardsOf('Open issue age')).toEqual([
+      {
+        label: 'Median age',
+        values: [
+          `${duration(60 * DAY)} ${ofOpenIssues(37)}`,
+          `${NO_FIGURE} ${NO_OPEN_ISSUES_SHORT}`,
+        ],
+        delta: undefined,
+        second: false,
+        said: undefined,
+      },
+    ]);
+    expect(notesOf('Open issue age')).toEqual([
+      expect.stringContaining(
+        `acme/widget ${issueAgeDescription({ sampled: 37, medianAge: 60 * DAY, truncated: true })}`,
+      ),
+      expect.stringContaining(`umbrella/gadget ${NO_OPEN_ISSUES}`),
+    ]);
+
+    // Runs that GitHub hides from the token are hidden, not none that passed, and the token
+    // is told what it needs.
+    expect(cardsOf('Workflow runs')).toEqual([
+      {
+        label: 'Pass rate',
+        values: [`${percent(45 / 48)} ${passedOf(45, 3)}`, `${NO_FIGURE} ${RUNS_HIDDEN_SHORT}`],
+        delta: undefined,
+        second: false,
+        said: undefined,
+      },
+      {
+        label: 'Average duration',
+        values: [`${duration(252)} ${PER_COMPLETED_RUN}`, `${NO_FIGURE} ${RUNS_HIDDEN_SHORT}`],
+        delta: undefined,
+        second: false,
+        said: undefined,
+      },
+    ]);
+    expect(notesOf('Workflow runs')[1]).toContain(
+      `umbrella/gadget ${runsHidden('umbrella/gadget')}`,
+    );
+
+    // No releases, rather than no time between them, or no stable ones.
+    const cadence = cardsOf('Release cadence');
+    expect(cadence.map((card) => [card.label, card.values[1], card.delta])).toEqual([
+      ['Released every', `${NO_FIGURE} ${NO_RELEASES_SHORT}`, undefined],
+      ['Stable releases', `${NO_FIGURE} ${NO_RELEASES_SHORT}`, undefined],
+    ]);
+    expect(cadence[0].values[0]).toBe(
+      `${duration(12 * DAY)} ${onAverageOf({
+        sampled: 100,
+        stable: 80,
+        prereleases: 20,
+        averageInterval: 12 * DAY,
+        assets: 0,
+        downloads: 0,
+        truncated: true,
+      })}`,
+    );
+    expect(cadence[1].values[0]).toContain(andPrereleases(20));
+    expect(notesOf('Release cadence')).toEqual([
+      expect.stringContaining(
+        `acme/widget ${releaseCadenceDescription({
+          sampled: 100,
+          stable: 80,
+          prereleases: 20,
+          averageInterval: 12 * DAY,
+          assets: 0,
+          downloads: 0,
+          truncated: true,
+        })}`,
+      ),
+      expect.stringContaining(`umbrella/gadget ${NO_RELEASES}`),
+    ]);
+  });
+
+  it('says so once when neither has anything to measure (FR-CMP-06)', async () => {
+    await open('/-/compare/acme/widget...umbrella/gadget');
+    const hidden = MAINTENANCE_PARTS['/-/api/repositories/umbrella/gadget/workflow-runs'];
+    const none = MAINTENANCE_PARTS['/-/api/repositories/umbrella/gadget/release-cadence'];
+    await answerParts({
+      ...REPOSITORY_PARTS,
+      '/-/api/repositories/acme/widget/workflow-runs': { ...hidden, branch: 'main' },
+      '/-/api/repositories/acme/widget/release-cadence': none,
+    });
+    expect(shown(widget('Workflow runs').querySelector('.w-state')!)).toBe(RUNS_HIDDEN_EITHER);
+    expect(shown(widget('Release cadence').querySelector('.w-state')!)).toBe(NO_RELEASES_EITHER);
+    // The others still show their figures.
+    expect(cardsOf('Merge velocity')).toHaveLength(2);
+    expect(cardsOf('Open issue age')).toHaveLength(1);
+  });
+
+  it('fails one section alone, and tries again only what failed (FR-CMP-06)', async () => {
+    const failing = '/-/api/repositories/umbrella/gadget/workflow-runs';
+    await open('/-/compare/acme/widget...umbrella/gadget');
+    for (const request of http.match(isPart)) {
+      const url = request.request.url;
+      if (url === failing) {
+        request.flush(null, { status: 502, statusText: 'Bad Gateway' });
+      } else {
+        request.flush(REPOSITORY_PARTS[url]);
+      }
+    }
+    await harness.fixture.whenStable();
+    const runs = widget('Workflow runs');
+    expect(shown(runs.querySelector('.w-state span')!)).toBe(FAILED);
+    expect(runs.querySelector('.cmp-stat')).toBeNull();
+    for (const heading of ['Overview', 'Merge velocity', 'Open issue age', 'Release cadence']) {
+      expect(widget(heading).querySelector('.cmp-stat'), heading).not.toBeNull();
+    }
+
+    runs.querySelector<HTMLButtonElement>('.w-state button')!.click();
+    await harness.fixture.whenStable();
+    expect(http.match(isPart).map((request) => request.request.url)).toEqual([failing]);
+  });
+
+  it('asks nothing of either when GitHub keeps one from the token (FR-CMP-05, FR-PAT-08)', async () => {
+    await harness.navigateByUrl('/-/compare/acme/widget...umbrella/secret');
+    http.expectOne('/-/api/repositories/acme/widget').flush(WIDGET);
+    http
+      .expectOne('/-/api/repositories/umbrella/secret')
+      .flush({ denied: 'token' }, { status: 403, statusText: 'Forbidden' });
+    await harness.fixture.whenStable();
+    expect(page().querySelectorAll('app-compare-head')).toHaveLength(2);
+    expect(page().querySelector('app-widget')).toBeNull();
+    http.expectNone(isPart);
+  });
+
   it('shows nothing of either when GitHub says one is not there (FR-ACC-05)', async () => {
     await harness.navigateByUrl('/-/compare/acme/widget...umbrella/secret');
     http.expectOne('/-/api/session').flush({ user: null });
@@ -483,6 +851,7 @@ describe('Comparison', () => {
       ]);
       expect(await answerParts(ACCOUNT_PARTS)).toEqual(Object.keys(ACCOUNT_PARTS).sort());
       expect([...page().querySelectorAll('.cmp-stat dt')].map((label) => shown(label))).toEqual([
+        // Of two accounts, the stat cards alone: maintenance figures are of repositories.
         'Repositories',
         'Stars',
         'Forks',

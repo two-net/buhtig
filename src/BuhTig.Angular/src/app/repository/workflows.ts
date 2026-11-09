@@ -6,6 +6,7 @@ import { RelativeTime } from '../format/relative-time';
 import { Icon, IconName } from '../icon/icon';
 import { emptyWhen } from '../widget/load';
 import { Loaded, Widget } from '../widget/widget';
+import { nothingRun, passRate } from './metrics';
 import {
   AVERAGE_DURATION,
   LATEST_RUN,
@@ -98,7 +99,7 @@ export class RepositoryWorkflows {
   private readonly data = inject(RepositoryData);
   private readonly loader = this.data.workflowRuns();
 
-  protected readonly runs = emptyWhen(this.loader, (runs) => runs.hidden || runs.sampled === 0);
+  protected readonly runs = emptyWhen(this.loader, nothingRun);
 
   /** What the loader has, before it is found empty, for what the widget says of nothing. */
   private readonly loaded = computed(() => {
@@ -117,8 +118,9 @@ export class RepositoryWorkflows {
     return state.status === 'ready' ? workflowRunsDescription(state.data) : '';
   });
 
-  protected rate({ passed, failed }: WorkflowRuns): string {
-    return percent(passed / (passed + failed));
+  protected rate(runs: WorkflowRuns): string {
+    const rate = passRate(runs);
+    return rate === undefined ? NO_FIGURE : percent(rate);
   }
 
   protected average({ averageDuration }: WorkflowRuns): string {

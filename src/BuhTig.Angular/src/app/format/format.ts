@@ -61,6 +61,9 @@ const percentFormat = once(
   (locale?: string) =>
     new Intl.NumberFormat(locale, { style: 'percent', maximumFractionDigits: 1 }),
 );
+const pointsFormat = once(
+  (locale?: string) => new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }),
+);
 const durationFormat = once(
   (unit: string, locale?: string) =>
     new Intl.NumberFormat(locale, {
@@ -186,6 +189,16 @@ export function list(items: string[], locale?: string): string {
 export function percent(share: number, locale?: string): string {
   const format = percentFormat(locale);
   return share > 0 && share < 0.001 ? `<${format.format(0.001)}` : format.format(share);
+}
+
+/**
+ * How far apart two shares of a whole are, in percentage points to a tenth and without a sign,
+ * such as "12.5" for 0.625 and 0.5. It is the difference of the shares as `percent` shows them,
+ * so that it never tells one that the figures shown do not have.
+ */
+export function percentagePoints(a: number, b: number, locale?: string): string {
+  const tenths = Math.abs(Math.round(a * 1000) - Math.round(b * 1000));
+  return pointsFormat(locale).format(tenths / 10);
 }
 
 /**

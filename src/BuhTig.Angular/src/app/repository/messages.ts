@@ -348,6 +348,11 @@ export function ofReleases({ sampled, truncated }: ReleaseCadence): string {
   return truncated ? `of the ${exactNumber(sampled)} latest` : 'of all releases';
 }
 
+/** FR-REPO-16: what the time between releases is, such as "on average, of the 100 latest". */
+export function onAverageOf(cadence: ReleaseCadence): string {
+  return `${ON_AVERAGE}, ${ofReleases(cadence)}`;
+}
+
 /**
  * FR-REPO-16: the release cadence in a sentence, such as "Of the 100 latest releases, 80 are
  * stable and 20 are pre-releases, one every 12 days on average. Their files were downloaded

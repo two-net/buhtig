@@ -7,6 +7,7 @@ import {
   list,
   monthLabel,
   percent,
+  percentagePoints,
   relativeTime,
   signedCompactNumber,
   timeUntil,
@@ -196,5 +197,15 @@ describe('format', () => {
       '0%',
     ]);
     expect(plain(percent(0.624, 'de-DE'))).toBe('62,4 %');
+  });
+
+  it('tells how far apart shares are in percentage points, of the shares as shown', () => {
+    expect(percentagePoints(0.625, 0.5, 'en-US')).toBe('12.5');
+    expect(percentagePoints(0.5, 0.625, 'en-US')).toBe('12.5');
+    expect(percentagePoints(1, 0, 'en-US')).toBe('100');
+    // 33.3% and 66.7%, rather than a third's difference.
+    expect(percentagePoints(1 / 3, 2 / 3, 'en-US')).toBe('33.4');
+    expect(percentagePoints(0.1 + 0.2, 0.3, 'en-US')).toBe('0');
+    expect(percentagePoints(0.625, 0.5, 'de-DE')).toBe('12,5');
   });
 });
