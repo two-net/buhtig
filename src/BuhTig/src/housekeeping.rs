@@ -27,10 +27,13 @@ use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, info};
 
 use crate::db;
-use crate::entity::{cache_entry, history_entry, session};
+use crate::entity::{cache_entry, history_entry, repository_observation, session};
 
 /// FR-DB-08: at least hourly.
 const INTERVAL: Duration = Duration::from_secs(60 * 60);
+
+/// A day, in seconds.
+const DAY: u64 = 24 * 60 * 60;
 
 /// What housekeeping needs from the config file.
 pub struct Settings {
@@ -44,6 +47,7 @@ pub enum Outcome {
     Deleted {
         sessions: u64,
         cache_entries: u64,
+        observations: u64,
         history_entries: u64,
     },
     /// Another BuhTig process is doing housekeeping.
@@ -71,17 +75,18 @@ fn report(result: Result<Outcome, DbErr>) {
         Ok(Outcome::Deleted {
             sessions,
             cache_entries,
+            observations,
             history_entries,
         }) => {
-            if sessions + cache_entries + history_entries > 0 {
+            if sessions + cache_entries + observations + history_entries > 0 {
                 info!(
                     sessions,
-                    cache_entries, history_entries, "housekeeping finished"
+                    cache_entries, observations, history_entries, "housekeeping finished"
                 );
             } else {
                 debug!(
                     sessions,
-                    cache_entries, history_entries, "housekeeping finished"
+                    cache_entries, observations, history_entries, "housekeeping finished"
                 );
             }
         }
@@ -117,11 +122,16 @@ pub async fn run(
         Some(delete) => delete.exec(&txn).await?.rows_affected,
         None => 0,
     };
+    let observations = match old_observations(now) {
+        Some(delete) => delete.exec(&txn).await?.rows_affected,
+        None => 0,
+    };
     let history_entries = surplus_history().exec(&txn).await?.rows_affected;
     txn.commit().await?;
     Ok(Outcome::Deleted {
         sessions,
         cache_entries,
+        observations,
         history_entries,
     })
 }
@@ -151,6 +161,17 @@ fn old_cache_entries(
 ) -> Option<DeleteMany<cache_entry::Entity>> {
     let cutoff = cutoff(now, settings.cache_retention)?;
     Some(cache_entry::Entity::delete_many().filter(cache_entry::Column::FetchedAt.lt(cutoff)))
+}
+
+/// Observations of repositories made more than [`repository_observation::KEPT_DAYS`] ago
+/// (FR-DB-08), or `None` if that is before anything can have been stored.
+fn old_observations(now: DateTimeUtc) -> Option<DeleteMany<repository_observation::Entity>> {
+    let kept = Duration::from_secs(repository_observation::KEPT_DAYS.unsigned_abs() * DAY);
+    let cutoff = cutoff(now, kept)?;
+    Some(
+        repository_observation::Entity::delete_many()
+            .filter(repository_observation::Column::ObservedAt.lt(cutoff)),
+    )
 }
 
 /// History entries beyond each user's [`history_entry::KEPT_PER_USER`] newest.
@@ -199,8 +220,6 @@ mod tests {
     use sea_orm::{DbBackend, QueryTrait};
 
     use super::*;
-
-    const DAY: u64 = 24 * 60 * 60;
 
     fn now() -> DateTimeUtc {
         "2026-10-20T12:00:00Z".parse().unwrap()
@@ -273,6 +292,14 @@ mod tests {
             ..settings()
         };
         assert!(old_cache_entries(now(), &forever).is_none());
+    }
+
+    #[test]
+    fn observations_are_deleted_90_days_after_they_were_made() {
+        assert_eq!(
+            sql(old_observations(now()).unwrap()),
+            r#"DELETE FROM "repository_observations" WHERE "repository_observations"."observed_at" < '2026-07-22 12:00:00.000000 +00:00'"#
+        );
     }
 
     #[test]

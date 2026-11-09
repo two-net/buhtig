@@ -707,6 +707,118 @@ describe('Resources', () => {
     expect(computing.error).toBeInstanceOf(Computing);
   });
 
+  it('gives how the figures changed, as observed, leaving out what it cannot date (FR-REPO-17)', () => {
+    const seen = outcome(resources.trends('acme', 'widget'));
+    const first = {
+      day: '2026-11-02',
+      observed_at: '2026-11-02T10:00:00.000Z',
+      pull_requests_observed_at: '2026-11-02T10:01:00.000Z',
+      stars: 100,
+      forks: 10,
+      open_issues: 50,
+      open_pull_requests: 7,
+    };
+    const latest = {
+      ...first,
+      day: '2026-11-09',
+      observed_at: '2026-11-09T09:00:00.000Z',
+      pull_requests_observed_at: '2026-11-09T09:00:00.000Z',
+      stars: 112,
+      open_issues: 44,
+    };
+    http.expectOne(`${WIDGET}/trends`).flush({
+      scope: 'private',
+      kept_days: 90,
+      tracking_since: '2026-11-02T10:00:00.000Z',
+      observations: [first, { ...first, day: 'someday', observed_at: 'then' }, latest],
+      gaps: [{ from: '2026-11-03', to: '2026-11-08' }],
+      periods: [
+        {
+          days: 7,
+          target: '2026-11-02T09:00:00.000Z',
+          first_day: '2026-11-02',
+          observed_days: 2,
+          supported: true,
+          from: first,
+          to: latest,
+          changes: { stars: 12, forks: 0, open_issues: -6, open_pull_requests: 0 },
+        },
+        {
+          days: 30,
+          target: '2026-10-10T09:00:00.000Z',
+          first_day: '2026-10-10',
+          observed_days: 2,
+          supported: false,
+          reason: 'tracked_later',
+        },
+        { days: 90, supported: false, reason: 'something new' },
+      ],
+      fetched_at: '2026-11-09T09:00:00.000Z',
+      stale: null,
+    });
+    const observed = (day: string, at: string, prs: string, stars: number, issues: number) => ({
+      day: new Date(`${day}T00:00:00Z`),
+      observedAt: new Date(at),
+      pullRequestsObservedAt: new Date(prs),
+      figures: { stars, forks: 10, openIssues: issues, openPullRequests: 7 },
+    });
+    const [from, to] = [
+      observed('2026-11-02', '2026-11-02T10:00:00Z', '2026-11-02T10:01:00Z', 100, 50),
+      observed('2026-11-09', '2026-11-09T09:00:00Z', '2026-11-09T09:00:00Z', 112, 44),
+    ];
+    expect(seen.value).toEqual({
+      scope: 'private',
+      keptDays: 90,
+      trackingSince: new Date('2026-11-02T10:00:00Z'),
+      observations: [from, to],
+      gaps: [{ from: new Date('2026-11-03T00:00:00Z'), to: new Date('2026-11-08T00:00:00Z') }],
+      periods: [
+        {
+          days: 7,
+          target: new Date('2026-11-02T09:00:00Z'),
+          firstDay: new Date('2026-11-02T00:00:00Z'),
+          observedDays: 2,
+          supported: true,
+          from,
+          to,
+          // A change may be down, which a count may not.
+          changes: { stars: 12, forks: 0, openIssues: -6, openPullRequests: 0 },
+        },
+        {
+          days: 30,
+          target: new Date('2026-10-10T09:00:00Z'),
+          firstDay: new Date('2026-10-10T00:00:00Z'),
+          observedDays: 2,
+          supported: false,
+          reason: 'tracked_later',
+        },
+        // A reason it does not know is told as no observation near the period's start.
+        {
+          days: 90,
+          target: undefined,
+          firstDay: undefined,
+          observedDays: 0,
+          supported: false,
+          reason: 'no_observation_then',
+        },
+      ],
+      fetchedAt: new Date('2026-11-09T09:00:00Z'),
+      stale: undefined,
+    });
+
+    const shared = outcome(resources.trends('acme', 'widget'));
+    http.expectOne(`${WIDGET}/trends`).flush({
+      scope: 'anyone',
+      kept_days: 90,
+      tracking_since: null,
+      observations: [],
+      gaps: [],
+      periods: [],
+    });
+    expect(shared.value?.scope).toBe('shared');
+    expect(shared.value?.trackingSince).toBeUndefined();
+  });
+
   it('gives how often the repository was released, and downloaded (FR-REPO-16)', () => {
     const seen = outcome(resources.releaseCadence('acme', 'widget'));
     http.expectOne(`${WIDGET}/release-cadence`).flush({

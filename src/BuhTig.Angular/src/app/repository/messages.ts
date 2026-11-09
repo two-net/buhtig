@@ -7,10 +7,22 @@ import {
   IssueAge,
   IssueOrPullRequest,
   MergeVelocity,
+  Observation,
+  Period,
   ReleaseCadence,
+  Unsupported,
   WorkflowRuns,
 } from '../dashboard/resources';
-import { duration, exactNumber, percent, weekDate } from '../format/format';
+import {
+  duration,
+  exactNumber,
+  exactTime,
+  percent,
+  signedExactNumber,
+  utcDay,
+  weekDate,
+} from '../format/format';
+import { CommitComparison, Metric } from './observations';
 
 /** "commit" or "commits", as a count of them, such as 12, takes. */
 export function commitsLabel(count: number): string {
@@ -379,3 +391,187 @@ export function releaseCadenceDescription(cadence: ReleaseCadence): string {
       : `${sampled === 1 ? 'Its' : 'Their'} files were downloaded ${times(downloads)}.`;
   return `${of}, ${kinds}${every}. ${files}`;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** FR-REPO-17 */
+export const TRENDS = 'Trends';
+export const PERIOD = 'Period';
+export const NO_TRENDS = "BuhTig hasn't recorded this repository's figures yet.";
+
+/** FR-REPO-17: a period to compare over, such as "7 days". */
+export function periodLabel(days: number): string {
+  return `${days} days`;
+}
+
+/** FR-REPO-17: what each figure that trends follow is called. */
+export const METRIC_LABELS: Readonly<Record<Metric, string>> = {
+  stars: 'Stars',
+  forks: 'Forks',
+  openIssues: 'Open issues',
+  openPullRequests: 'Open pull requests',
+};
+
+/** FR-REPO-17: the same, within a sentence. */
+const METRIC_NAMES: Readonly<Record<Metric, string>> = {
+  stars: 'stars',
+  forks: 'forks',
+  openIssues: 'open issues',
+  openPullRequests: 'open pull requests',
+};
+
+/** FR-REPO-17: a figure as observed, such as "1,216 now". */
+export function now(value: number): string {
+  return `${exactNumber(value)} now`;
+}
+
+/** FR-REPO-17: a figure's change, such as "+12" or "0", with what it was before and is now. */
+export function changeOf(change: number): string {
+  return signedExactNumber(change);
+}
+
+/** FR-REPO-17: what a figure changed between, such as "from 1,204 to 1,216". */
+export function fromTo(from: number, to: number): string {
+  return `from ${exactNumber(from)} to ${exactNumber(to)}`;
+}
+
+/** FR-REPO-17: when the two observations a change is between were made. */
+export function between(from: Observation, to: Observation): string {
+  return `Between ${exactTime(from.observedAt)} and ${exactTime(to.observedAt)}.`;
+}
+
+/**
+ * FR-REPO-17: why a period has no change, in a sentence. Nothing is taken for zero, nor is the
+ * first observation taken for one from before it.
+ */
+export function unsupportedReason(
+  reason: Unsupported,
+  period: Period,
+  trackingSince: Date | undefined,
+): string {
+  switch (reason) {
+    case 'no_observations':
+      return NO_TRENDS;
+    case 'first_observation':
+      return 'There is no earlier observation to compare with yet.';
+    case 'tracked_later':
+      return trackingSince
+        ? `BuhTig began recording on ${utcDay(trackingSince)}, after this period began, so it ` +
+            `cannot tell the change over ${periodLabel(period.days)}.`
+        : `BuhTig began recording after this period began.`;
+    case 'no_observation_then':
+      return period.target
+        ? `BuhTig has no observation from around ${utcDay(period.target)} to compare with.`
+        : 'BuhTig has no observation from the start of this period to compare with.';
+  }
+}
+
+/**
+ * FR-REPO-17: a repository observed once, which has no baseline: when BuhTig began, and that
+ * changes show once there is another observation.
+ */
+export function noBaseline(first: Observation): string {
+  return (
+    `BuhTig began recording this repository's figures on ${exactTime(first.observedAt)}. ` +
+    'It has no earlier figures, so there is nothing to compare yet. Changes show once it has ' +
+    'observed the repository on another day.'
+  );
+}
+
+/**
+ * FR-REPO-17: on how many of a period's days there is an observation: those from its first,
+ * which may be its baseline's, to the latest observation's.
+ */
+export function coverage(period: Period, latest: Observation): string {
+  const days = period.firstDay
+    ? Math.round((latest.day.getTime() - period.firstDay.getTime()) / DAY_MS) + 1
+    : period.days + 1;
+  const from = period.firstDay ? ` from ${utcDay(period.firstDay)}` : '';
+  return (
+    `Observed on ${exactNumber(period.observedDays)} of the ${exactNumber(days)} days` +
+    `${from} to ${utcDay(latest.day)}.`
+  );
+}
+
+/** FR-REPO-17: how observations are made, so that none is taken for continuous tracking. */
+export function trackingNote(keptDays: number): string {
+  return (
+    'BuhTig records these figures only when this dashboard is opened, and keeps the latest of ' +
+    `each day for ${exactNumber(keptDays)} days. Days without one are left as gaps, not zeros.`
+  );
+}
+
+/** FR-REPO-17, FR-DATA-14: what was observed with the viewer's own token. */
+export const PRIVATE_TRENDS = 'Recorded from what your token read: only you are shown them.';
+
+/** NFR-UX-04: the headers of the trends' table. */
+export const TRENDS_HEADERS = [
+  'Day (UTC)',
+  'Observed at',
+  'Stars',
+  'Forks',
+  'Open issues',
+  'Open pull requests',
+] as const;
+
+/** NFR-UX-04: a day of the trends' table without an observation. */
+export const NOT_OBSERVED = 'Not observed';
+export const NOT_TRACKED = 'Not tracked yet';
+
+/**
+ * NFR-UX-04: the trends of a period in a sentence, such as "Between Nov 2, 2026, 10:00 AM and
+ * Nov 9, 2026, 9:00 AM, stars went from 100 to 112 (+12), forks from 10 to 11 (+1), open issues
+ * from 50 to 44 (-6) and open pull requests stayed at 7. Observed on 3 of the 8 days from Nov 2,
+ * 2026 to Nov 9, 2026."
+ */
+export function trendsDescription(
+  period: Period,
+  latest: Observation,
+  trackingSince: Date | undefined,
+): string {
+  const observed = coverage(period, latest);
+  if (!period.supported) {
+    return `${unsupportedReason(period.reason, period, trackingSince)} ${observed}`;
+  }
+  const { from, to, changes } = period;
+  const parts = (Object.keys(METRIC_NAMES) as Metric[]).map((metric) => {
+    const [before, after] = [from.figures[metric], to.figures[metric]];
+    const name = METRIC_NAMES[metric];
+    return changes[metric] === 0
+      ? `${name} stayed at ${exactNumber(after)}`
+      : `${name} went ${fromTo(before, after)} (${changeOf(changes[metric])})`;
+  });
+  const last = parts.pop();
+  const changed = `${parts.join(', ')} and ${last}`;
+  return (
+    `Between ${exactTime(from.observedAt)} and ${exactTime(to.observedAt)}, ` +
+    `${changed}. ${observed}`
+  );
+}
+
+/** NFR-UX-04: one figure's line over a period, in a sentence, such as "Stars, from 100 to 112." */
+export function trendChartDescription(metric: Metric, values: readonly (number | null)[]): string {
+  const observed = values.filter((value): value is number => value !== null);
+  const label = METRIC_LABELS[metric];
+  const [first, last] = [observed[0], observed[observed.length - 1]];
+  if (first === undefined || last === undefined) {
+    return `${label}: not observed in this period.`;
+  }
+  const gaps = observed.length < values.length ? ', with days not observed between' : '';
+  return `${label}, ${fromTo(first, last)}, observed on ${exactNumber(observed.length)} of ${exactNumber(values.length)} days${gaps}.`;
+}
+
+/**
+ * FR-REPO-18: the commits of the latest whole weeks against those of as many before, such as "34
+ * commits in the 4 weeks from Oct 12, 2026 to Nov 8, 2026, and 28 in the 4 weeks before."
+ */
+export function commitComparison({ weeks, recent, before }: CommitComparison): string {
+  const span = weeks === 1 ? 'the week' : `the ${exactNumber(weeks)} weeks`;
+  const beforeSpan = weeks === 1 ? 'the week' : `the ${exactNumber(weeks)} weeks`;
+  return (
+    `${commits(recent.commits)} in ${span} from ${weekDate(recent.from)} to ` +
+    `${weekDate(recent.to)}, and ${exactNumber(before.commits)} in ${beforeSpan} before.`
+  );
+}
+
+export const COMMITS = 'Commits';

@@ -10,7 +10,9 @@ import {
   percentagePoints,
   relativeTime,
   signedCompactNumber,
+  signedExactNumber,
   timeUntil,
+  utcDay,
   weekDate,
 } from './format';
 
@@ -207,5 +209,19 @@ describe('format', () => {
     expect(percentagePoints(1 / 3, 2 / 3, 'en-US')).toBe('33.4');
     expect(percentagePoints(0.1 + 0.2, 0.3, 'en-US')).toBe('0');
     expect(percentagePoints(0.625, 0.5, 'de-DE')).toBe('12,5');
+  });
+});
+
+describe('format of trends', () => {
+  it('shows a change in full, with its sign, and none as 0 (FR-REPO-17)', () => {
+    expect([1_234, -42, 0].map((n) => plain(signedExactNumber(n, 'en-US')))).toEqual([
+      '+1,234',
+      '-42',
+      '0',
+    ]);
+  });
+
+  it('tells a UTC day as such, whatever the time zone', () => {
+    expect(plain(utcDay(new Date('2026-11-09T00:00:00Z'), 'en-US'))).toBe('Nov 9, 2026');
   });
 });

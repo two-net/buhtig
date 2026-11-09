@@ -85,6 +85,7 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
 
     for path in [
         "/-/api/repositories/owner/repo",
+        "/-/api/repositories/owner/repo/trends",
         "/-/api/organizations/acme",
         "/-/api/accounts/acme",
         "/-/api/users/mona",

@@ -68,7 +68,7 @@ const RELEASES: usize = 42;
 
 /// What a repository dashboard asks for, besides its summary, and how each is reported:
 /// what its overview shows, and what its other tabs add, as of a user who opens each.
-const REPOSITORY_WIDGETS: [(&str, &str); 12] = [
+const REPOSITORY_WIDGETS: [(&str, &str); 13] = [
     ("stats", "repository stats"),
     ("commit-activity", "repository commit-activity"),
     ("languages", "repository languages"),
@@ -81,6 +81,7 @@ const REPOSITORY_WIDGETS: [(&str, &str); 12] = [
     ("workflow-runs", "repository workflow-runs"),
     ("code-frequency", "repository code-frequency"),
     ("release-cadence", "repository release-cadence"),
+    ("trends", "repository trends"),
 ];
 /// What an organization dashboard asks for, besides its summary.
 const ORGANIZATION_WIDGETS: [(&str, &str); 7] = [

@@ -31,6 +31,7 @@ pub mod credential;
 pub mod github_host;
 pub mod history_entry;
 pub mod pin;
+pub mod repository_observation;
 pub mod schema_version;
 pub mod session;
 pub mod user;
@@ -45,6 +46,7 @@ pub fn schema(builder: SchemaBuilder) -> SchemaBuilder {
         .register(session::Entity)
         .register(credential::Entity)
         .register(cache_entry::Entity)
+        .register(repository_observation::Entity)
         .register(history_entry::Entity)
         .register(pin::Entity)
         .register(schema_version::Entity)

@@ -75,7 +75,10 @@
       <li>
         <strong>What your token read.</strong> The GitHub data that BuhTig read with your token, so
         that it need not ask GitHub every time. Only you are shown it. BuhTig deletes it when you
-        remove or replace the token, and otherwise 30 days after it last read it from GitHub.
+        remove or replace the token, and otherwise 30 days after it last read it from GitHub. It
+        also keeps what the repositories' stat cards showed when your token read them, so that their
+        Activity tab can tell you how they changed: only you are shown these either, and BuhTig
+        deletes them with the token, and otherwise 90 days after it observed them.
       </li>
       <li>
         <strong>Your history.</strong> The 20 dashboards you viewed last, and when, so that you can
@@ -95,6 +98,14 @@
       GitHub profiles show them, not about how you use BuhTig, and BuhTig drops the email addresses
       that GitHub gives with it, such as commit authors', before keeping it. BuhTig deletes it 30
       days after it last read it from GitHub, unless whoever runs it sets another period.
+    </p>
+    <p>
+      So that a repository's Activity tab can tell how its stars, forks, open issues and open pull
+      requests changed, BuhTig also keeps those figures as it reads them while the repository's
+      dashboard is opened, the latest of each day, for 90 days. They are counts about the repository
+      alone, and say nothing of who opened it. BuhTig doesn't ask GitHub for anything more to keep
+      them, so a repository nobody opens isn't observed, and its trends show the days it wasn't as
+      gaps.
     </p>
     <p>
       Signed-in users' home page lists the public repositories whose dashboards were opened on this

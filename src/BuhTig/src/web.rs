@@ -262,6 +262,10 @@ pub fn router(
             get(repositories::release_cadence).with_state(cache.clone()),
         )
         .route(
+            "/-/api/repositories/{owner}/{repo}/trends",
+            get(repositories::trends).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}/refresh",
             post(repositories::refresh).with_state(cache.clone()),
         )

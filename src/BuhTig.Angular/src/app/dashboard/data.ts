@@ -20,6 +20,7 @@ import {
   Repository,
   Stats,
   TopRepository,
+  Trends,
   WorkflowRuns,
   YearCount,
 } from './resources';
@@ -51,6 +52,8 @@ export abstract class RepositoryData {
   abstract readonly codeFrequency: () => Loader<CodeFrequency>;
   /** FR-REPO-16, for its Releases tab. */
   abstract readonly releaseCadence: () => Loader<ReleaseCadence>;
+  /** FR-REPO-17, for its Activity tab. */
+  abstract readonly trends: () => Loader<Trends>;
 }
 
 /**

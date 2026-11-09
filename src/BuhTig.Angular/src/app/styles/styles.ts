@@ -14,6 +14,7 @@ import { Component, ViewEncapsulation } from '@angular/core';
     './stats.css',
     './charts.css',
     './diverging.css',
+    './trends.css',
     './lists.css',
     './sidebar.css',
     './dialog.css',

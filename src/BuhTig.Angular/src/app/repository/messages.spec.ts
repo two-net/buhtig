@@ -1,5 +1,11 @@
-import { duration, exactNumber, percent, weekDate } from '../format/format';
+import { Observation, Period } from '../dashboard/resources';
+import { duration, exactNumber, exactTime, percent, utcDay, weekDate } from '../format/format';
 import {
+  commitComparison,
+  noBaseline,
+  trendChartDescription,
+  trendsDescription,
+  unsupportedReason,
   activityDescription,
   codeFrequencyDescription,
   issueAgeDescription,
@@ -263,6 +269,108 @@ describe('repository messages', () => {
     expect(onAverageOf(cadence)).toBe('on average, of the 100 latest');
     expect(onAverageOf({ ...cadence, sampled: 7, truncated: false })).toBe(
       'on average, of all releases',
+    );
+  });
+});
+
+describe('trends messages', () => {
+  const observation = (at: string, stars: number, openIssues: number): Observation => ({
+    day: new Date(`${at.slice(0, 10)}T00:00:00Z`),
+    observedAt: new Date(at),
+    pullRequestsObservedAt: new Date(at),
+    figures: { stars, forks: 10, openIssues, openPullRequests: 7 },
+  });
+  const from = observation('2026-11-02T10:00:00Z', 100, 50);
+  const to = observation('2026-11-09T09:00:00Z', 112, 44);
+  const told = {
+    days: 7,
+    firstDay: new Date('2026-11-02T00:00:00Z'),
+    observedDays: 3,
+    target: new Date('2026-11-02T09:00:00Z'),
+  };
+  const supported: Period = {
+    ...told,
+    supported: true,
+    from,
+    to,
+    changes: { stars: 12, forks: 0, openIssues: -6, openPullRequests: 0 },
+  };
+  const observed = `Observed on 3 of the 8 days from ${utcDay(told.firstDay)} to ${utcDay(to.day)}.`;
+
+  it('tells what changed between which observations, and on how many days (FR-REPO-17)', () => {
+    expect(trendsDescription(supported, to, from.observedAt)).toBe(
+      `Between ${exactTime(from.observedAt)} and ${exactTime(to.observedAt)}, stars went from ` +
+        '100 to 112 (+12), forks stayed at 10, open issues went from 50 to 44 (-6) and open ' +
+        `pull requests stayed at 7. ${observed}`,
+    );
+  });
+
+  it('says why a period has no change, never that it is zero', () => {
+    const without = (reason: 'first_observation' | 'tracked_later' | 'no_observation_then') =>
+      ({ ...told, supported: false, reason }) as Period;
+    expect(trendsDescription(without('first_observation'), to, to.observedAt)).toBe(
+      `There is no earlier observation to compare with yet. ${observed}`,
+    );
+    expect(unsupportedReason('tracked_later', without('tracked_later'), from.observedAt)).toBe(
+      `BuhTig began recording on ${utcDay(from.observedAt)}, after this period began, so it ` +
+        'cannot tell the change over 7 days.',
+    );
+    expect(
+      unsupportedReason('no_observation_then', without('no_observation_then'), from.observedAt),
+    ).toBe(`BuhTig has no observation from around ${utcDay(told.target)} to compare with.`);
+    expect(noBaseline(to)).toBe(
+      `BuhTig began recording this repository's figures on ${exactTime(to.observedAt)}. It has ` +
+        'no earlier figures, so there is nothing to compare yet. Changes show once it has ' +
+        'observed the repository on another day.',
+    );
+  });
+
+  it('counts the days of a period from its first, its baseline if that is earlier', () => {
+    const month: Period = {
+      ...supported,
+      days: 30,
+      firstDay: new Date('2026-10-08T00:00:00Z'),
+    };
+    expect(trendsDescription(month, to, from.observedAt)).toContain(
+      `Observed on 3 of the 33 days from ${utcDay(month.firstDay!)} to ${utcDay(to.day)}.`,
+    );
+  });
+
+  it('describes each chart, with the days not observed (NFR-UX-04)', () => {
+    expect(trendChartDescription('stars', [100, null, 112])).toBe(
+      'Stars, from 100 to 112, observed on 2 of 3 days, with days not observed between.',
+    );
+    expect(trendChartDescription('openIssues', [5, 5])).toBe(
+      'Open issues, from 5 to 5, observed on 2 of 2 days.',
+    );
+    expect(trendChartDescription('forks', [null])).toBe('Forks: not observed in this period.');
+  });
+
+  it('compares the commits of whole weeks (FR-REPO-18)', () => {
+    const weeks = (from: string, to: string, commits: number) => ({
+      from: new Date(`${from}T00:00:00Z`),
+      to: new Date(`${to}T00:00:00Z`),
+      commits,
+    });
+    expect(
+      commitComparison({
+        weeks: 4,
+        recent: weeks('2026-10-04', '2026-10-31', 34),
+        before: weeks('2026-09-06', '2026-10-03', 1),
+      }),
+    ).toBe(
+      `34 commits in the 4 weeks from ${weekDate(new Date('2026-10-04T00:00:00Z'))} to ` +
+        `${weekDate(new Date('2026-10-31T00:00:00Z'))}, and 1 in the 4 weeks before.`,
+    );
+    expect(
+      commitComparison({
+        weeks: 1,
+        recent: weeks('2026-10-25', '2026-10-31', 1),
+        before: weeks('2026-10-18', '2026-10-24', 0),
+      }),
+    ).toBe(
+      `1 commit in the week from ${weekDate(new Date('2026-10-25T00:00:00Z'))} to ` +
+        `${weekDate(new Date('2026-10-31T00:00:00Z'))}, and 0 in the week before.`,
     );
   });
 });

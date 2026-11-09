@@ -38,6 +38,9 @@ const signedCompactFormat = once(
     }),
 );
 const numberFormat = once((locale?: string) => new Intl.NumberFormat(locale));
+const signedNumberFormat = once(
+  (locale?: string) => new Intl.NumberFormat(locale, { signDisplay: 'exceptZero' }),
+);
 const relativeFormat = once(
   (locale?: string) => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }),
 );
@@ -108,6 +111,11 @@ export function exactNumber(value: number, locale?: string): string {
   return numberFormat(locale).format(value);
 }
 
+/** A difference in full, with its sign, such as "+1,234" or "-42", and "0" for none. */
+export function signedExactNumber(value: number, locale?: string): string {
+  return signedNumberFormat(locale).format(value);
+}
+
 /**
  * How long before `now` a time was, in the largest whole unit, such as "4 minutes ago",
  * "yesterday" or "3 weeks ago". Under a minute, or later than `now`, as when the browser's
@@ -173,6 +181,14 @@ export function exactDay(time: Date, locale?: string): string {
  */
 export function weekDate(start: Date, locale?: string): string {
   return weekFormat(locale).format(start);
+}
+
+/**
+ * A UTC day, such as "Nov 9, 2026", told in UTC, as BuhTig keeps one observation of a repository
+ * a day by UTC days (FR-DATA-13).
+ */
+export function utcDay(day: Date, locale?: string): string {
+  return weekFormat(locale).format(day);
 }
 
 /** The month of a day in UTC, in short, such as "Oct", as a chart's axis shows it. */

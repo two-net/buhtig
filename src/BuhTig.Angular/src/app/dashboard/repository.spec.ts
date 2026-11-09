@@ -165,6 +165,26 @@ describe('RepositoryDashboard', () => {
       downloads: 7,
       truncated: false,
     },
+    trends: {
+      scope: 'shared',
+      kept_days: 90,
+      tracking_since: '2026-10-20T10:00:00.000Z',
+      observations: [
+        {
+          day: '2026-10-20',
+          observed_at: '2026-10-20T10:00:00.000Z',
+          pull_requests_observed_at: '2026-10-20T10:00:00.000Z',
+          stars: 1,
+          forks: 2,
+          open_issues: 12,
+          open_pull_requests: 3,
+        },
+      ],
+      gaps: [],
+      periods: [{ days: 30, supported: false, reason: 'first_observation' }],
+      fetched_at: null,
+      stale: null,
+    },
   };
 
   /** The parts that the overview shows. The other tabs ask for more of their own. */
@@ -264,6 +284,7 @@ describe('RepositoryDashboard', () => {
       'contributors',
       'releases',
       'stats',
+      'trends',
       'workflow-runs',
     ]);
     expect(tabs().map(shown)).toEqual([
@@ -299,6 +320,7 @@ describe('RepositoryDashboard', () => {
         'code-frequency',
         'commit-activity',
         'commits',
+        'trends',
         'workflow-runs',
       ],
       '/acme/widget/issues': ['app-repository-issues-tab', 'issue-age', 'issues'],
@@ -340,7 +362,7 @@ describe('RepositoryDashboard', () => {
 
     // Each tab asks only for what no tab before it did.
     for (const [url, parts] of [
-      ['/acme/widget/activity', ['code-frequency', 'workflow-runs']],
+      ['/acme/widget/activity', ['code-frequency', 'trends', 'workflow-runs']],
       ['/acme/widget/issues', ['issue-age']],
       ['/acme/widget', []],
       ['/acme/widget/activity', []],

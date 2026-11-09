@@ -56,6 +56,7 @@ BuhTig is read-only: it never changes anything on GitHub. Its name is "GitHub" s
 | Sign-in credential | The access token GitHub issues to BuhTig when a user signs in. |
 | Shared cache | Cached GitHub data that contains only public information and may be served to anyone. |
 | Private cache | Cached GitHub data fetched with a user's PAT, served only to that user. |
+| Observation | What a repository's stat cards showed when BuhTig read them from GitHub, kept so that its dashboard can tell how they changed (FR-DATA-13). It belongs to a cache scope as the data it was made of does. |
 | TTL | Time to live: how long cached data is considered fresh. |
 | Auto-migration | Automatic creation and update of the database schema when BuhTig starts. |
 | ORM | Object-relational mapper: the layer through which the application reads and writes the database. |
@@ -111,7 +112,7 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 - **Accounts:** sign-in with GitHub (§4.5) and an optional personal access token (§4.6).
 - **Access:** public and private access rules and modes (§4.7).
 - **Personal shortcuts:** history and pinned dashboards (§4.8).
-- **Data:** GitHub retrieval with caching in PostgreSQL (§4.9).
+- **Data:** GitHub retrieval with caching in PostgreSQL, and observations of how repositories' figures change (§4.9).
 - **Motion:** animation throughout the UI (§4.10).
 - **Operation:** one config file, auto-migration, and a health check (§4.11–§4.13).
 
@@ -316,6 +317,8 @@ In Table 4-1, `github.com` stands for `github.host` (CON-09): with GitHub Enterp
 | FR-REPO-14 | The Activity tab shall show how the 50 latest GitHub Actions workflow runs for pushes to the default branch fared: the pass rate of those that passed or failed (failure, timed out, or startup failure; cancelled, skipped, neutral and stale runs count as neither), the latest run's state as a badge in words and with an icon, linking to the run, and the average duration of completed runs. When GitHub will not list the runs to the viewer's credential, it shall say what the token needs. | Should |
 | FR-REPO-15 | The Activity tab shall chart the lines added and deleted on the default branch in each of the last 52 weeks, additions up and deletions down from one baseline, with a summary sentence and its data as a table (NFR-UX-04). It shall handle a statistic GitHub is still computing as FR-REPO-10 says, and say so when GitHub does not compute it, as for repositories with 10,000 commits or more. | Should |
 | FR-REPO-16 | The Releases tab shall show, over the 100 latest releases without drafts, the average time between one release and the next, how many are stable and how many pre-releases, and how many times their files were downloaded, and say how many releases these figures are of. | Should |
+| FR-REPO-17 | The Activity tab shall show how the repository's stars, forks, open issues and open pull requests changed over 7, 30 or 90 days, as BuhTig observed them (FR-DATA-13), the 30 days first. For each figure, it shall show its change between the two observations that FR-DATA-14 picks, with the figure at each, and say when each was made. Where FR-DATA-14 gives no change, it shall say why, and show no change at all, never a zero: a repository observed once shall be said to have no earlier baseline. It shall chart each figure over the period's days since the first observation, leaving the days without an observation as gaps, neither drawn as zero nor joined across. It shall say on how many of the period's days there is an observation, that observations are made only as the dashboard is opened, and how long they are kept, and, of what was observed with the viewer's PAT, that it is theirs alone. It shall have a summary sentence and its data as a table, one row a day, the days without an observation said to be so (NFR-UX-04). | Should |
+| FR-REPO-18 | Beside FR-REPO-17's figures, the Activity tab shall compare the commits to the default branch in as many whole weeks as the period, 1, 4 or 13, that have ended, with those in as many weeks before them, from the commit activity of FR-REPO-03, and say which weeks they are. It shall leave the comparison out while GitHub is still computing the commit activity, or when it gives too few weeks. | Could |
 
 ### 4.4 Organization and user dashboards
 
@@ -360,7 +363,7 @@ In Table 4-1, `github.com` stands for `github.host` (CON-09): with GitHub Enterp
 | FR-PAT-02 | Before saving, BuhTig shall validate the PAT with GitHub. It shall reject the PAT if it is invalid or expired, or if it belongs to a GitHub account other than the signed-in user's. | Must |
 | FR-PAT-03 | Every type of personal access token GitHub offers shall be accepted (at the time of writing, classic and fine-grained). | Must |
 | FR-PAT-04 | After saving, BuhTig shall never display or return the PAT again. Settings shall show only its type, its last four characters, its scopes or permissions when GitHub reports them, its expiry date when known, and when it was last validated. | Must |
-| FR-PAT-05 | The user shall be able to replace or remove the PAT at any time. Removal or replacement shall take effect immediately and delete the user's private cache. | Must |
+| FR-PAT-05 | The user shall be able to replace or remove the PAT at any time. Removal or replacement shall take effect immediately and delete the user's private cache, and what was observed with the PAT (FR-DATA-14). | Must |
 | FR-PAT-06 | While a valid PAT is saved, every GitHub request made for that user shall use the PAT. Otherwise BuhTig shall use the sign-in credential. | Must |
 | FR-PAT-07 | If GitHub rejects a saved PAT (revoked or expired), BuhTig shall mark it invalid, fall back to the sign-in credential, and show a banner asking the user to replace it. | Must |
 | FR-PAT-08 | When GitHub denies access because an organization requires the PAT to be separately authorized or approved (e.g., for single sign-on), BuhTig shall say so and explain how to fix it. | Should |
@@ -395,7 +398,7 @@ In Table 4-1, `github.com` stands for `github.host` (CON-09): with GitHub Enterp
 | FR-PERS-01 | For signed-in users, BuhTig shall record the 20 most recently viewed dashboards (resource and time only). | Should |
 | FR-PERS-02 | Signed-in users shall be able to pin up to 12 dashboards and unpin them. Pins come first among the home-page shortcuts. | Should |
 | FR-PERS-03 | Signed-in users shall be able to clear their history. | Should |
-| FR-PERS-04 | After confirmation, signed-in users shall be able to delete all their BuhTig data from Settings: account, sessions, credentials, private cache, history, and pins. BuhTig shall explain that removing its access on GitHub is done in GitHub's settings, and link there. | Must |
+| FR-PERS-04 | After confirmation, signed-in users shall be able to delete all their BuhTig data from Settings: account, sessions, credentials, private cache, the observations made with their PAT, history, and pins. BuhTig shall explain that removing its access on GitHub is done in GitHub's settings, and link there. | Must |
 | FR-PERS-05 | Signed-in users shall be able to reorder their pins. | Could |
 
 ### 4.9 GitHub data and caching
@@ -414,6 +417,8 @@ In Table 4-1, `github.com` stands for `github.host` (CON-09): with GitHub Enterp
 | FR-DATA-10 | Each visitor shall be limited to `limits.visitor_fetches_per_hour` (default 30) dashboard loads that need a GitHub fetch. Loads served from cache are not limited. A visitor who reaches the limit shall see a "Sign in to keep exploring" prompt. | Should |
 | FR-DATA-11 | When less than 10% of the rate limit available for visitor requests remains, BuhTig shall serve visitors from cache only, with a sign-in prompt, until the limit resets. | Should |
 | FR-DATA-12 | In-app housekeeping shall delete cache entries fetched more than `cache.retention` ago (default 30 days). | Must |
+| FR-DATA-13 | Each time a repository's stat cards (FR-REPO-02) are made from data that GitHub gave or confirmed, none of it stale (FR-DATA-05), BuhTig shall record their stars, forks, open issues and open pull requests as an observation of the repository, with when GitHub gave or confirmed the repository and the count of its open pull requests. The observation shall be in the cache scope that data is in, with the PAT that fetched it (FR-DATA-04). BuhTig shall record none when the two are in different scopes, nor in the shared cache's scope for a repository that is not public. Each scope shall keep one observation of a repository a UTC day, the latest, by the repository's ID on GitHub, so that a renamed repository keeps its observations. BuhTig shall make no request to GitHub in order to observe a repository, such as for its past stargazers, and shall never fill in what it did not observe. In-app housekeeping shall delete observations made more than 90 days ago. | Should |
+| FR-DATA-14 | BuhTig shall tell a viewer only the observations in the scope that its data of the repository is in, and only once GitHub has given or confirmed the repository to them within `cache.ttl`, never from older data served while GitHub fails or a visitor is held back (FR-DATA-05, FR-DATA-10), so that one who may no longer see it is told nothing of it (FR-ACC-07). No user shall be told what was observed with another user's PAT. The change over a period of P days shall be from the observation nearest to P days before the latest one, within a tenth of P and at least a day either way, the earlier of two as near, to the latest. Without such an observation, there is no change: BuhTig shall say whether the repository was observed only once, observed first after the period began, or not observed near its start. The observations made with a PAT shall be deleted with its private cache (FR-PAT-05, FR-PAT-07), those of a scope that GitHub no longer lets see a repository with its cache entry for the repository, and a user's with them (DR-04). | Should |
 
 ### 4.10 Animation
 
@@ -475,14 +480,14 @@ Motion is part of BuhTig's character, but it must feel fast and stay out of the 
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-DB-01 | All persistent state (users, sessions, credentials, cache, history, pins, schema version, and GitHub host) shall be stored in the one PostgreSQL database given in the config file. BuhTig shall keep no persistent state anywhere else, such as local files or other databases. | Must |
+| FR-DB-01 | All persistent state (users, sessions, credentials, cache, observations, history, pins, schema version, and GitHub host) shall be stored in the one PostgreSQL database given in the config file. BuhTig shall keep no persistent state anywhere else, such as local files or other databases. | Must |
 | FR-DB-02 | On every start, before accepting requests, BuhTig shall automatically bring the schema in line with the ORM data model. No manual step, separate tool, or separate job shall be needed. | Must |
 | FR-DB-03 | Auto-migration shall be idempotent: starting a version whose schema is already up to date shall change nothing. | Must |
-| FR-DB-04 | Auto-migration shall not destroy user data. It may add tables, columns, and indexes, but shall not drop or rename tables or columns holding users, credentials, history, or pins. Cache tables may be emptied and rebuilt. | Must |
+| FR-DB-04 | Auto-migration shall not destroy user data. It may add tables, columns, and indexes, but shall not drop or rename tables or columns holding users, credentials, observations, history, or pins. Cache tables may be emptied and rebuilt; observations, which cannot be fetched again, shall be kept. | Must |
 | FR-DB-05 | If migration fails, BuhTig shall log the cause, exit with a non-zero status, and serve no requests. | Must |
 | FR-DB-06 | If several BuhTig processes start against the same database, only one shall migrate at a time, and the others shall wait for it to finish. | Should |
 | FR-DB-07 | BuhTig shall refuse to start, with a clear message, if its version is older than the schema in the database. Downgrades are not supported. | Should |
-| FR-DB-08 | In-app housekeeping shall run at least hourly. It shall delete expired sessions, cache entries past retention (FR-DATA-12), and history beyond 20 entries per user. | Must |
+| FR-DB-08 | In-app housekeeping shall run at least hourly. It shall delete expired sessions, cache entries past retention (FR-DATA-12), observations made more than 90 days ago (FR-DATA-13), and history beyond 20 entries per user. | Must |
 | FR-DB-09 | If the database becomes unreachable while BuhTig is running, BuhTig shall show a friendly error page and report itself unhealthy (FR-OPS-01). It shall recover automatically, without a restart, when the database returns. | Must |
 | FR-DB-10 | If the database given in the config file does not exist, BuhTig shall create it at startup, before migrating, owned by the configured role. If several BuhTig processes start at once, they shall create it once between them, and all shall start. If BuhTig cannot create it, it shall log why, exit with a non-zero status, and serve no requests. | Should |
 | FR-DB-11 | A database shall hold data from one GitHub host, since GitHub's user IDs and names mean something on one host alone (CON-09). BuhTig shall record `github.host` when it first migrates a database, or github.com for a database that an earlier release migrated. If `github.host` is another host at a later start, BuhTig shall refuse to start with a clear message that names `github.host`, and change nothing. | Must |
@@ -524,6 +529,7 @@ The physical design (tables, columns, types, and indexes) follows from the ORM e
 | Session | A signed-in browser | Hash of the session ID, user, created at, last used at, expires at | Expiry or sign-out |
 | Credential | GitHub access for a user | User, kind (sign-in or PAT), encrypted value. For PATs also: type, last four characters, scopes or permissions, expiry, status, last validated at | Replaced, removed, or user deleted |
 | Cache entry | Cached GitHub data | Resource key, scope (shared or one user), data, fetched at, expires at, GitHub validator for conditional requests | `cache.retention` |
+| Repository observation | What a repository's stat cards showed when GitHub gave them (FR-DATA-13) | Scope (shared, or one user with the PAT that read them), the repository's GitHub ID, UTC day, stars, forks, open issues, open pull requests, when observed | 90 days |
 | History entry | A recently viewed dashboard | User, resource kind and name, last viewed at | The 20 newest per user |
 | Pin | A pinned dashboard | User, resource kind and name, position | Unpinned (at most 12 per user) |
 | Schema version | Migration bookkeeping | Version, applied at | Permanent |
@@ -533,16 +539,16 @@ The physical design (tables, columns, types, and indexes) follows from the ORM e
 
 | ID | Rule | Priority |
 |---|---|---|
-| DR-01 | BuhTig shall store only the personal data listed in §5.1. It shall not store email addresses, or any GitHub content other than cache entries. | Must |
+| DR-01 | BuhTig shall store only the personal data listed in §5.1. It shall not store email addresses, or any GitHub content other than cache entries and repository observations. | Must |
 | DR-02 | Session identifiers shall be stored only as hashes. | Must |
 | DR-03 | Credentials shall be encrypted at rest with `security.encryption_key`. If the key changes, any credential that can no longer be decrypted shall be treated as invalid: affected users are signed out and asked to re-enter their PAT. | Must |
-| DR-04 | Deleting a user shall delete their sessions, credentials, private cache, history, and pins. | Must |
+| DR-04 | Deleting a user shall delete their sessions, credentials, private cache, the observations made with their PAT, history, and pins. | Must |
 | DR-05 | The database itself, not only the application, shall enforce uniqueness and relationships (e.g., one user per GitHub user ID, one pin per user and resource). | Should |
 | DR-06 | All timestamps shall be stored in UTC. | Must |
 
 ### 5.3 Expected volume
 
-The design targets one instance with up to 10,000 users, up to 100,000 cache entries, and a database of a few gigabytes at most. Housekeeping keeps every table bounded, which is why partitioning is unnecessary (CON-05).
+The design targets one instance with up to 10,000 users, up to 100,000 cache entries, and a database of a few gigabytes at most. Repository observations add at most one small row for each repository, scope and day the repository's dashboard is opened, kept for 90 days. Housekeeping keeps every table bounded, which is why partitioning is unnecessary (CON-05).
 
 ---
 
@@ -593,7 +599,7 @@ The design targets one instance with up to 10,000 users, up to 100,000 cache ent
 |---|---|---|
 | NFR-PRIV-01 | BuhTig shall collect only the data in §5.1 and use no analytics or third-party tracking. It shall set only strictly necessary cookies: the session cookie and a short-lived sign-in state cookie. | Must |
 | NFR-PRIV-02 | For visitors, BuhTig shall keep no server-side records other than transient rate-limit counters and standard request logs. | Must |
-| NFR-PRIV-03 | The Privacy page shall state what BuhTig stores, why, for how long, and how to delete it, that public repositories opened on the instance are listed on its home pages (FR-SRCH-11), and that link previews and cards show a dashboard's figures only while it was opened lately (FR-NAV-06, FR-NAV-07). | Should |
+| NFR-PRIV-03 | The Privacy page shall state what BuhTig stores, why, for how long, and how to delete it, that it keeps what repositories' stat cards showed for 90 days (FR-DATA-13), that public repositories opened on the instance are listed on its home pages (FR-SRCH-11), and that link previews and cards show a dashboard's figures only while it was opened lately (FR-NAV-06, FR-NAV-07). | Should |
 
 ### 6.6 Usability and accessibility
 
@@ -639,6 +645,7 @@ These scenarios are the minimum release checks. Each should be automated where p
 | AC-14 | Public mode. Alice saves a PAT that can read `owner/secret-repo` and opens its dashboard. Then a visitor opens `/-/preview/owner/secret-repo.svg`, and `/-/preview/owner/repo.svg` both before and after another visitor opens `/owner/repo`. | The card of `owner/secret-repo` shows its name alone, as does that of `owner/repo` at first. Once a visitor has opened `/owner/repo`, its card shows its description and figures. GitHub is never asked for a card. |
 | AC-15 | `github.host` is `ghe.example.com`. A user enters `github.com/owner/repo`, then `https://ghe.example.com/owner/repo`. Then the operator removes `github.host` and restarts BuhTig. | The inline message "BuhTig supports ghe.example.com URLs only." appears, and the page does not navigate; the second input opens `/owner/repo`. BuhTig then refuses to start, naming `github.host`, and the database is unchanged. |
 | AC-16 | Alice saves a fine-grained PAT that can read `owner/repo` and `owner/other`, and the GitHub Actions of `owner/repo` only. `owner/other` has no releases. She opens `/-/compare/owner/repo...owner/other`. | The workflow runs section shows the pass rate and average duration of `owner/repo`, and says of `owner/other` that GitHub won't show its runs to her token, and that the token needs read access to Actions. The release cadence section says that `owner/other` has no releases. Neither shows a zero for `owner/other`, nor how the two differ there. The other sections show both repositories' figures, with what each is of and when it was fetched. |
+| AC-17 | Public mode. Alice saves a PAT that can read `owner/secret-repo` and opens `/owner/secret-repo/activity`, and a visitor opens `/owner/repo/activity`. A week later, after `owner/repo` went unopened for some days, both open them again. Then Bob, signed in without access, opens `/owner/secret-repo/activity`. | At first, each Trends widget says when BuhTig began recording, and that there is no earlier baseline. A week later, each tells the change over 7 days between its two observations, with the figures and the times recorded. The days without an observation show as gaps, not zeros, and the 30 and 90 days say that BuhTig began recording after they began. Bob gets "Not found or private", and nothing observed with Alice's PAT. |
 
 ---
 
@@ -649,7 +656,7 @@ These items are not part of this release; they are candidates for later versions
 - More than one GitHub host per instance, and GitHub Enterprise Server with a certificate that no public root certificate authority vouches for.
 - Any write action on GitHub.
 - Rendering READMEs or any other Markdown or HTML from GitHub.
-- Data that needs bulk crawling or elevated access, such as star history and traffic (views and clones).
+- Data that needs bulk crawling or elevated access, such as star history from before BuhTig observed a repository (FR-DATA-13), and traffic (views and clones).
 - Real-time updates through webhooks, notifications, and email.
 - Custom dashboard layouts, comparing more than two resources at once, and exporting data or images, other than the cards of FR-NAV-07.
 - An administration UI, teams, and sharing private dashboards with other users.

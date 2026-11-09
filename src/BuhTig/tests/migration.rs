@@ -82,8 +82,8 @@ fn first_start_creates_the_schema_and_a_restart_changes_nothing() {
             "SELECT string_agg(table_name, ' ' ORDER BY table_name) \
              FROM information_schema.tables WHERE table_schema = 'public'"
         ),
-        "cache_entries credentials github_hosts history_entries pins schema_versions sessions \
-         users"
+        "cache_entries credentials github_hosts history_entries pins repository_observations \
+         schema_versions sessions users"
     );
     assert_eq!(db.psql("SELECT host FROM github_hosts"), "github.com");
 
@@ -265,6 +265,20 @@ fn every_earlier_release_upgrades_and_keeps_its_data() {
         }
         let cached = db.psql("SELECT count(*) FROM cache_entries");
         assert_ne!(cached, "0", "{release} has no cache entries");
+        // What was observed of repositories cannot be fetched again, so it is kept as users'
+        // data is (FR-DB-04), by the releases that observe.
+        let observed = || {
+            db.psql(
+                "SELECT string_agg(concat_ws(' ', scope, repository_id, day, stars, forks, \
+                 open_issues, open_pull_requests), ', ' ORDER BY id) \
+                 FROM repository_observations",
+            )
+        };
+        let observes = db.psql("SELECT to_regclass('repository_observations') IS NOT NULL") == "t";
+        let observations = observes.then(observed);
+        if let Some(observations) = &observations {
+            assert!(!observations.is_empty(), "{release} has no observations");
+        }
 
         let (running, log) = start(&db.config);
         assert_logged(
@@ -274,6 +288,9 @@ fn every_earlier_release_upgrades_and_keeps_its_data() {
         drop(running);
         assert_eq!(db.fingerprint(), expected, "{release}");
         assert_eq!(rows(), before, "{release}");
+        if let Some(observations) = observations {
+            assert_eq!(observed(), observations, "{release}");
+        }
         // The cache may be emptied and rebuilt, but not cut down (FR-DB-04).
         let kept = db.psql("SELECT count(*) FROM cache_entries");
         assert!(
@@ -542,6 +559,13 @@ fn the_database_enforces_uniqueness_and_relationships() {
             VALUES (1, 'repository', 'owner/repo', now());
         INSERT INTO pins (user_id, resource_kind, resource_name, position)
             VALUES (1, 'repository', 'owner/repo', 0), (2, 'repository', 'owner/repo', 0);
+        INSERT INTO repository_observations (scope, repository_id, day, user_id, credential_id,
+                observed_at, pull_requests_observed_at, stars, forks, open_issues,
+                open_pull_requests)
+            VALUES ('shared', 42, '2026-11-09', NULL, NULL, now(), now(), 1, 1, 1, 1),
+                   ('user:1', 42, '2026-11-09', 1, (SELECT id FROM credentials WHERE kind = 'pat'),
+                    now(), now(), 1, 1, 1, 1),
+                   ('user:1', 43, '2026-11-09', 1, NULL, now(), now(), 1, 1, 1, 1);
         "#,
     );
 
@@ -575,19 +599,43 @@ fn the_database_enforces_uniqueness_and_relationships() {
              VALUES (99, 'repository', 'owner/repo', 0)",
             "violates foreign key constraint",
         ),
+        // One observation of a repository a day in each scope (FR-DATA-13).
+        (
+            "INSERT INTO repository_observations (scope, repository_id, day, observed_at, \
+             pull_requests_observed_at, stars, forks, open_issues, open_pull_requests) \
+             VALUES ('shared', 42, '2026-11-09', now(), now(), 2, 2, 2, 2)",
+            "duplicate key value violates unique constraint",
+        ),
+        (
+            "INSERT INTO repository_observations (scope, repository_id, day, user_id, \
+             credential_id, observed_at, pull_requests_observed_at, stars, forks, open_issues, \
+             open_pull_requests) \
+             VALUES ('user:1', 44, '2026-11-09', 1, 99, now(), now(), 1, 1, 1, 1)",
+            "violates foreign key constraint",
+        ),
     ] {
         let error = db.cluster.try_psql(&db.database, sql).unwrap_err();
         assert!(error.contains(problem), "{sql}: {error}");
     }
 
+    // What a PAT observed goes with it (FR-PAT-05).
+    db.psql("DELETE FROM credentials WHERE kind = 'pat'");
+    assert_eq!(
+        db.psql(
+            "SELECT string_agg(scope || ' ' || repository_id, ', ' ORDER BY id) \
+             FROM repository_observations"
+        ),
+        "shared 42, user:1 43"
+    );
     db.psql("DELETE FROM users WHERE id = 1");
     assert_eq!(
         db.psql(
             "SELECT (SELECT count(*) FROM sessions) || ' ' || (SELECT count(*) FROM credentials)
                 || ' ' || (SELECT string_agg(scope, ' ') FROM cache_entries)
                 || ' ' || (SELECT count(*) FROM history_entries)
-                || ' ' || (SELECT string_agg(user_id::text, ' ') FROM pins)"
+                || ' ' || (SELECT string_agg(user_id::text, ' ') FROM pins)
+                || ' ' || (SELECT string_agg(scope, ' ') FROM repository_observations)"
         ),
-        "0 0 shared 0 2"
+        "0 0 shared 0 2 shared"
     );
 }

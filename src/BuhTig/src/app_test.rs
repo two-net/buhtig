@@ -40,9 +40,9 @@ const APP: &str = "Basic Y2xpZW50LWlkOmNsaWVudC1zZWNyZXQ=";
 /// which GitHub lists to Hubot's PAT alone, at `/user/repos`. There, any other credential
 /// gets a list of public repositories, as GitHub lists the sign-in credential's user's, so
 /// that one read without the PAT would be seen in the shared cache. Once `revoked`, GitHub
-/// rejects Hubot's PAT. Octo's repositories have pull requests, open issues, releases and
-/// workflow runs, to whoever GitHub finds the repository for, as [`under`] tells them.
-/// Anything else is not found.
+/// rejects Hubot's PAT. Octo's repositories have pull requests, 2 of them open, open issues,
+/// releases and workflow runs, to whoever GitHub finds the repository for, as [`under`] tells
+/// them. Anything else is not found.
 fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
     Stub::new(move |request: &Request<_>| {
         let pat = request
@@ -83,12 +83,21 @@ fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
                 let searched = url::form_urlencoded::parse(query.as_bytes())
                     .find(|(key, _)| key == "q")
                     .and_then(|(_, q)| {
-                        let name = q.strip_prefix("repo:octo/")?.strip_suffix(" is:pr")?;
-                        visible.contains(&name).then(|| name.to_owned())
+                        let (name, qualifiers) = q.strip_prefix("repo:octo/")?.split_once(' ')?;
+                        visible
+                            .contains(&name)
+                            .then(|| (name.to_owned(), qualifiers.to_owned()))
                     });
                 match searched {
-                    Some(name) => answer(200, &[], &under(&name, "pulls").to_string()),
-                    None => answer(422, &[], r#"{"message": "Validation Failed"}"#),
+                    Some((name, qualifiers)) if qualifiers == "is:pr" => {
+                        answer(200, &[], &under(&name, "pulls").to_string())
+                    }
+                    Some((_, qualifiers)) if qualifiers == "is:pr is:open" => answer(
+                        200,
+                        &[],
+                        r#"{"total_count": 2, "incomplete_results": false, "items": [{}]}"#,
+                    ),
+                    _ => answer(422, &[], r#"{"message": "Validation Failed"}"#),
                 }
             }
             path => match path.strip_prefix("/repos/octo/") {
@@ -110,12 +119,14 @@ fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
 /// Octo's repository `name`, as GitHub gives it: `secret` and `leaky` are private, and
 /// `inner` internal, which GitHub marks private too.
 fn repository(name: &str) -> Value {
-    let visibility = match name {
-        "secret" | "leaky" => "private",
-        "inner" => "internal",
-        _ => "public",
+    let (visibility, id) = match name {
+        "secret" => ("private", 1002),
+        "leaky" => ("private", 1004),
+        "inner" => ("internal", 1003),
+        _ => ("public", 1001),
     };
     json!({
+        "id": id,
         "name": name,
         "full_name": format!("octo/{name}"),
         "owner": {"login": "octo"},
@@ -123,6 +134,10 @@ fn repository(name: &str) -> Value {
         "visibility": visibility,
         "default_branch": "main",
         "pushed_at": "2026-10-01T00:00:00Z",
+        "stargazers_count": 50,
+        "forks_count": 5,
+        "subscribers_count": 3,
+        "open_issues_count": 7,
     })
 }
 
@@ -656,7 +671,7 @@ async fn cards_show_what_visitors_dashboards_read_alone() {
     assert!(
         card.body.contains(
             "aria-label=\"octo/public on BuhTig: A dashboard of the GitHub repository \
-             octo/public.\""
+             octo/public. 50 stars, 5 forks.\""
         ),
         "{card:?}"
     );
@@ -935,6 +950,11 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
             "/-/api/repositories/octo/secret/release-cadence",
             "/-/api/repositories/octo/inner/merge-velocity",
             "/-/api/repositories/octo/inner/workflow-runs",
+            // What is observed of them (FR-DATA-13).
+            "/-/api/repositories/octo/public/trends",
+            "/-/api/repositories/octo/secret/trends",
+            "/-/api/repositories/octo/inner/trends",
+            "/-/api/repositories/octo/leaky/trends",
             "/-/api/accounts/hubot",
             "/-/api/users/hubot",
             "/-/api/users/hubot/stats",
@@ -977,13 +997,14 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
         ),
         "0"
     );
-    // The repository, and its runs, open issues, releases and pull requests searched for.
+    // The repository, and its runs, open issues, releases, pull requests searched for, and
+    // the count of those open, which its trends observe.
     assert_eq!(
         served.psql(
             "SELECT count(*) FROM cache_entries \
              WHERE scope <> 'shared' AND resource_key LIKE '%secret%'"
         ),
-        "5"
+        "6"
     );
     let hubot = served.psql("SELECT id FROM users WHERE login = 'hubot'");
     let pat = served.psql(&format!(
@@ -995,6 +1016,217 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
              WHERE scope <> 'shared' GROUP BY scope, user_id, credential_id"
         )),
         format!("user:{hubot}|{hubot}|{pat}|t")
+    );
+    // What was observed in the shared scope is of the public repository alone, and no one's;
+    // what Hubot's PAT observed is Hubot's, with the PAT. `octo/leaky` was not: GitHub would
+    // not count its pull requests.
+    assert_eq!(
+        served.psql(
+            "SELECT string_agg(scope || ' ' || repository_id || ' ' || \
+                coalesce(user_id::text, '-') || ' ' || coalesce(credential_id::text, '-'), \
+                ', ' ORDER BY scope, repository_id) \
+             FROM repository_observations"
+        ),
+        format!(
+            "shared 1001 - -, user:{hubot} 1001 {hubot} {pat}, user:{hubot} 1002 {hubot} {pat}, \
+             user:{hubot} 1003 {hubot} {pat}"
+        )
+    );
+}
+
+/// What a viewer is told of how a repository's figures changed (FR-REPO-17), as the stat
+/// cards observed them, from `viewer`'s point of view: the scope, and the stars of each
+/// observation.
+async fn trends(served: &Served, viewer: &Viewer, repo: &str) -> (u16, Value) {
+    let answer = served
+        .get(viewer, &format!("/-/api/repositories/octo/{repo}/trends"))
+        .await;
+    assert_eq!(
+        answer.cache_control.as_deref(),
+        Some("no-store"),
+        "{answer:?}"
+    );
+    let body = if answer.status == 200 {
+        answer.json()
+    } else {
+        assert_eq!(answer.body, "", "{answer:?}");
+        Value::Null
+    };
+    (answer.status, body)
+}
+
+/// AC-17, FR-DATA-13, FR-DATA-14: opening a dashboard observes its stat cards in the
+/// viewer's scope. A newly tracked repository says that no earlier baseline exists, and no
+/// one is told what another user's PAT observed.
+#[tokio::test(flavor = "multi_thread")]
+async fn trends_are_observed_as_dashboards_open_and_told_within_their_scope() {
+    let served = serve("public").await;
+    let mona = served.mona().await;
+    let hubot = served.hubot().await;
+
+    // Hubot opens Octo's private repository, and its public one.
+    for repo in ["secret", "public"] {
+        let stats = served
+            .get(&hubot, &format!("/-/api/repositories/octo/{repo}/stats"))
+            .await;
+        assert_eq!(stats.status, 200, "{stats:?}");
+        assert_eq!(stats.json()["stars"], 50);
+    }
+    let (status, secret) = trends(&served, &hubot, "secret").await;
+    assert_eq!((status, &secret["scope"]), (200, &json!("private")));
+    let observed = &secret["observations"][0];
+    assert_eq!(
+        (
+            &observed["stars"],
+            &observed["forks"],
+            &observed["open_issues"],
+            &observed["open_pull_requests"]
+        ),
+        (&json!(50), &json!(5), &json!(5), &json!(2))
+    );
+    assert_eq!(secret["tracking_since"], observed["observed_at"]);
+    for period in secret["periods"].as_array().unwrap() {
+        assert_eq!(period["reason"], "first_observation", "{period}");
+    }
+
+    // Neither Mona nor a visitor is told anything of it, not even that it was observed.
+    for viewer in [&mona, &VISITOR] {
+        assert_eq!(trends(&served, viewer, "secret").await, (404, Value::Null));
+    }
+    // Of the public one, they are told what the shared scope observed, as it opened for
+    // them, and not what Hubot's PAT did.
+    let (_, hubots) = trends(&served, &hubot, "public").await;
+    let (status, monas) = trends(&served, &mona, "public").await;
+    let (_, visitors) = trends(&served, &VISITOR, "public").await;
+    assert_eq!((status, &monas["scope"]), (200, &json!("shared")));
+    assert_eq!(monas["observations"].as_array().unwrap().len(), 1);
+    assert_ne!(
+        monas["observations"][0]["observed_at"],
+        hubots["observations"][0]["observed_at"]
+    );
+    assert_eq!(visitors["observations"], monas["observations"]);
+
+    // A day later, the next observation gives the change since, between the two.
+    let hubot_id = served.psql("SELECT id FROM users WHERE login = 'hubot'");
+    served.psql(&format!(
+        "UPDATE repository_observations
+            SET observed_at = observed_at - interval '7 days',
+                pull_requests_observed_at = pull_requests_observed_at - interval '7 days',
+                day = (observed_at - interval '7 days')::date, stars = 41
+          WHERE scope = 'user:{hubot_id}' AND repository_id = 1002"
+    ));
+    let before = served.psql(&format!(
+        "SELECT to_char(observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') \
+         FROM repository_observations WHERE scope = 'user:{hubot_id}' AND repository_id = 1002"
+    ));
+    served
+        .send(
+            &hubot,
+            Method::POST,
+            "/-/api/repositories/octo/secret/refresh",
+            Some(json!({})),
+        )
+        .await;
+    let (_, secret) = trends(&served, &hubot, "secret").await;
+    let week = &secret["periods"][0];
+    assert_eq!(week["supported"], true, "{secret}");
+    assert_eq!(week["from"]["observed_at"], before.as_str());
+    assert_eq!(week["from"]["stars"], 41);
+    assert_eq!(week["to"]["stars"], 50);
+    assert_eq!(week["changes"]["stars"], 9);
+    // The days between are a gap, not observations.
+    assert_eq!(secret["observations"].as_array().unwrap().len(), 2);
+    assert_eq!(secret["gaps"].as_array().unwrap().len(), 1, "{secret}");
+    assert_eq!(secret["periods"][1]["reason"], "tracked_later");
+}
+
+/// FR-DATA-14, FR-PAT-05, DR-04: what a PAT observed goes when it is replaced, removed or
+/// rejected, and with its user.
+#[tokio::test(flavor = "multi_thread")]
+async fn observations_go_with_their_pat_and_their_user() {
+    let served = serve("public").await;
+    let hubot = served.hubot().await;
+    let observed = || served.psql("SELECT count(*) FROM repository_observations");
+    let observe = async || {
+        let (status, _) = trends(&served, &hubot, "secret").await;
+        assert_eq!(status, 200);
+        assert_eq!(observed(), "1");
+    };
+
+    observe().await;
+    // Replaced, even by the same token.
+    let saved = served
+        .send(
+            &hubot,
+            Method::PUT,
+            "/-/api/token",
+            Some(json!({"token": HUBOTS_PAT})),
+        )
+        .await;
+    assert_eq!(saved.status, 200, "{saved:?}");
+    assert_eq!(observed(), "0");
+
+    observe().await;
+    let removed = served
+        .send(&hubot, Method::DELETE, "/-/api/token", Some(json!({})))
+        .await;
+    assert!(removed.status < 300, "{removed:?}");
+    assert_eq!(observed(), "0");
+
+    // Rejected by GitHub, once BuhTig next asks with it.
+    let saved = served
+        .send(
+            &hubot,
+            Method::PUT,
+            "/-/api/token",
+            Some(json!({"token": HUBOTS_PAT})),
+        )
+        .await;
+    assert_eq!(saved.status, 200, "{saved:?}");
+    observe().await;
+    served.revoke();
+    served
+        .send(
+            &hubot,
+            Method::POST,
+            "/-/api/repositories/octo/secret/refresh",
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(trends(&served, &hubot, "secret").await, (404, Value::Null));
+    assert_eq!(observed(), "0");
+    // Hubot is now told what the shared scope observed of the public repository.
+    let (_, public) = trends(&served, &hubot, "public").await;
+    assert_eq!(public["scope"], "shared");
+
+    // With the account: the shared scope's observation is no one's, and stays.
+    let deleted = served
+        .send(&hubot, Method::DELETE, "/-/api/user", Some(json!({})))
+        .await;
+    assert!(deleted.status < 300, "{deleted:?}");
+    assert_eq!(
+        served.psql("SELECT string_agg(scope, ' ') FROM repository_observations"),
+        "shared"
+    );
+}
+
+/// DR-04: deleting an account deletes what its PAT observed.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_an_account_deletes_what_its_pat_observed() {
+    let served = serve("public").await;
+    let hubot = served.hubot().await;
+    assert_eq!(trends(&served, &hubot, "secret").await.0, 200);
+    assert_eq!(
+        served.psql("SELECT count(*) FROM repository_observations"),
+        "1"
+    );
+    let deleted = served
+        .send(&hubot, Method::DELETE, "/-/api/user", Some(json!({})))
+        .await;
+    assert!(deleted.status < 300, "{deleted:?}");
+    assert_eq!(
+        served.psql("SELECT count(*) FROM repository_observations"),
+        "0"
     );
 }
 

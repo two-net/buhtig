@@ -458,6 +458,69 @@ export interface WeekOfChanges {
   deletions: number;
 }
 
+/**
+ * How a repository's stat cards' figures changed, as BuhTig observed them as its dashboard was
+ * opened, in the viewer's scope (FR-REPO-17, FR-DATA-13, FR-DATA-14). Observations are only as
+ * frequent as the views: the days without one are gaps, never zeros.
+ */
+export interface Trends {
+  /** Whether what was observed was read with the viewer's own token, for them alone. */
+  scope: 'shared' | 'private';
+  /** How many days observations are kept. */
+  keptDays: number;
+  /** When the oldest observation kept was made, unless there are none. */
+  trackingSince: Date | undefined;
+  /** One a day at most, the latest of each, oldest first. */
+  observations: Observation[];
+  /** The runs of days between the first observation and the latest without one. */
+  gaps: { from: Date; to: Date }[];
+  /** The changes over 7, 30 and 90 days, where the observations allow. */
+  periods: Period[];
+}
+
+/** What a repository's stat cards showed when BuhTig read them from GitHub. */
+export interface Observation {
+  /** The UTC day it is of, at midnight UTC. */
+  day: Date;
+  /** When GitHub gave the repository, whose stars, forks and open issues these are. */
+  observedAt: Date;
+  /** When GitHub counted the open pull requests, within minutes of `observedAt`. */
+  pullRequestsObservedAt: Date;
+  figures: TrendFigures;
+}
+
+/** The figures that trends follow, or how much each changed. */
+export interface TrendFigures {
+  stars: number;
+  forks: number;
+  /** Without the open pull requests, which GitHub counts as open issues too. */
+  openIssues: number;
+  openPullRequests: number;
+}
+
+/**
+ * The change over a period to the latest observation from the one nearest to a period before it,
+ * or why there is none (FR-DATA-14).
+ */
+export type Period = {
+  days: number;
+  /** The first UTC day of the period, and how many of its days have an observation. */
+  firstDay: Date | undefined;
+  observedDays: number;
+  /** The time a period before the latest observation, near which the baseline must be. */
+  target: Date | undefined;
+} & (
+  | { supported: true; from: Observation; to: Observation; changes: TrendFigures }
+  | { supported: false; reason: Unsupported }
+);
+
+/**
+ * Why a period has no change: nothing observed, only one observation, the first after the
+ * period's start, or none near its start, between observations before and after.
+ */
+export type Unsupported =
+  'no_observations' | 'first_observation' | 'tracked_later' | 'no_observation_then';
+
 /** How often a repository was released, and downloaded, over its latest releases (FR-REPO-16). */
 export interface ReleaseCadence {
   /** How many releases were read: up to the 100 latest, without drafts. */
@@ -715,6 +778,37 @@ interface WorkflowRunsAnswer extends DatedAnswer {
 interface CodeFrequencyAnswer {
   weeks: { week: string; additions: number; deletions: number }[];
   too_large: boolean;
+}
+
+/** The server's answer about what was observed of a repository, as one observation tells it. */
+interface ObservationAnswer {
+  day: string;
+  observed_at: string;
+  pull_requests_observed_at: string;
+  stars: number;
+  forks: number;
+  open_issues: number;
+  open_pull_requests: number;
+}
+
+/** The server's answer about how a repository's figures changed. */
+interface TrendsAnswer extends DatedAnswer {
+  scope: string;
+  kept_days: number;
+  tracking_since: string | null;
+  observations: ObservationAnswer[];
+  gaps: { from: string; to: string }[];
+  periods: {
+    days: number;
+    target?: string;
+    first_day?: string;
+    observed_days?: number;
+    supported: boolean;
+    reason?: string;
+    from?: ObservationAnswer;
+    to?: ObservationAnswer;
+    changes?: { stars: number; forks: number; open_issues: number; open_pull_requests: number };
+  }[];
 }
 
 /** The server's answer about a repository, for how often it is released. */
@@ -1195,6 +1289,15 @@ export class Resources {
   }
 
   /**
+   * How the stat cards' figures of the repository `owner/repo` changed, as BuhTig observed them
+   * in the viewer's scope (FR-REPO-17), which fails as `commitActivity` does. Observations it
+   * cannot date are left out, and so are the periods that would be between them.
+   */
+  trends(owner: string, repo: string): Observable<Dated<Trends>> {
+    return this.part<TrendsAnswer>(owner, repo, 'trends').pipe(map(trends));
+  }
+
+  /**
    * How often the repository `owner/repo` was released, and downloaded, over its latest
    * releases, which fails as `commitActivity` does (FR-REPO-16).
    */
@@ -1253,6 +1356,87 @@ export class Resources {
         return response.body as T;
       }),
     );
+  }
+}
+
+/** What the server tells of how a repository's figures changed, as `answer`. */
+function trends(answer: TrendsAnswer): Dated<Trends> {
+  const observations = (answer.observations ?? []).flatMap((observation) => {
+    const told = observed(observation);
+    return told ? [told] : [];
+  });
+  const gaps = (answer.gaps ?? []).flatMap(({ from, to }) => {
+    const [start, end] = [date(from), date(to)];
+    return start && end ? [{ from: start, to: end }] : [];
+  });
+  const periods = (answer.periods ?? []).map((period): Period => {
+    const told = {
+      days: count(period.days),
+      firstDay: date(period.first_day),
+      observedDays: count(period.observed_days),
+      target: date(period.target),
+    };
+    const from = period.from && observed(period.from);
+    const to = period.to && observed(period.to);
+    if (period.supported === true && from && to && period.changes) {
+      const changes = period.changes;
+      return {
+        ...told,
+        supported: true,
+        from,
+        to,
+        changes: {
+          stars: change(changes.stars),
+          forks: change(changes.forks),
+          openIssues: change(changes.open_issues),
+          openPullRequests: change(changes.open_pull_requests),
+        },
+      };
+    }
+    return { ...told, supported: false, reason: unsupported(period.reason) };
+  });
+  return {
+    scope: answer.scope === 'private' ? 'private' : 'shared',
+    keptDays: count(answer.kept_days),
+    trackingSince: date(answer.tracking_since),
+    observations,
+    gaps,
+    periods,
+    ...freshness(answer),
+  };
+}
+
+/** An observation as the server tells it, unless it cannot be dated. */
+function observed(answer: ObservationAnswer): Observation | undefined {
+  const [day, observedAt, pullRequestsObservedAt] = [
+    date(answer.day),
+    date(answer.observed_at),
+    date(answer.pull_requests_observed_at),
+  ];
+  return day && observedAt && pullRequestsObservedAt
+    ? {
+        day,
+        observedAt,
+        pullRequestsObservedAt,
+        figures: {
+          stars: count(answer.stars),
+          forks: count(answer.forks),
+          openIssues: count(answer.open_issues),
+          openPullRequests: count(answer.open_pull_requests),
+        },
+      }
+    : undefined;
+}
+
+/** Why a period has no change, as the server tells it, or that nothing was observed then. */
+function unsupported(reason: unknown): Unsupported {
+  switch (reason) {
+    case 'no_observations':
+    case 'first_observation':
+    case 'tracked_later':
+      return reason;
+    default:
+      return 'no_observation_then';
   }
 }
 
@@ -1381,6 +1565,11 @@ function userHeader(answer: UserAnswer): User {
 /** `value` if it is a count, or else none. */
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+/** `value` if it is a whole change, up or down, or else none. */
+function change(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) ? value : 0;
 }
 
 /** `value` if it is a span of time in seconds, or else none. */

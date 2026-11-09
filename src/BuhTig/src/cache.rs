@@ -44,7 +44,7 @@ use crate::config::{CacheConfig, LimitsConfig, Secret};
 use crate::entity::cache_entry::{self, Scope};
 use crate::github::{self, Credential, List, Path, Reply};
 use crate::visitors::{Held, Visitor, Visitors};
-use crate::{repositories, session, tokens};
+use crate::{repositories, session, tokens, trends};
 
 /// FR-DATA-07: a dashboard may be refreshed at most once a minute.
 const REFRESH_INTERVAL: TimeDelta = TimeDelta::minutes(1);
@@ -117,6 +117,14 @@ impl Viewer {
             Viewer::Visitor(_) | Viewer::SignedIn { .. } => None,
         }
     }
+
+    /// Whose what the viewer fetches is.
+    fn source(&self) -> Source {
+        Source {
+            scope: self.scope(),
+            pat: self.pat(),
+        }
+    }
 }
 
 /// What the cache had for a request.
@@ -135,6 +143,20 @@ pub struct Cached<T> {
     pub fetched_at: DateTimeUtc,
     /// Why newer data is missing, when this is the most recent data cached, however old.
     pub stale: Option<Stale>,
+    /// Whose the data is, and so who may be shown what is made of it (FR-DATA-04).
+    pub source: Source,
+}
+
+/// Whose data is: the scope it is cached in, and the PAT that fetched it, if it is
+/// private (FR-DATA-04). What is made of it, such as an observation of a repository
+/// (FR-DATA-13), is theirs alone too, and goes with the PAT (FR-PAT-05).
+///
+/// It is the viewer's own, unless GitHub rejected their PAT during the request, whose data
+/// then comes from the shared scope (FR-PAT-07).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Source {
+    pub scope: Scope,
+    pub pat: Option<i64>,
 }
 
 impl<T> Cached<T> {
@@ -424,6 +446,12 @@ impl Cache {
         self.github.host()
     }
 
+    /// The database the cache is in, which also holds what was observed of the
+    /// repositories it held (FR-DATA-13), scoped as it is.
+    pub fn db(&self) -> &DatabaseConnection {
+        &self.db
+    }
+
     /// One resource, for a dashboard: its path, such as `/owner/repo` or `/org`
     /// (FR-NAV-01), which [`Cache::refresh`] takes.
     ///
@@ -684,6 +712,7 @@ impl Cache {
                 data,
                 fetched_at,
                 stale,
+                source,
             }) => {
                 // `lookup` only returns data that `fetch.holds`.
                 let data = value_optional(data).ok_or_else(|| {
@@ -695,6 +724,7 @@ impl Cache {
                     data,
                     fetched_at,
                     stale,
+                    source,
                 }))
             }
         }
@@ -754,6 +784,7 @@ impl Cache {
                 data,
                 fetched_at,
                 stale,
+                source,
             }) => {
                 // `lookup` only returns data that `fetch.holds`.
                 let data = value_list(data).ok_or_else(|| {
@@ -765,6 +796,7 @@ impl Cache {
                     data,
                     fetched_at,
                     stale,
+                    source,
                 }))
             }
         }
@@ -784,6 +816,7 @@ impl Cache {
                 data,
                 fetched_at,
                 stale,
+                source,
             }) => {
                 // `lookup` only returns data that `fetch.holds`.
                 let data = data.get("count").and_then(Value::as_u64).ok_or_else(|| {
@@ -795,6 +828,7 @@ impl Cache {
                     data,
                     fetched_at,
                     stale,
+                    source,
                 }))
             }
         }
@@ -1026,8 +1060,8 @@ impl Cache {
                      without a PAT; it is answered as not found, and not cached"
                 );
                 // Nor is what was cached while it was public served any longer.
-                if stored.is_some() {
-                    self.forget(scope, key).await;
+                if let Some(entry) = &stored {
+                    self.forget(scope, key, entry).await;
                 }
                 stored_data = false;
                 match fetch {
@@ -1036,6 +1070,7 @@ impl Cache {
                         data: optional_value(None),
                         fetched_at: now,
                         stale: None,
+                        source: viewer.source(),
                     })),
                     _ => Err(github::Error::NotFound),
                 }
@@ -1052,6 +1087,7 @@ impl Cache {
                     data,
                     fetched_at: now,
                     stale: None,
+                    source: viewer.source(),
                 }))
             }
             Ok(Reply::NotModified) => match stored {
@@ -1062,6 +1098,7 @@ impl Cache {
                         data: entry.data,
                         fetched_at: now,
                         stale: None,
+                        source: viewer.source(),
                     }))
                 }
                 None => Err(github::Error::Invalid(
@@ -1100,8 +1137,8 @@ impl Cache {
         // answer that every credential would get.
         let lost =
             denies_access(&error) && (scope != Scope::Shared || !depends_on_credential(&error));
-        if lost && stored.is_some() {
-            self.forget(scope, key).await;
+        if lost && let Some(entry) = &stored {
+            self.forget(scope, key, entry).await;
         }
         Err(error)
     }
@@ -1194,7 +1231,10 @@ impl Cache {
         }
     }
 
-    async fn forget(&self, scope: Scope, key: &str) {
+    /// Deletes the entry `stored`, for `key` in `scope`, which is no longer this scope's to
+    /// see. If it is a repository's, what was observed of the repository in the scope goes
+    /// too (FR-DATA-14), whatever case it was read in, since that is by its ID.
+    async fn forget(&self, scope: Scope, key: &str, stored: &cache_entry::Model) {
         let result = cache_entry::Entity::delete_many()
             .filter(cache_entry::Column::Scope.eq(scope.key()))
             .filter(cache_entry::Column::ResourceKey.eq(key))
@@ -1202,6 +1242,16 @@ impl Cache {
             .await;
         if let Err(error) = result {
             error!(key, "cannot delete cached GitHub data: {error}");
+        }
+        let repository = stored.data.get("id").and_then(Value::as_i64);
+        if let Some(repository) = repository.filter(|_| is_repository_key(key)) {
+            let result = trends::forget(&self.db, scope, repository).await;
+            if let Err(error) = result {
+                error!(
+                    key,
+                    "cannot delete what was observed of a repository: {error}"
+                );
+            }
         }
     }
 
@@ -1219,11 +1269,24 @@ impl Cache {
 }
 
 fn cached(entry: cache_entry::Model, stale: Option<Stale>) -> Cached<Value> {
+    // `scope` and `user_id` are only ever set from a `Scope`, so they agree.
+    let scope = entry.user_id.map_or(Scope::Shared, Scope::User);
     Cached {
         data: entry.data,
         fetched_at: entry.fetched_at,
         stale,
+        source: Source {
+            scope,
+            pat: entry.credential_id,
+        },
     }
+}
+
+/// Whether `key` is that of a repository read whole, `/repos/{owner}/{repo}`, as its
+/// dashboard reads it, rather than of what is under it.
+fn is_repository_key(key: &str) -> bool {
+    key.strip_prefix("/repos/")
+        .is_some_and(|names| names.split('/').count() == 2 && !names.contains([' ', '?']))
 }
 
 /// The key of a dashboard's refresh mark. GitHub's names ignore case.
@@ -1295,7 +1358,7 @@ fn marks_private(data: &Value) -> bool {
 
 /// Whether `data` is a public repository's: GitHub marks nothing in it private or internal,
 /// and its `visibility`, if it tells one, is public.
-fn is_public_repository(data: &Value) -> bool {
+pub(crate) fn is_public_repository(data: &Value) -> bool {
     !marks_private(data)
         && data
             .get("visibility")
@@ -1413,7 +1476,7 @@ mod tests {
     use super::*;
     use crate::config::DatabaseConfig;
     use crate::db;
-    use crate::entity::{credential, user};
+    use crate::entity::{credential, repository_observation, user};
     use crate::github::stub::{Stub, answer};
     use crate::github::{Sending, Transport};
     use crate::test_cluster::cluster;
@@ -1743,6 +1806,51 @@ mod tests {
                 .await
                 .unwrap()
         }
+
+        /// Whose Alice's data is: hers, with her PAT.
+        fn alices(&self) -> Source {
+            Source {
+                scope: Scope::User(self.alice),
+                pat: Some(self.alice_pat),
+            }
+        }
+
+        fn bobs(&self) -> Source {
+            Source {
+                scope: Scope::User(self.bob),
+                pat: Some(self.bob_pat),
+            }
+        }
+
+        /// Records an observation of the repository whose ID is 42, in `source`'s scope.
+        async fn observe(&self, source: Source) -> bool {
+            let figures = trends::Figures {
+                stars: 1,
+                forks: 1,
+                open_issues: 1,
+                open_pull_requests: 1,
+            };
+            let observation = trends::Observation {
+                source,
+                repository_id: 42,
+                observed_at: at(0),
+                pull_requests_observed_at: at(0),
+                figures,
+            };
+            trends::record(&self.db, &observation).await.unwrap()
+        }
+
+        /// The scopes of what was observed, in the order observed.
+        async fn observed(&self) -> Vec<String> {
+            repository_observation::Entity::find()
+                .order_by_asc(repository_observation::Column::Id)
+                .all(&self.db)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|observation| observation.scope)
+                .collect()
+        }
     }
 
     /// A user signed in with `token`, who is not in the database: no test of the cache
@@ -1828,12 +1936,19 @@ mod tests {
         (respond, DateTime::from_timestamp(seconds, 0).unwrap())
     }
 
+    /// Whose data fetched without a PAT is.
+    const SHARED: Source = Source {
+        scope: Scope::Shared,
+        pat: None,
+    };
+
     #[test]
     fn the_time_of_fetching_is_told_as_javascript_writes_it() {
         let cached = |fetched_at| Cached {
             data: (),
             fetched_at,
             stale: None,
+            source: SHARED,
         };
         assert_eq!(cached(at(3)).fetched_at_iso(), "2026-10-21T12:03:00.000Z");
         let precise = at(0) + TimeDelta::nanoseconds(123_456_789);
@@ -1854,7 +1969,8 @@ mod tests {
             Cached {
                 data: json!({"stars": 1}),
                 fetched_at: at(0),
-                stale: None
+                stale: None,
+                source: SHARED,
             }
         );
 
@@ -2140,6 +2256,7 @@ mod tests {
             data: json!({"stars": 1}),
             fetched_at: at(0),
             stale: Some(Stale::GitHub(error)),
+            source: SHARED,
         };
 
         // AC-09.
@@ -2283,6 +2400,9 @@ mod tests {
         );
         data(setup.get(&setup.bob(), &repo, at(0)).await);
         assert_eq!(setup.rows().await.len(), 2);
+        for source in [setup.alices(), setup.bobs(), SHARED] {
+            assert!(setup.observe(source).await);
+        }
 
         // GitHub no longer takes it: the same request gets what her sign-in credential does.
         setup.answer(|request| match header(request, AUTHORIZATION) {
@@ -2292,6 +2412,8 @@ mod tests {
         let (log, _guard) = capture_log();
         let public = data(setup.get(&setup.alice(), &repo, at(1)).await);
         assert_eq!(public.data["full_name"], "owner/repo");
+        // So it is shared data, and what is made of it is too.
+        assert_eq!(public.source, SHARED);
         assert_eq!(
             setup.sent()[2..],
             ["Bearer pat-alice", "Bearer sign-in-alice"]
@@ -2332,6 +2454,114 @@ mod tests {
                 (Scope::Shared.key(), None)
             ]
         );
+        // What was observed with her PAT went with what it fetched (FR-DATA-14), and nothing
+        // more can be: it is no longer valid.
+        assert_eq!(
+            setup.observed().await,
+            [Scope::User(setup.bob).key(), Scope::Shared.key()]
+        );
+        assert!(!setup.observe(setup.alices()).await);
+    }
+
+    #[tokio::test]
+    async fn data_tells_whose_it_is() {
+        let setup = setup().await;
+        let repo = path(&["repos", "owner", "repo"]);
+        setup.answer(|request| match header(request, IF_NONE_MATCH) {
+            Some(r#"W/"v1""#) => answer(304, &[], ""),
+            _ => answer(
+                200,
+                &[("etag", r#"W/"v1""#)],
+                r#"{"full_name": "owner/repo", "private": false}"#,
+            ),
+        });
+        // Fetched, then served from the cache, then confirmed by GitHub.
+        for minutes in [0, 1, 16] {
+            let shared = data(setup.get(&visitor(), &repo, at(minutes)).await);
+            assert_eq!(
+                shared.fetched_at,
+                at(if minutes == 1 { 0 } else { minutes })
+            );
+            assert_eq!(shared.source, SHARED, "{minutes}");
+            let alices = data(setup.get(&setup.alice(), &repo, at(minutes)).await);
+            assert_eq!(alices.source, setup.alices(), "{minutes}");
+        }
+        assert_eq!(setup.stub.requests().len(), 4);
+        // Lists are too.
+        let contributors = path(&["repos", "owner", "repo", "contributors"]);
+        setup.answer(|_| answer(200, &[], r#"[{"login": "alice"}]"#));
+        let list = setup
+            .cache
+            .get_list_at(&setup.alice(), DASHBOARD, &contributors, 10, at(16))
+            .await;
+        assert_eq!(data(list).source, setup.alices());
+        // And what is served stale, while GitHub is down.
+        setup.answer(|_| Err(github::Error::Unreachable("connection refused".to_owned())));
+        for (viewer, source) in [(visitor(), SHARED), (setup.alice(), setup.alices())] {
+            let stale = data(setup.get(&viewer, &repo, at(40)).await);
+            assert!(stale.stale.is_some());
+            assert_eq!(stale.source, source);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_scope_that_loses_a_repository_forgets_what_it_observed_of_it() {
+        let setup = setup().await;
+        // Read in another case than GitHub spells it: what was observed is by its ID.
+        let repo = path(&["repos", "Owner", "Repo"]);
+        setup.answer(|_| {
+            answer(
+                200,
+                &[],
+                r#"{"id": 42, "full_name": "owner/repo", "private": false}"#,
+            )
+        });
+        data(setup.get(&visitor(), &repo, at(0)).await);
+        data(setup.get(&setup.alice(), &repo, at(0)).await);
+        for source in [SHARED, setup.alices(), setup.bobs()] {
+            assert!(setup.observe(source).await);
+        }
+        // What is under the repository is not the repository: losing it forgets nothing more.
+        let languages = path(&["repos", "owner", "repo", "languages"]);
+        data(setup.get(&setup.alice(), &languages, at(0)).await);
+
+        // GitHub no longer shows Alice the repository.
+        setup.answer(|request| match header(request, AUTHORIZATION) {
+            Some("Bearer pat-alice") => answer(404, &[], r#"{"message": "Not Found"}"#),
+            _ => answer(
+                200,
+                &[],
+                r#"{"id": 42, "full_name": "owner/repo", "private": false}"#,
+            ),
+        });
+        assert_eq!(
+            github_error(setup.get(&setup.alice(), &languages, at(16)).await),
+            github::Error::NotFound
+        );
+        assert_eq!(setup.observed().await.len(), 3);
+        assert_eq!(
+            github_error(setup.get(&setup.alice(), &repo, at(16)).await),
+            github::Error::NotFound
+        );
+        assert_eq!(
+            setup.observed().await,
+            [Scope::Shared.key(), Scope::User(setup.bob).key()]
+        );
+
+        // The repository goes private: the shared scope forgets it too, and Bob's PAT, which
+        // may still see it, keeps what it observed.
+        setup.answer(|_| {
+            answer(
+                200,
+                &[],
+                r#"{"id": 42, "full_name": "owner/repo", "private": true}"#,
+            )
+        });
+        assert_eq!(
+            github_error(setup.get(&visitor(), &repo, at(16)).await),
+            github::Error::NotFound
+        );
+        assert_eq!(setup.observed().await, [Scope::User(setup.bob).key()]);
     }
 
     /// The private repositories of the viewer themselves, which GitHub lists to their own

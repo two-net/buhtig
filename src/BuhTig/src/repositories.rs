@@ -5,7 +5,8 @@
 //! and pull requests (FR-REPO-06), its recent commits (FR-REPO-07) and its releases
 //! (FR-REPO-08). Then how fast its pull requests are merged and how long its issues stay
 //! open (FR-REPO-13), how its workflow runs fare (FR-REPO-14), how many lines change each
-//! week (FR-REPO-15), and how often it is released, and downloaded (FR-REPO-16).
+//! week (FR-REPO-15), and how often it is released, and downloaded (FR-REPO-16). And how
+//! its stat cards' figures changed, as BuhTig observed them (FR-REPO-17, FR-DATA-13).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -22,8 +23,10 @@ use tracing::error;
 use url::Url;
 
 use crate::accounts::is_account_name;
-use crate::cache::{self, Cache, Cached, Outcome, Refused, Stale, Viewer};
+use crate::cache::{self, Cache, Cached, Outcome, Refused, Source, Stale, Viewer};
+use crate::entity::cache_entry::Scope;
 use crate::github::{self, List};
+use crate::trends::{self, Figures, Observation};
 
 /// The longest repository name GitHub allows.
 const MAX_LENGTH: usize = 100;
@@ -170,6 +173,9 @@ pub async fn summary(
 /// GitHub counts both as open issues. The latest release is the one GitHub marks as such,
 /// which is never a draft or a prerelease, and `url` its page on GitHub (FR-REPO-12).
 ///
+/// What the figures are made of is recorded as an observation of the repository, if it may
+/// be (FR-DATA-13), as [`observation`] tells.
+///
 /// Its statuses are those of [`summary`], since it reads the repository first. A failure
 /// to read the rest is 502.
 pub async fn stats(
@@ -188,18 +194,123 @@ pub async fn stats(
         cache.get_optional(&repository.viewer, &repository.dashboard, &latest),
     );
     let (pulls, latest) = match (data(pulls), data(latest)) {
-        (Ok(pulls), Ok(latest)) => (pulls.data, latest.data),
+        (Ok(pulls), Ok(latest)) => (pulls, latest.data),
         (Err(code), _) | (_, Err(code)) => return status(code),
     };
-    match figures(
+    let Some(figures) = figures(
         &repository.data,
-        &pulls,
+        &pulls.data,
         latest.as_ref(),
         cache.github_host(),
-    ) {
-        Some(figures) => respond(figures),
-        None => status(StatusCode::BAD_GATEWAY),
+    ) else {
+        return status(StatusCode::BAD_GATEWAY);
+    };
+    observe(&cache, &repository, &pulls).await;
+    respond(figures)
+}
+
+/// `/-/api/repositories/{owner}/{repo}/trends`: how the repository's stat cards' figures
+/// changed, as BuhTig observed them in the scope that the viewer's data is in, over the
+/// last 90 days (FR-REPO-17, FR-DATA-14), as [`trends::summarize`] tells it, with when the
+/// repository was fetched, as [`dated`] tells it.
+///
+/// It reads the repository first, with the viewer's credential at least once per
+/// `cache.ttl`, so that what was observed of it is told only to who may see it now
+/// (FR-ACC-07), and so its statuses are those of [`summary`]. Unlike [`summary`], it tells
+/// nothing from a read of the repository older than that, which may no longer be the
+/// viewer's to see: 429 for a visitor who may not fetch from GitHub now (FR-DATA-10), and
+/// 502 while GitHub fails (FR-DATA-05). What the stat cards show is observed first, if it may
+/// be, as [`stats`] observes it: a failure to count the open pull requests only leaves that
+/// out. 502 if GitHub left out the repository's ID.
+pub async fn trends(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    match repository.stale {
+        None => {}
+        Some("held") => return status(StatusCode::TOO_MANY_REQUESTS),
+        Some(_) => return status(StatusCode::BAD_GATEWAY),
     }
+    let Some(id) = repository_id(&repository.data) else {
+        return status(StatusCode::BAD_GATEWAY);
+    };
+    let pulls = search(&repository.name, OPEN_PULLS);
+    let pulls = cache
+        .get(&repository.viewer, &repository.dashboard, &pulls)
+        .await;
+    if let Ok(pulls) = data(pulls) {
+        observe(&cache, &repository, &pulls).await;
+    }
+    match trends::read(cache.db(), repository.source, id, ChronoUtc::now()).await {
+        Ok(observations) => {
+            respond(repository.dated(trends::summarize(repository.source.scope, &observations)))
+        }
+        Err(error) => {
+            error!("cannot read what was observed of a repository: {error}");
+            status(StatusCode::SERVICE_UNAVAILABLE)
+        }
+    }
+}
+
+/// Records what the stat cards show of the repository, from `repository` and the count of
+/// its open pull requests, `pulls`, as an observation of it (FR-DATA-13), if it may be. A
+/// failure is only logged: the figures are still told.
+async fn observe(cache: &Cache, repository: &Under, pulls: &Cached<Value>) {
+    let Some(observation) = observation(repository, pulls) else {
+        return;
+    };
+    if let Err(error) = trends::record(cache.db(), &observation).await {
+        error!("cannot record what was observed of a repository: {error}");
+    }
+}
+
+/// The observation of what the stat cards show of the repository, made of `repository` and
+/// `pulls` as [`stats`] makes its figures, at the times that GitHub gave or confirmed each.
+/// `None` if it must not be made (FR-DATA-13):
+///
+/// - when either is stale, as during an outage or for a visitor held back, since it would
+///   then be no newer than what was observed before;
+/// - when they are not of the same scope and PAT, as when GitHub rejected the PAT between
+///   the two, since the observation could belong to neither (FR-DATA-04);
+/// - in the shared scope, unless the repository is public, as a safeguard (FR-ACC-04);
+/// - when GitHub left out the repository's ID or one of the counts.
+fn observation(repository: &Under, pulls: &Cached<Value>) -> Option<Observation> {
+    if repository.stale.is_some() || pulls.stale.is_some() || repository.source != pulls.source {
+        return None;
+    }
+    if repository.source.scope == Scope::Shared && !cache::is_public_repository(&repository.data) {
+        return None;
+    }
+    let count = |key| {
+        let count = repository.data.get(key)?.as_u64()?;
+        i64::try_from(count).ok()
+    };
+    let open_pulls = total(&pulls.data)?;
+    Some(Observation {
+        source: repository.source,
+        repository_id: repository_id(&repository.data)?,
+        observed_at: repository.fetched_at,
+        pull_requests_observed_at: pulls.fetched_at,
+        figures: Figures {
+            stars: count("stargazers_count")?,
+            forks: count("forks_count")?,
+            open_issues: i64::try_from(open_issues(&repository.data, open_pulls)?).ok()?,
+            open_pull_requests: i64::try_from(open_pulls).ok()?,
+        },
+    })
+}
+
+/// The repository's ID on GitHub, which it keeps when renamed or transferred.
+fn repository_id(repository: &Value) -> Option<i64> {
+    repository
+        .get("id")
+        .and_then(Value::as_i64)
+        .filter(|id| *id > 0)
 }
 
 /// `/-/api/repositories/{owner}/{repo}/commit-activity`: how many commits the repository's
@@ -816,6 +927,8 @@ struct Under {
     /// When GitHub gave the repository, and why it is no newer, as [`stale`] tells it.
     fetched_at: DateTimeUtc,
     stale: Option<&'static str>,
+    /// Whose the repository's data is: what is made of it is theirs alone too.
+    source: Source,
 }
 
 impl Under {
@@ -848,7 +961,7 @@ async fn under(
         return Err(StatusCode::BAD_REQUEST);
     }
     let cached = repository(cache, &viewer, owner, repo).await?;
-    let (fetched_at, stale) = (cached.fetched_at, stale(&cached));
+    let (fetched_at, stale, source) = (cached.fetched_at, stale(&cached), cached.source);
     let data = cached.data;
     let name = data
         .get("full_name")
@@ -863,6 +976,7 @@ async fn under(
         data,
         fetched_at,
         stale,
+        source,
     })
 }
 
@@ -1504,6 +1618,7 @@ mod tests {
 
     /// `Acme/Widget` as GitHub gives it, with all that its dashboard shows.
     const WIDGET: &str = r#"{
+        "id": 42,
         "full_name": "Acme/Widget",
         "private": false,
         "visibility": "public",
@@ -2016,10 +2131,11 @@ mod tests {
         WorkflowRuns,
         CodeFrequency,
         ReleaseCadence,
+        Trends,
     }
 
     impl Api {
-        const ALL: [Api; 13] = [
+        const ALL: [Api; 14] = [
             Api::Summary,
             Api::Stats,
             Api::CommitActivity,
@@ -2033,6 +2149,7 @@ mod tests {
             Api::WorkflowRuns,
             Api::CodeFrequency,
             Api::ReleaseCadence,
+            Api::Trends,
         ];
     }
 
@@ -2077,6 +2194,7 @@ mod tests {
                 Api::WorkflowRuns => workflow_runs(cache, visitor, names).await,
                 Api::CodeFrequency => code_frequency(cache, visitor, names).await,
                 Api::ReleaseCadence => release_cadence(cache, visitor, names).await,
+                Api::Trends => trends(cache, visitor, names).await,
             }
         })
         .await;
@@ -2451,6 +2569,320 @@ mod tests {
                 "https://api.github.com/search/issues?q=repo%3AAcme%2FWidget+is%3Apr+is%3Aopen&per_page=1",
             ]
         );
+    }
+
+    /// Whose data fetched without a PAT is.
+    const SHARED: Source = Source {
+        scope: Scope::Shared,
+        pat: None,
+    };
+
+    /// What was observed of repositories, as the stars, the repository's ID and the times.
+    async fn observed(cache: &Cache) -> Vec<(i64, i64, DateTimeUtc, DateTimeUtc)> {
+        use sea_orm::{EntityTrait, QueryOrder};
+
+        use crate::entity::repository_observation::{Column, Entity};
+
+        Entity::find()
+            .order_by_asc(Column::ObservedAt)
+            .all(cache.db())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                (
+                    row.stars,
+                    row.repository_id,
+                    row.observed_at,
+                    row.pull_requests_observed_at,
+                )
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn stat_cards_are_observed_as_github_gives_them() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let before = ChronoUtc::now();
+        for _ in 0..2 {
+            assert_eq!(
+                ask(&cache, Api::Stats, "acme", "widget").await.0,
+                StatusCode::OK
+            );
+        }
+        // Once, while they are cached, at when GitHub gave them.
+        let rows = observed(&cache).await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        let (stars, id, observed_at, pulls_at) = rows[0];
+        assert_eq!((stars, id), (12345, 42));
+        assert!(before <= observed_at && observed_at <= pulls_at, "{rows:?}");
+        // Under the repository's ID, however it is asked for: by its old name, it is read
+        // anew, so observed later, with the open pull requests still cached.
+        assert_eq!(
+            ask(&cache, Api::Stats, "acme", "gadget").await.0,
+            StatusCode::OK
+        );
+        let again = observed(&cache).await;
+        assert_eq!(again.len(), 1, "{again:?}");
+        assert!(
+            again[0].2 > observed_at && again[0].3 == pulls_at,
+            "{again:?}"
+        );
+        // Anything else but the repository and the count of its open pull requests asks
+        // nothing more of GitHub.
+        assert_eq!(stub.requests().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn the_repository_read_first_by_another_widget_is_still_observed() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let (_, summary) = ask(&cache, Api::Summary, "acme", "widget").await;
+        assert_eq!(summary["name"], "Acme/Widget");
+        ask(&cache, Api::Stats, "acme", "widget").await;
+        assert_eq!(observed(&cache).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_newly_tracked_repository_has_no_baseline() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        let (status, body) = ask(&cache, Api::Trends, "acme", "widget").await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = observed(&cache).await;
+        let observed_at = cache::iso(rows[0].2);
+        assert_eq!(body["scope"], "shared");
+        assert_eq!(body["kept_days"], 90);
+        assert_eq!(body["tracking_since"], observed_at.as_str());
+        assert_eq!(body["stale"], Value::Null);
+        assert_eq!(
+            body["observations"],
+            json!([{
+                "day": rows[0].2.date_naive().to_string(),
+                "observed_at": observed_at,
+                "pull_requests_observed_at": cache::iso(rows[0].3),
+                "stars": 12345, "forks": 678, "open_issues": 33, "open_pull_requests": 12,
+            }])
+        );
+        assert_eq!(body["gaps"], json!([]));
+        for period in body["periods"].as_array().unwrap() {
+            assert_eq!(
+                (&period["supported"], &period["reason"]),
+                (&json!(false), &json!("first_observation")),
+                "{period}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn changes_match_the_observations_they_are_between_and_gaps_stay() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        // As if BuhTig had observed Acme/Widget 10 days and a week before now.
+        let now = ChronoUtc::now().trunc_subsecs(3);
+        for (days, stars) in [(10, 12000), (7, 12300)] {
+            let observation = Observation {
+                source: SHARED,
+                repository_id: 42,
+                observed_at: now - TimeDelta::days(days),
+                pull_requests_observed_at: now - TimeDelta::days(days),
+                figures: Figures {
+                    stars,
+                    forks: 600,
+                    open_issues: 40,
+                    open_pull_requests: 12,
+                },
+            };
+            assert!(trends::record(cache.db(), &observation).await.unwrap());
+        }
+        let (_, body) = ask(&cache, Api::Trends, "acme", "widget").await;
+        let week = &body["periods"][0];
+        assert_eq!(week["days"], 7);
+        assert_eq!(week["supported"], true, "{week}");
+        assert_eq!(
+            week["from"]["observed_at"],
+            cache::iso(now - TimeDelta::days(7)).as_str()
+        );
+        assert_eq!(week["to"], body["observations"][2]);
+        assert_eq!(
+            week["changes"],
+            json!({"stars": 45, "forks": 78, "open_issues": -7, "open_pull_requests": 0})
+        );
+        // A month: tracked for 10 days only.
+        assert_eq!(body["periods"][1]["reason"], "tracked_later");
+        // The days between observations are told as gaps, not as observations.
+        let day = |days: i64| (now - TimeDelta::days(days)).date_naive().to_string();
+        let today = body["observations"][2]["day"].as_str().unwrap().to_owned();
+        assert_eq!(today, day(0));
+        assert_eq!(
+            body["gaps"],
+            json!([
+                {"from": day(9), "to": day(8)},
+                {"from": day(6), "to": day(1)},
+            ])
+        );
+        assert_eq!(body["observations"].as_array().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn trends_are_told_only_from_a_fresh_read_of_the_repository() {
+        let down = Arc::new(AtomicBool::new(false));
+        let stub = Stub::new({
+            let down = down.clone();
+            move |_| match down.load(Ordering::Relaxed) {
+                true => answer(502, &[], r#"{"message": "Server Error"}"#),
+                false => answer(200, &[], WIDGET),
+            }
+        });
+        // Nothing is fresh, and visitors may fetch nothing.
+        let cache = cache_for(&stub, 0, Duration::ZERO).await;
+        let observation = Observation {
+            source: SHARED,
+            repository_id: 42,
+            observed_at: ChronoUtc::now() - TimeDelta::days(1),
+            pull_requests_observed_at: ChronoUtc::now() - TimeDelta::days(1),
+            figures: Figures {
+                stars: 1,
+                forks: 1,
+                open_issues: 1,
+                open_pull_requests: 1,
+            },
+        };
+        assert!(trends::record(cache.db(), &observation).await.unwrap());
+        let signed_in = Viewer::SignedIn {
+            user_id: 1,
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let visitor = Viewer::Visitor(Visitor::of(
+            "203.0.113.1".parse().unwrap(),
+            &HeaderMap::new(),
+        ));
+        let ask = async |viewer: &Viewer| {
+            request_as(&cache, viewer.clone(), Api::Trends, "acme", "widget").await
+        };
+
+        // Read just now: what was observed is told.
+        let (status, body) = ask(&signed_in).await;
+        assert_eq!(status, StatusCode::OK);
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["observations"].as_array().unwrap().len(), 1);
+        // Read no more recently than the cache has it, which may no longer be so to see:
+        // nothing is told, though the summary is served (FR-DATA-05).
+        assert_eq!(
+            ask(&visitor).await,
+            (StatusCode::TOO_MANY_REQUESTS, String::new())
+        );
+        down.store(true, Ordering::Relaxed);
+        assert_eq!(
+            ask(&signed_in).await,
+            (StatusCode::BAD_GATEWAY, String::new())
+        );
+        assert_eq!(
+            request_as(&cache, signed_in, Api::Summary, "acme", "widget")
+                .await
+                .0,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn a_repository_without_its_id_is_not_observed() {
+        let stub = github();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Stats, "acme", "racy").await.0,
+            StatusCode::OK
+        );
+        assert!(observed(&cache).await.is_empty());
+        assert_eq!(
+            ask(&cache, Api::Trends, "acme", "racy").await.0,
+            StatusCode::BAD_GATEWAY
+        );
+    }
+
+    #[test]
+    fn observations_are_of_fresh_figures_of_one_scope() {
+        let widget: Value = serde_json::from_str(WIDGET).unwrap();
+        let (repository_at, pulls_at) = (
+            "2026-11-09T10:00:00Z".parse().unwrap(),
+            "2026-11-09T10:05:00Z".parse().unwrap(),
+        );
+        let alices = Source {
+            scope: Scope::User(1),
+            pat: Some(7),
+        };
+        let repository = |data: &Value, stale: Option<&'static str>, source: Source| Under {
+            viewer: Viewer::Visitor(Visitor::of(
+                "203.0.113.1".parse().unwrap(),
+                &HeaderMap::new(),
+            )),
+            dashboard: "/acme/widget".to_owned(),
+            name: "Acme/Widget".to_owned(),
+            data: data.clone(),
+            fetched_at: repository_at,
+            stale,
+            source,
+        };
+        let pulls = |stale: Option<Stale>, source: Source| Cached {
+            data: json!({"total_count": 12}),
+            fetched_at: pulls_at,
+            stale,
+            source,
+        };
+        assert_eq!(
+            observation(&repository(&widget, None, SHARED), &pulls(None, SHARED)),
+            Some(Observation {
+                source: SHARED,
+                repository_id: 42,
+                observed_at: repository_at,
+                pull_requests_observed_at: pulls_at,
+                figures: Figures {
+                    stars: 12345,
+                    forks: 678,
+                    open_issues: 33,
+                    open_pull_requests: 12,
+                },
+            })
+        );
+        assert!(observation(&repository(&widget, None, alices), &pulls(None, alices)).is_some());
+
+        // Not of what is stale, as during an outage.
+        let down = || Some(Stale::GitHub(github::Error::Unreachable("down".to_owned())));
+        assert_eq!(
+            observation(
+                &repository(&widget, Some("github"), SHARED),
+                &pulls(None, SHARED)
+            ),
+            None
+        );
+        assert_eq!(
+            observation(&repository(&widget, None, SHARED), &pulls(down(), SHARED)),
+            None
+        );
+        // Nor of two scopes, as when GitHub rejected a PAT between the two.
+        assert_eq!(
+            observation(&repository(&widget, None, alices), &pulls(None, SHARED)),
+            None
+        );
+        // Nor, in the shared scope, of a repository that is not public.
+        let mut internal = widget.clone();
+        internal["visibility"] = json!("internal");
+        assert_eq!(
+            observation(&repository(&internal, None, SHARED), &pulls(None, SHARED)),
+            None
+        );
+        assert!(observation(&repository(&internal, None, alices), &pulls(None, alices)).is_some());
+        // Nor of what GitHub left out.
+        for left_out in ["id", "stargazers_count", "forks_count", "open_issues_count"] {
+            let mut partial = widget.clone();
+            partial.as_object_mut().unwrap().remove(left_out);
+            assert_eq!(
+                observation(&repository(&partial, None, SHARED), &pulls(None, SHARED)),
+                None,
+                "{left_out}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -1,0 +1,123 @@
+/* A repository's trends (FR-REPO-17): which period they are of, their figures, what they cannot
+   tell, and a small chart of each figure. */
+.trends .seg {
+  display: inline-flex;
+  margin: 12px 16px 0;
+  overflow: hidden;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+}
+.trends .seg .btn {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.trends .seg .btn + .btn {
+  border-left: 1px solid var(--control-border);
+}
+/* The period shown is told by its weight as well as its background (NFR-UX-05). */
+.trends .seg .btn[aria-pressed='true'] {
+  background: var(--neutral-muted);
+  font-weight: 700;
+}
+.trend-notes {
+  padding: 0 16px;
+  font-size: 13px;
+}
+.trend-notes p {
+  margin: 0 0 8px;
+}
+.trend-notes.quiet {
+  padding-top: 4px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.trend-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+  padding: 8px 16px 12px;
+}
+@media (max-width: 640px) {
+  .trend-charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.trend-charts figure {
+  min-width: 0;
+  margin: 0;
+}
+.trend-charts figcaption {
+  margin-bottom: 6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+/* A line of a figure over days (FR-REPO-17), with its highest and lowest figures beside it. */
+.linechart {
+  --plot-h: 72px;
+  user-select: none;
+}
+.linechart .plot {
+  position: relative;
+  height: var(--plot-h);
+  margin-left: 40px;
+  border-bottom: 1px solid var(--border-muted);
+}
+.linechart svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.linechart .line {
+  fill: none;
+  stroke: var(--s1);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+/* Each day observed, as a dot: a gap between two is told by the line's break as well. */
+.linechart .pt {
+  fill: none;
+  stroke: var(--s1);
+  stroke-width: 6;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+/* Days without an observation, hatched, so that a gap is told by more than a color. */
+.linechart .gap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(135deg, var(--neutral-muted) 0 3px, transparent 3px 7px);
+}
+.linechart .yl {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed var(--border-muted);
+}
+.linechart .yl span {
+  position: absolute;
+  right: calc(100% + 6px);
+  top: -8px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.linechart .xaxis {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 0 0 40px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+/* Its line sweeps in as the widget makes its entrance (FR-ANIM-06). */
+.entering .linechart svg {
+  animation: sweep 0.7s var(--ease) both;
+}

@@ -1,5 +1,5 @@
 //! Starts the real binary against databases with rows to clean up, to check in-app
-//! housekeeping (FR-DB-08, FR-DATA-12, A-07).
+//! housekeeping (FR-DB-08, FR-DATA-12, FR-DATA-13, A-07).
 
 mod support;
 
@@ -23,6 +23,7 @@ const HOUSEKEEPING_LOCK: i64 = 0x42_7568_5469_6748;
 struct Deleted {
     sessions: u64,
     cache_entries: u64,
+    observations: u64,
     history_entries: u64,
 }
 
@@ -76,6 +77,7 @@ impl Setup {
         self.psql(
             "SELECT string_agg(encode(id_hash, 'hex'), ' ' ORDER BY id_hash) FROM sessions;
              SELECT string_agg(id::text, ' ' ORDER BY id) FROM cache_entries;
+             SELECT string_agg(id::text, ' ' ORDER BY id) FROM repository_observations;
              SELECT string_agg(id::text, ' ' ORDER BY id) FROM history_entries;
              SELECT count(*) FROM users;
              SELECT count(*) FROM pins;",
@@ -100,6 +102,7 @@ fn pass(running: &Running) -> Option<Deleted> {
     Some(Deleted {
         sessions: count("sessions"),
         cache_entries: count("cache_entries"),
+        observations: count("observations"),
         history_entries: count("history_entries"),
     })
 }
@@ -144,6 +147,22 @@ fn seed(db: &Setup) {
             (3, 'user:1', 'repo:a/c', 1, '{}', now() - interval '30 days 1 hour',
                 now() - interval '30 days');
 
+        -- Observations of repositories are kept for 90 days, however long ago their cache
+        -- entries went (FR-DATA-13).
+        INSERT INTO repository_observations (id, scope, repository_id, day, user_id,
+                observed_at, pull_requests_observed_at, stars, forks, open_issues,
+                open_pull_requests)
+        SELECT id, scope, id, (now() - age)::date, user_id, now() - age, now() - age,
+                1, 1, 1, 1
+        FROM (VALUES
+            -- Kept.
+            (1, 'shared', NULL, interval '89 days 23 hours'),
+            (2, 'user:1', 1, interval '1 day'),
+            -- Made more than 90 days ago.
+            (3, 'shared', NULL, interval '90 days 1 hour'),
+            (4, 'user:1', 1, interval '91 days')
+        ) AS observed (id, scope, user_id, age);
+
         -- Alice viewed 25 dashboards, one an hour. 20 and 21 tie for 20th newest, and the
         -- higher id wins, so 20 and 22 to 25 go.
         INSERT INTO history_entries (id, user_id, resource_kind, resource_name, last_viewed_at)
@@ -172,6 +191,10 @@ fn assert_cleaned_up(db: &Setup) {
         db.psql("SELECT string_agg(id::text, ' ' ORDER BY id) FROM cache_entries"),
         "1"
     );
+    assert_eq!(
+        db.psql("SELECT string_agg(id::text, ' ' ORDER BY id) FROM repository_observations"),
+        "1 2"
+    );
     assert_eq!(db.history(1), ids((1..=19).chain([21])));
     assert_eq!(db.history(2), ids(101..=120));
     assert_eq!(
@@ -183,6 +206,7 @@ fn assert_cleaned_up(db: &Setup) {
 const SEEDED: Deleted = Deleted {
     sessions: 3,
     cache_entries: 2,
+    observations: 2,
     history_entries: 5,
 };
 
@@ -234,6 +258,7 @@ retention = "2h"
         Some(Deleted {
             sessions: 1,
             cache_entries: 1,
+            observations: 0,
             history_entries: 0,
         })
     );
@@ -308,6 +333,7 @@ fn concurrent_processes_delete_each_row_once() {
         .fold(Deleted::default(), |total, pass| Deleted {
             sessions: total.sessions + pass.sessions,
             cache_entries: total.cache_entries + pass.cache_entries,
+            observations: total.observations + pass.observations,
             history_entries: total.history_entries + pass.history_entries,
         });
     assert_eq!(total, SEEDED, "{passes:?}");

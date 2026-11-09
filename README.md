@@ -153,7 +153,7 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   signed out and asked to enter their tokens again. A token that GitHub stops accepting,
   as when it is revoked or expires, is marked invalid: the user's requests go with their
   sign-in again, and BuhTig asks them to replace the token. Replacing or removing a token
-  deletes the data cached with it at once.
+  deletes the data cached with it, and what was observed with it, at once.
 - **Shortcuts:** for signed-in users, BuhTig remembers the last 20 dashboards they opened,
   only which ones and when, and lets them pin up to 12 with the Pin button in a dashboard's
   header. Their home page lists up to 12 of them beside the search box, pins first. In
@@ -164,8 +164,8 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   first 3 to try. They come from the shared cache alone, never from data fetched with a
   personal access token, and BuhTig asks GitHub nothing for them. The Privacy page says so.
 - **Deleting data:** in Settings, once they confirm, signed-in users can delete everything
-  BuhTig keeps of theirs: their account, sessions, credentials, the data cached with their
-  token, their history and their pins. This signs them out on every browser. BuhTig stays
+  BuhTig keeps of theirs: their account, sessions, credentials, the data cached and the
+  figures observed with their token, their history and their pins. This signs them out on every browser. BuhTig stays
   among their authorized OAuth apps on GitHub until they revoke it there, which Settings
   links to, since BuhTig changes nothing on GitHub.
 - **Access:** in public mode, the default, anyone may open the home page and the
@@ -205,6 +205,19 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   dashboards show the latest data they have, with its age. Data fetched with a user's
   personal access token is shown only to that user. When an organization requires single
   sign-on, or doesn't accept a user's token, the dashboard says so and how to fix it.
+- **Trends:** each time a repository's stat cards are made from data GitHub has just given
+  or confirmed, BuhTig records its stars, forks, open issues and open pull requests, and
+  the Activity tab tells how they changed over 7, 30 and 90 days. It keeps the latest of
+  each day, per repository and cache scope, for 90 days, after which housekeeping deletes
+  them; the period isn't configurable. Observations cost GitHub nothing extra, and nothing
+  is crawled or backfilled: a repository whose dashboard isn't opened isn't observed, and
+  the dashboard shows the days it wasn't as gaps, and says when there is no earlier
+  baseline yet. Trends are shown only once GitHub has given or confirmed the repository to
+  the viewer within `cache.ttl`: not while GitHub is unreachable, nor to a visitor held
+  back. What a user's token observed is shown only to them, and goes with the token and
+  the user. When GitHub stops
+  showing a scope a repository, its observations go with its cached copy. Database
+  upgrades keep observations, as they can't be fetched again.
 - **Visitors:** each visitor may make `limits.visitor_fetches_per_hour` dashboard loads an
   hour that need data from GitHub. Loads served from the cache don't count. While less
   than 10% of visitors' shared GitHub rate limit remains, visitors see cached data only

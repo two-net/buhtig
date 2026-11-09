@@ -38,6 +38,7 @@ use crate::entity::{cache_entry, user};
 use crate::github;
 use crate::session::Sessions;
 use crate::throttle::Throttle;
+use crate::trends;
 use crate::visitors::Visitor;
 
 /// The longest token BuhTig takes. GitHub's are well under it.
@@ -252,7 +253,8 @@ pub fn describe(pat: &credential::Model) -> Value {
 }
 
 /// Marks the PAT `credential_id` invalid, as when GitHub rejects it (FR-PAT-07), or it can
-/// no longer be decrypted (DR-03), and deletes the data fetched with it. Its user's requests
+/// no longer be decrypted (DR-03), and deletes the data fetched with it, and what was
+/// observed with it (FR-DATA-14). Its user's requests
 /// go with their sign-in credential from then on, until they replace it.
 pub async fn invalidate(db: &DatabaseConnection, credential_id: i64) -> Result<(), DbErr> {
     let txn = db.begin().await?;
@@ -269,6 +271,9 @@ pub async fn invalidate(db: &DatabaseConnection, credential_id: i64) -> Result<(
         .filter(cache_entry::Column::CredentialId.eq(credential_id))
         .exec(&txn)
         .await?;
+    // After the update, which waits for an observation being recorded with the PAT, so that
+    // this deletes it too (FR-DATA-14).
+    trends::forget_pat(&txn, credential_id).await?;
     txn.commit().await
 }
 

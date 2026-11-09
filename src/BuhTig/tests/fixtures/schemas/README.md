@@ -27,7 +27,8 @@ Do this for each release, once it is tagged, so that the next one is tested agai
 4. Insert at least one row into every table through `psql`, in one transaction. Leave out
    explicit IDs, so that the identity sequences advance as they do in use. Put expiry and
    fetch times far in the future (such as 2999), so that the housekeeping pass that follows
-   startup deletes nothing.
+   startup deletes nothing: so too sessions' start and last use, and repository
+   observations' times.
 5. Dump it in UTC: `PGTZ=UTC pg_dump -h 127.0.0.1 -p 54329 -U postgres --no-owner
    --no-privileges --inserts fixture`.
 6. Remove the lines that bind the dump to one version of PostgreSQL, so that it loads on
