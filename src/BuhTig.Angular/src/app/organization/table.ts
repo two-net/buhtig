@@ -14,7 +14,7 @@ export type RepositoryType = 'all' | 'public' | 'private' | 'sources' | 'forks' 
 export interface Filter {
   /** Text that the names must hold, whatever its letter case. */
   name: string;
-  /** The primary language that the repositories must have, unless any will do. */
+  /** The primary language that the repositories must have, in any letter case, unless any will do. */
   language: string | undefined;
   type: RepositoryType;
 }
@@ -38,9 +38,18 @@ export interface Page {
 export function matches(repository: ListedRepository, filter: Filter): boolean {
   return (
     repository.name.toLowerCase().includes(filter.name.trim().toLowerCase()) &&
-    (filter.language === undefined || repository.language === filter.language) &&
+    (filter.language === undefined ||
+      (repository.language !== undefined && sameLanguage(repository.language, filter.language))) &&
     isOfType(repository, filter.type)
   );
+}
+
+/**
+ * Whether `a` and `b` name the same language, whatever their letter case, as `rust` in a link
+ * from GitHub names `Rust` (FR-ORG-03).
+ */
+export function sameLanguage(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 /** `repositories` in the order of `sort`, those with the same figure by name. */

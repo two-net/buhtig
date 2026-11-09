@@ -14,12 +14,18 @@ import { followSummary, same } from './summary';
 @Component({ selector: 'app-blank', template: '' })
 class Blank {}
 
+/** What the dashboard's canonical URL keeps of its query, as an account's list's view. */
+let kept = '';
+
 @Component({ selector: 'app-host', template: '' })
 class Host {
   readonly opened = signal<Resource>({ kind: 'repository', owner: 'ACME', repo: 'Widget' });
   /** As a dashboard has it: the same whatever the letter case of its names. */
   readonly resource = computed(() => this.opened(), { equal: same });
-  readonly followed = followSummary(this.resource, (known) => `${dashboardPath(known)}/issues`);
+  readonly followed = followSummary(
+    this.resource,
+    (known) => `${dashboardPath(known)}/issues${kept}`,
+  );
 }
 
 describe('followSummary', () => {
@@ -43,6 +49,7 @@ describe('followSummary', () => {
   }
 
   beforeEach(() => {
+    kept = '';
     TestBed.configureTestingModule({
       providers: [
         provideRouter([{ path: '**', component: Blank }]),
@@ -129,6 +136,26 @@ describe('followSummary', () => {
     http.expectOne('/-/api/repositories/ACME/Widget').flush({ name: 'acme/widget' });
     await fixture.whenStable();
     expect(moves()).toEqual([]);
+  });
+
+  it('moves with what it keeps of the query (FR-ORG-03)', async () => {
+    kept = '?sort=stargazers';
+    await make('/ACME/Widget/issues?sort=stargazers');
+    await answer({ name: 'acme/widget' });
+    expect(moves()).toEqual(['/acme/widget/issues?sort=stargazers']);
+    await vi.waitFor(() => expect(router.url).toBe('/acme/widget/issues?sort=stargazers'));
+  });
+
+  it('stays where it is already, whatever else the query that it keeps says', async () => {
+    kept = '?sort=stargazers';
+    await make('/acme/widget/issues?sort=name');
+    http.expectOne('/-/api/repositories/ACME/Widget').flush({ name: 'acme/widget' });
+    await fixture.whenStable();
+    // As the list changes its view in place.
+    await router.navigateByUrl('/acme/widget/issues?page=2');
+    await fixture.whenStable();
+    expect(moves()).toEqual([]);
+    expect(router.url).toBe('/acme/widget/issues?page=2');
   });
 
   it('says so when the repository was renamed or transferred (FR-NAV-05)', async () => {

@@ -1,15 +1,37 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { signal } from '@angular/core';
-import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { Location } from '@angular/common';
+import { Component, DOCUMENT, signal } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { NavigationEnd, Router, Routes, provideRouter } from '@angular/router';
+import { RouterTestingHarness } from '@angular/router/testing';
+import { filter, firstValueFrom } from 'rxjs';
 import type { Mock } from 'vitest';
 import { AccountData } from '../dashboard/data';
 import { ListedRepository } from '../dashboard/resources';
+import { Toasts } from '../toast/toasts';
 import { Load } from '../widget/load';
 import { FAILED } from '../widget/messages';
-import { FIND_REPOSITORY, NO_REPOSITORIES, listed, noMatch } from './messages';
+import {
+  COPY_LINK,
+  COPY_LINK_FAILED,
+  FIND_REPOSITORY,
+  LINK_COPIED,
+  NO_REPOSITORIES,
+  listed,
+  noMatch,
+} from './messages';
 import { OrganizationRepositoriesTab } from './repositories';
+
+@Component({ selector: 'app-blank', template: '' })
+class Blank {}
+
+/** The list, as an organization's Repositories tab and as a user's, and a page elsewhere. */
+const ROUTES: Routes = [
+  { path: 'orgs/acme/repositories', component: OrganizationRepositoriesTab },
+  { path: 'mona', component: OrganizationRepositoriesTab },
+  { path: 'blank', component: Blank },
+];
 
 /** A repository of `acme` named `name`, with `details` in place of the plainest. */
 function repository(name: string, details: Partial<ListedRepository> = {}): ListedRepository {
@@ -42,7 +64,7 @@ class Unseeing {
 
 describe('OrganizationRepositoriesTab', () => {
   const scrolling = Element.prototype.scrollIntoView;
-  let fixture: ComponentFixture<OrganizationRepositoriesTab>;
+  let harness: RouterTestingHarness;
   let http: HttpTestingController;
   let state: ReturnType<typeof signal<Load<ListedRepository[]>>>;
   let retry: Mock<() => void>;
@@ -59,7 +81,7 @@ describe('OrganizationRepositoriesTab', () => {
     TestBed.configureTestingModule({
       imports: [OrganizationRepositoriesTab],
       providers: [
-        provideRouter([]),
+        provideRouter(ROUTES),
         provideHttpClient(),
         provideHttpClientTesting(),
         {
@@ -74,8 +96,8 @@ describe('OrganizationRepositoriesTab', () => {
       ],
     });
     http = TestBed.inject(HttpTestingController);
-    fixture = TestBed.createComponent(OrganizationRepositoriesTab);
-    await fixture.whenStable();
+    harness = await RouterTestingHarness.create('/orgs/acme/repositories');
+    await harness.fixture.whenStable();
   });
 
   afterEach(() => {
@@ -84,7 +106,7 @@ describe('OrganizationRepositoriesTab', () => {
     Element.prototype.scrollIntoView = scrolling;
   });
 
-  const element = () => fixture.nativeElement as HTMLElement;
+  const element = () => harness.routeNativeElement!;
   /** The names of the repositories listed, in their order. */
   const names = () =>
     [...element().querySelectorAll('app-repository-row')].map(
@@ -110,24 +132,24 @@ describe('OrganizationRepositoriesTab', () => {
 
   async function answer(repositories: ListedRepository[]): Promise<void> {
     state.set({ status: 'ready', data: repositories });
-    await fixture.whenStable();
+    await harness.fixture.whenStable();
   }
 
   async function type(text: string): Promise<void> {
     search().value = text;
     search().dispatchEvent(new Event('input'));
-    await fixture.whenStable();
+    await harness.fixture.whenStable();
   }
 
   async function choose(label: string, value: string): Promise<void> {
     select(label).value = value;
     select(label).dispatchEvent(new Event('change'));
-    await fixture.whenStable();
+    await harness.fixture.whenStable();
   }
 
   async function click(button: HTMLElement): Promise<void> {
     button.click();
-    await fixture.whenStable();
+    await harness.fixture.whenStable();
   }
 
   /** `count` repositories, named `r01` and on, each pushed to a day before the one before. */
@@ -256,7 +278,7 @@ describe('OrganizationRepositoriesTab', () => {
 
   it('says when the repositories could not be loaded, and tries again', async () => {
     state.set({ status: 'error', failure: 'github' });
-    await fixture.whenStable();
+    await harness.fixture.whenStable();
     const widget = element().querySelector('app-widget')!;
     expect(widget.textContent).toContain(FAILED);
     widget.querySelector<HTMLButtonElement>('.w-state button')!.click();
@@ -311,7 +333,7 @@ describe('OrganizationRepositoriesTab', () => {
     expect(scrollIntoView.mock.calls[0][0]).toEqual(expect.objectContaining({ block: 'start' }));
   });
 
-  it('goes back to the first page as what the list holds changes', async () => {
+  it('goes back to the first page as the filters or the order change', async () => {
     await answer(many(60));
     await click(page('Page 3'));
     await type('r');
@@ -320,7 +342,331 @@ describe('OrganizationRepositoriesTab', () => {
     await choose('Sort', 'name');
     expect(current()).toBe('1');
     await click(page('Page 2'));
-    await answer(many(55));
+    await choose('Type', 'sources');
     expect(current()).toBe('1');
+  });
+
+  it('keeps its page as what the list holds changes, but the last there is', async () => {
+    await answer(many(60));
+    await click(page('Page 3'));
+    // As after a refresh.
+    await answer(many(55));
+    expect(current()).toBe('3');
+    await answer(many(30));
+    expect(current()).toBe('2');
+  });
+
+  describe('in its URL, to bookmark and share (FR-ORG-03)', () => {
+    const router = () => TestBed.inject(Router);
+    const path = () => router().url.split('?')[0];
+    /** The URL's query, whatever its order. */
+    const query = () => Object.fromEntries(new URLSearchParams(router().url.split('?')[1] ?? ''));
+    const copyButton = () =>
+      [...element().querySelectorAll<HTMLButtonElement>('.filters button')].find(
+        (button) => button.textContent?.trim() === COPY_LINK,
+      )!;
+    const alert = () => element().querySelector('.field-msg.err[role="alert"]');
+
+    // As the app does as it starts, so that the router follows the browser's Back and Forward.
+    beforeEach(() => router().setUpLocationChangeListener());
+
+    /** Opens `url` anew, as a link or a reload does, from a page elsewhere. */
+    async function open(url: string): Promise<void> {
+      await harness.navigateByUrl('/blank');
+      await harness.navigateByUrl(url);
+      await harness.fixture.whenStable();
+    }
+
+    /**
+     * Steps through the history with `step`, as the browser's Back or Forward does, which the
+     * router follows once the browser has moved, after the step itself.
+     */
+    async function traverse(step: (location: Location) => void): Promise<void> {
+      const ended = firstValueFrom(router().events.pipe(filter((e) => e instanceof NavigationEnd)));
+      step(TestBed.inject(Location));
+      await ended;
+      await harness.fixture.whenStable();
+    }
+
+    const back = () => traverse((location) => location.back());
+    const forward = () => traverse((location) => location.forward());
+
+    /**
+     * 60 repositories: every other one a fork, every third in Rust and the rest in Go, each with
+     * as many stars as there are before it.
+     */
+    function mixed(): ListedRepository[] {
+      return many(60).map((repository, i) => ({
+        ...repository,
+        fork: i % 2 === 1,
+        language: i % 3 === 0 ? 'Rust' : 'Go',
+        stars: i,
+      }));
+    }
+
+    it('opens at the filters, order and page that its URL names, as a link or a reload does', async () => {
+      await answer(
+        many(60).map((repository, i) => ({
+          ...repository,
+          fork: i < 10,
+          language: 'Rust',
+          stars: i,
+        })),
+      );
+      await open('/orgs/acme/repositories?q=r&type=source&language=rust&sort=stargazers&page=2');
+      expect(search().value).toBe('r');
+      expect(select('Type').value).toBe('sources');
+      expect(select('Language').value).toBe('Rust');
+      expect(select('Sort').value).toBe('stars');
+      expect(current()).toBe('2');
+      // The 50 sources, most stars first: r60 to r36, then r35 on.
+      expect(names()[0]).toBe('r35');
+      expect(names()).toHaveLength(25);
+      expect(status()).toBe(listed(50, 'r', 2, 2));
+      expect(router().url).toBe(
+        '/orgs/acme/repositories?q=r&type=source&language=rust&sort=stargazers&page=2',
+      );
+    });
+
+    it("puts what the user picks in its URL, in GitHub's spelling, and leaves out what is as it starts", async () => {
+      await answer(mixed());
+      await type('r');
+      expect(query()).toEqual({ q: 'r' });
+      await choose('Type', 'forks');
+      expect(query()).toEqual({ q: 'r', type: 'fork' });
+      await choose('Language', 'Go');
+      await choose('Sort', 'stars');
+      expect(query()).toEqual({ q: 'r', type: 'fork', language: 'go', sort: 'stargazers' });
+      await type('');
+      await choose('Language', '');
+      await click(page('Page 2'));
+      expect(query()).toEqual({ type: 'fork', sort: 'stargazers', page: '2' });
+      await choose('Type', 'all');
+      expect(query()).toEqual({ sort: 'stargazers' });
+      await choose('Sort', 'pushed');
+      expect(router().url).toBe('/orgs/acme/repositories');
+    });
+
+    it("keeps a user's tab in their URL (FR-USER-04)", async () => {
+      await answer(mixed());
+      await open('/mona?tab=repositories&sort=name');
+      expect(select('Sort').value).toBe('name');
+      await choose('Type', 'sources');
+      expect(path()).toBe('/mona');
+      expect(query()).toEqual({ tab: 'repositories', sort: 'name', type: 'source' });
+      await choose('Sort', 'pushed');
+      await choose('Type', 'all');
+      expect(router().url).toBe('/mona?tab=repositories');
+    });
+
+    it('steps back and forward through what the user picked, with its URL and what it shows', async () => {
+      await answer(mixed());
+      await choose('Type', 'forks');
+      await choose('Sort', 'name');
+      await click(page('Page 2'));
+      const second = names();
+
+      await back();
+      expect(query()).toEqual({ type: 'fork', sort: 'name' });
+      expect(current()).toBe('1');
+      expect(select('Sort').value).toBe('name');
+      expect(names()[0]).toBe('r02');
+
+      await back();
+      expect(query()).toEqual({ type: 'fork' });
+      expect(select('Sort').value).toBe('pushed');
+      expect(select('Type').value).toBe('forks');
+
+      await back();
+      expect(router().url).toBe('/orgs/acme/repositories');
+      expect(select('Type').value).toBe('all');
+      expect(names()).toHaveLength(25);
+      expect(status()).toBe(listed(60, '', 1, 3));
+
+      await forward();
+      await forward();
+      await forward();
+      expect(query()).toEqual({ type: 'fork', sort: 'name', page: '2' });
+      expect(current()).toBe('2');
+      expect(names()).toEqual(second);
+    });
+
+    it('takes what the user types as one step back, whatever its length', async () => {
+      await answer(mixed());
+      await choose('Sort', 'name');
+      await type('r');
+      await type('r0');
+      await type('r05');
+      expect(query()).toEqual({ q: 'r05', sort: 'name' });
+      expect(names()).toEqual(['r05']);
+
+      await back();
+      expect(query()).toEqual({ sort: 'name' });
+      expect(search().value).toBe('');
+      expect(names()).toHaveLength(25);
+
+      await forward();
+      expect(query()).toEqual({ q: 'r05', sort: 'name' });
+      expect(search().value).toBe('r05');
+      expect(names()).toEqual(['r05']);
+    });
+
+    it('shows the first page again, in its URL too, as the filters or the order change', async () => {
+      await answer(mixed());
+      await click(page('Page 3'));
+      expect(query()).toEqual({ page: '3' });
+      await choose('Sort', 'stars');
+      expect(query()).toEqual({ sort: 'stargazers' });
+      await click(page('Page 2'));
+      await choose('Language', 'Rust');
+      expect(query()).toEqual({ sort: 'stargazers', language: 'rust' });
+    });
+
+    it('shows the last page, in its URL too, when its URL names one past it, once it knows', async () => {
+      await open('/orgs/acme/repositories?sort=name&page=9');
+      // Not while it does not know how many there are.
+      expect(query()).toEqual({ sort: 'name', page: '9' });
+      await answer(mixed());
+      expect(current()).toBe('3');
+      expect(query()).toEqual({ sort: 'name', page: '3' });
+      // In place of the URL the link named, so that Back leads where the user was before.
+      await back();
+      expect(router().url).toBe('/blank');
+    });
+
+    it('shows the last page there is when a refresh brings fewer, or none', async () => {
+      await answer(mixed());
+      await click(page('Page 3'));
+      state.set({ status: 'loading' });
+      await harness.fixture.whenStable();
+      expect(query()).toEqual({ page: '3' });
+      await answer(many(30));
+      expect(current()).toBe('2');
+      expect(query()).toEqual({ page: '2' });
+      await answer([]);
+      expect(router().url).toBe('/orgs/acme/repositories');
+    });
+
+    it('opens as it starts where its URL names what it does not know, and says so in its URL', async () => {
+      await answer(mixed());
+      await open(
+        '/orgs/acme/repositories?type=mirror&sort=forks&page=two&language=&q=%20&utm_source=chat',
+      );
+      expect(select('Type').value).toBe('all');
+      expect(select('Sort').value).toBe('pushed');
+      expect(select('Language').value).toBe('');
+      expect(search().value).toBe('');
+      expect(current()).toBe('1');
+      expect(names()).toHaveLength(25);
+      // What is not the list's stays.
+      expect(router().url).toBe('/orgs/acme/repositories?utm_source=chat');
+      await back();
+      expect(router().url).toBe('/blank');
+    });
+
+    it("spells its URL as it does, whatever spelling a link has, as BuhTig's own", async () => {
+      await answer(mixed());
+      await open('/orgs/acme/repositories?type=Sources&sort=stars&language=RUST&page=1');
+      expect(select('Type').value).toBe('sources');
+      expect(select('Language').value).toBe('Rust');
+      expect(query()).toEqual({ type: 'source', sort: 'stargazers', language: 'rust' });
+    });
+
+    it("keeps a language or a type that the viewer's repositories don't have, and says none match", async () => {
+      await answer(mixed());
+      await open('/orgs/acme/repositories?language=zig&type=private');
+      // So that what the URL says, the filters, and the list agree.
+      expect(options('Language')).toEqual(['All languages', 'Go', 'Rust', 'zig']);
+      expect(select('Language').value).toBe('zig');
+      expect(options('Type')).toEqual([
+        'All',
+        'Private and internal',
+        'Sources',
+        'Forks',
+        'Archived',
+      ]);
+      expect(select('Type').value).toBe('private');
+      expect(names()).toEqual([]);
+      expect(element().querySelector('.empty-note')!.textContent?.trim()).toBe(
+        noMatch('Acme Corp'),
+      );
+      expect(query()).toEqual({ language: 'zig', type: 'private' });
+    });
+
+    it('shows what a link to the list from elsewhere names, as its tab does', async () => {
+      await answer(mixed());
+      await choose('Type', 'forks');
+      await type('r1');
+      // As the dashboard's Repositories tab, or the command palette.
+      await harness.navigateByUrl('/orgs/acme/repositories?sort=name');
+      await harness.fixture.whenStable();
+      expect(select('Type').value).toBe('all');
+      expect(search().value).toBe('');
+      expect(select('Sort').value).toBe('name');
+      expect(names()[0]).toBe('r01');
+    });
+
+    describe('Copy link', () => {
+      let writeText: Mock<(text: string) => Promise<void>>;
+
+      beforeEach(() => {
+        writeText = vi.fn((_text: string) => Promise.resolve());
+        Object.defineProperty(navigator, 'clipboard', {
+          value: { writeText },
+          configurable: true,
+        });
+      });
+
+      afterEach(() => {
+        Reflect.deleteProperty(navigator, 'clipboard');
+      });
+
+      const origin = () => TestBed.inject(DOCUMENT).location.origin;
+      const toasts = () =>
+        TestBed.inject(Toasts)
+          .toasts()
+          .map((toast) => [toast.message, toast.icon]);
+
+      it('copies the link to the list as it is shown, with its page (FR-ORG-03)', async () => {
+        await answer(mixed());
+        await open('/mona?tab=repositories&type=source');
+        await choose('Sort', 'stars');
+        await click(page('Page 2'));
+        expect(copyButton().getAttribute('type')).toBe('button');
+        await click(copyButton());
+        expect(writeText).toHaveBeenCalledExactlyOnceWith(
+          `${origin()}/mona?tab=repositories&type=source&sort=stargazers&page=2`,
+        );
+        expect(toasts()).toEqual([[LINK_COPIED, 'link']]);
+        expect(alert()).toBeNull();
+      });
+
+      it("copies a link with nothing of the viewer's own but what they picked", async () => {
+        await answer(mixed());
+        await open('/orgs/acme/repositories');
+        await click(copyButton());
+        expect(writeText).toHaveBeenCalledExactlyOnceWith(`${origin()}/orgs/acme/repositories`);
+      });
+
+      it("says beside it, where the browser won't copy, that the address bar has the link (NFR-UX-06)", async () => {
+        writeText.mockRejectedValue(new Error('Not allowed'));
+        await answer(mixed());
+        await click(copyButton());
+        expect(alert()!.textContent?.trim()).toBe(COPY_LINK_FAILED);
+        expect(copyButton().getAttribute('aria-describedby')).toBe(alert()!.id);
+        expect(toasts()).toEqual([]);
+        // Until the list shows something else.
+        await choose('Sort', 'name');
+        expect(alert()).toBeNull();
+        expect(copyButton().getAttribute('aria-describedby')).toBeNull();
+      });
+
+      it('says so too where the browser has no clipboard, as over plain HTTP', async () => {
+        Reflect.deleteProperty(navigator, 'clipboard');
+        await answer(mixed());
+        await click(copyButton());
+        expect(alert()!.textContent?.trim()).toBe(COPY_LINK_FAILED);
+      });
+    });
   });
 });

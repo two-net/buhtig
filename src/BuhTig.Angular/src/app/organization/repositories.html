@@ -22,7 +22,7 @@
     >
       <option value="" [selected]="filter().language === undefined">{{ ALL_LANGUAGES }}</option>
       @for (option of languages(); track option) {
-        <option [value]="option" [selected]="filter().language === option">{{ option }}</option>
+        <option [value]="option" [selected]="chosen(option)">{{ option }}</option>
       }
     </select>
     <select #order class="select" aria-label="Sort" (change)="setSort(order.value)">
@@ -30,7 +30,20 @@
         <option [value]="option" [selected]="sort() === option">{{ SORTS[option] }}</option>
       }
     </select>
+    <button
+      type="button"
+      class="btn"
+      [attr.aria-describedby]="copyFailed() ? 'copy-link-failed' : null"
+      (click)="copyLink()"
+    >
+      <app-icon name="link" />{{ COPY_LINK }}
+    </button>
   </div>
+  @if (copyFailed()) {
+    <p id="copy-link-failed" class="field-msg err" role="alert">
+      <app-icon name="alert" />{{ COPY_LINK_FAILED }}
+    </p>
+  }
   <p class="count-note" aria-live="polite">{{ status() }}</p>
   <app-widget heading="Repositories" [empty]="NO_REPOSITORIES" emptyIcon="repo" skeleton="list">
     <ng-template [appLoaded]="repositories">

@@ -29,7 +29,8 @@ export interface Followed {
  * (FR-SRCH-06), the dashboard moves there, to the same tab, at the URL that `at` gives for the
  * resource, in place of the URL it was opened at (FR-NAV-04), and says so when the resource was
  * renamed or transferred (FR-NAV-05). A tab's URL may have a query, as a user's Repositories tab
- * at `/{user}?tab=repositories` has; others in the URL go. Its view is then recorded in a
+ * at `/{user}?tab=repositories` has; others in the URL go, unless `at` keeps them, as the
+ * repository list's filters (FR-ORG-03). Its view is then recorded in a
  * signed-in user's history, once per dashboard (FR-PERS-01), and assistive technology is told
  * that it has loaded. A refresh says what came of it, and keeps what was shown when nothing came
  * instead.
@@ -98,11 +99,12 @@ export function followSummary(
 
   /**
    * Moves to the canonical URL of the dashboard of `known`, in place of the URL in the history,
-   * so that Back does not lead to it again, unless the dashboard is there already.
+   * so that Back does not lead to it again, unless the dashboard is there already, whatever else
+   * its query holds.
    */
   function toCanonical(known: Known): void {
     const canonical = at(known);
-    if (canonical !== located(router.url)) {
+    if (located(canonical) !== located(router.url)) {
       void router.navigateByUrl(canonical, { replaceUrl: true });
     }
   }
@@ -116,7 +118,10 @@ export function followSummary(
     )
     .subscribe(() => {
       const known = summary()?.resource;
-      if (known !== undefined && at(known).toLowerCase() === located(router.url).toLowerCase()) {
+      if (
+        known !== undefined &&
+        located(at(known)).toLowerCase() === located(router.url).toLowerCase()
+      ) {
         toCanonical(known);
       }
     });

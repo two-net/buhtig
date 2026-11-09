@@ -163,6 +163,12 @@ export const TYPES = {
 export const ALL_LANGUAGES = 'All languages';
 export const SORTS = { pushed: 'Last updated', name: 'Name', stars: 'Stars' } as const;
 
+/** FR-ORG-03: the link to the list as it is shown, with its filters, order and page. */
+export const COPY_LINK = 'Copy link';
+export const LINK_COPIED = 'Copied the link to this list';
+export const COPY_LINK_FAILED =
+  "BuhTig couldn't copy the link. Copy it from your browser's address bar instead.";
+
 /**
  * FR-ORG-03: how many repositories the list holds, and which page of them it shows, such as
  * "312 repositories matching “api”, page 2 of 13".

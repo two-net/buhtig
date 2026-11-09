@@ -8,6 +8,7 @@ import {
   input,
   viewChild,
 } from '@angular/core';
+import { Router } from '@angular/router';
 import { NEVER, Observable } from 'rxjs';
 import { Header } from '../header/header';
 import { Tab, Tabs } from '../header/tabs';
@@ -17,6 +18,7 @@ import { TipHost } from '../tip/tip';
 import { OrganizationHead } from '../organization/head';
 import { OrganizationOverview } from '../organization/overview';
 import { OrganizationPeople } from '../organization/people';
+import { listParamsOf } from '../organization/query';
 import { OrganizationRepositoriesTab } from '../organization/repositories';
 import { Owner, Resource, dashboardPath } from '../search/parse';
 import { UserHead } from '../user/head';
@@ -71,6 +73,7 @@ export class AccountDashboard implements AccountData {
   protected readonly gitHub = inject(GITHUB_HOST);
   private readonly resources = inject(Resources);
   private readonly injector = inject(Injector);
+  private readonly router = inject(Router);
   private readonly header = viewChild.required(Header);
 
   /** Where the search box was on the home page, if the dashboard is opened from there. */
@@ -102,15 +105,21 @@ export class AccountDashboard implements AccountData {
     { equal: same },
   );
 
-  private readonly followed = followSummary(this.resource, (known) =>
-    urlOf(
-      accountTabUrl(
-        dashboardPath(known).slice(1),
-        known.kind === 'user' ? 'user' : 'organization',
-        this.shownTab(),
-      ),
-    ),
-  );
+  /**
+   * The dashboard's canonical URL, at the tab shown. The repository list's filters, order and page
+   * go along, so that a link to a view of it opens that view whatever its letter case, or whether
+   * it names an organization as a user (FR-ORG-03, FR-NAV-02).
+   */
+  private readonly followed = followSummary(this.resource, (known) => {
+    const tab = this.shownTab();
+    const url = accountTabUrl(
+      dashboardPath(known).slice(1),
+      known.kind === 'user' ? 'user' : 'organization',
+      tab,
+    );
+    const list = tab === 'repositories' ? listParamsOf(this.router.url) : {};
+    return urlOf({ link: url.link, query: { ...url.query, ...list } });
+  });
   protected readonly summary = this.followed.summary;
   protected readonly refreshing = this.followed.refreshing;
 

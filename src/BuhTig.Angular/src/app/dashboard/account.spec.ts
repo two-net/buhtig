@@ -325,6 +325,23 @@ describe('AccountDashboard', () => {
     expect(router.url).toBe('/orgs/acme/people');
   });
 
+  it("keeps the repository list's view as it moves to GitHub's spelling (FR-ORG-03, FR-NAV-04)", async () => {
+    await open('/orgs/ACME/repositories?type=source&sort=stargazers', 'ACME');
+    await vi.waitFor(() =>
+      expect(router.url).toBe('/orgs/acme/repositories?type=source&sort=stargazers'),
+    );
+    expect(moves()).toEqual(['/orgs/acme/repositories?type=source&sort=stargazers']);
+    expect(main().querySelector<HTMLSelectElement>('select[aria-label="Type"]')!.value).toBe(
+      'sources',
+    );
+  });
+
+  it("takes a user's Repositories tab that names an organization to its own, with the list's view (FR-NAV-02)", async () => {
+    await open('/acme?tab=repositories&language=rust&utm_source=chat', 'acme');
+    await vi.waitFor(() => expect(router.url).toBe('/orgs/acme/repositories?language=rust'));
+    expect(moves()).toEqual(['/orgs/acme/repositories?language=rust']);
+  });
+
   it('loads each part of the organization once, as the first tab that shows it asks', async () => {
     // An organization's path says what it is, so its parts load at once.
     await harness.navigateByUrl('/orgs/acme/people');
@@ -546,6 +563,18 @@ describe('AccountDashboard', () => {
       await openUser('/Mona?tab=repositories', 'Mona');
       await vi.waitFor(() => expect(router.url).toBe('/mona?tab=repositories'));
       expect(moves()).toEqual(['/mona?tab=repositories']);
+    });
+
+    it("keeps the repository list's view as it moves to GitHub's spelling of their login (FR-ORG-03)", async () => {
+      await openUser('/Mona?tab=repositories&q=lisa&page=2', 'Mona');
+      await vi.waitFor(() => expect(router.url).toBe('/mona?tab=repositories&q=lisa&page=2'));
+      expect(moves()).toEqual(['/mona?tab=repositories&q=lisa&page=2']);
+    });
+
+    it("leaves what would be the list's view behind on their overview", async () => {
+      await openUser('/Mona?q=lisa&sort=stargazers', 'Mona');
+      await vi.waitFor(() => expect(router.url).toBe('/mona'));
+      expect(moves()).toEqual(['/mona']);
     });
 
     it('moves from one of their tabs on GitHub that BuhTig does not show to the overview (FR-NAV-02)', async () => {

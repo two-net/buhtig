@@ -225,6 +225,10 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   user, as on GitHub, and their tabs at the paths of the matching pages on GitHub:
   `/{owner}/{repo}/activity`, `/issues`, `/pulls`, `/graphs/contributors` and `/releases`,
   `/orgs/{org}/repositories` and `/orgs/{org}/people`, and `/{user}?tab=repositories`.
+  A repository list's search, type, language, order and page are in its query, as on GitHub,
+  such as `/orgs/{org}/repositories?q=api&type=source&language=rust&sort=stargazers&page=2`,
+  so that a view of it can be bookmarked, shared with its Copy link button, and opened from
+  GitHub's own link. Whoever opens it sees what their own access shows.
   `/users/{user}/…` leads to the user's dashboard, and `/{user}/repositories` to their
   Repositories tab, unless they have a repository of that name. So replacing `github.com`, or `github.host`, with BuhTig's host in a GitHub link opens
   the matching tab: deeper paths redirect to the tab that shows the same, such as
