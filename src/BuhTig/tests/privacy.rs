@@ -63,7 +63,8 @@ fn visitors_leave_nothing_behind_but_the_request_log() {
             &database,
             "SELECT (SELECT count(*) FROM users) + (SELECT count(*) FROM sessions) \
              + (SELECT count(*) FROM credentials) + (SELECT count(*) FROM history_entries) \
-             + (SELECT count(*) FROM pins)",
+             + (SELECT count(*) FROM pins) + (SELECT count(*) FROM watchlists) \
+             + (SELECT count(*) FROM watchlist_entries)",
         ),
         "0"
     );

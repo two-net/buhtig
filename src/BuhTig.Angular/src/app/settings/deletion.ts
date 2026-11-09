@@ -17,9 +17,9 @@ import { GITHUB_HOST } from '../github/host';
 
 /**
  * Where a signed-in user deletes all that BuhTig keeps of theirs, in Settings (FR-PERS-04): their
- * account, sessions, credentials, private cache, history and pins. It says what goes, and that
- * BuhTig's access to their GitHub account is revoked on GitHub, and deletes nothing until the
- * user confirms in a dialog. Once it has, the user is signed out, and sent home.
+ * account, sessions, credentials, private cache, history, pins and watchlists. It says what goes,
+ * and that BuhTig's access to their GitHub account is revoked on GitHub, and deletes nothing until
+ * the user confirms in a dialog. Once it has, the user is signed out, and sent home.
  */
 @Component({
   selector: 'app-data-deletion',

@@ -89,6 +89,7 @@ const ICONS = {
     'M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H9',
   ],
   equal: ['M6 9.5h12M6 14.5h12'],
+  plus: ['M12 5v14M5 12h14'],
 } satisfies Record<string, string[]>;
 
 export type IconName = keyof typeof ICONS;

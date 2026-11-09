@@ -35,6 +35,8 @@ pub mod repository_observation;
 pub mod schema_version;
 pub mod session;
 pub mod user;
+pub mod watchlist;
+pub mod watchlist_entry;
 
 use sea_orm::SchemaBuilder;
 use sea_orm::entity::prelude::*;
@@ -49,6 +51,8 @@ pub fn schema(builder: SchemaBuilder) -> SchemaBuilder {
         .register(repository_observation::Entity)
         .register(history_entry::Entity)
         .register(pin::Entity)
+        .register(watchlist::Entity)
+        .register(watchlist_entry::Entity)
         .register(schema_version::Entity)
         .register(github_host::Entity)
 }

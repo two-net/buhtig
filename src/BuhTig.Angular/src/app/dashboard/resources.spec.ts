@@ -1,4 +1,4 @@
-import { provideHttpClient } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { Observable } from 'rxjs';
@@ -887,6 +887,125 @@ describe('Resources', () => {
       stale: 'later',
     });
     expect(cadence.value).toMatchObject({ fetchedAt: undefined, stale: undefined });
+  });
+
+  describe('glance', () => {
+    const FETCHED = '2026-11-09T10:00:00.000Z';
+    const RUNS = {
+      branch: 'main',
+      sampled: 3,
+      passed: 2,
+      failed: 1,
+      average_duration: 90,
+      latest: {
+        name: 'CI',
+        status: 'completed',
+        conclusion: 'success',
+        started_at: FETCHED,
+        url: 'https://github.com/acme/widget/actions/runs/1',
+      },
+      hidden: false,
+      fetched_at: '2026-11-09T09:00:00.000Z',
+      stale: 'github',
+    };
+    const ANSWER = {
+      name: 'Acme/Widget',
+      fetched_at: FETCHED,
+      stale: null,
+      owner_avatar_url: 'https://avatars.githubusercontent.com/u/1',
+      description: 'A widget',
+      visibility: 'private',
+      archived: true,
+      fork: false,
+      pushed_at: '2026-11-08T10:00:00Z',
+      default_branch: 'main',
+      latest_release: {
+        release: {
+          tag: 'v1.2.0',
+          published_at: '2026-11-01T10:00:00Z',
+          url: 'javascript:alert(1)',
+        },
+        fetched_at: FETCHED,
+        stale: null,
+      },
+      workflow_runs: RUNS,
+    };
+
+    const glance = (answer: object | null, status = 200) => {
+      const seen = outcome(resources.glance('acme', 'widget'));
+      http.expectOne(`${WIDGET}/glance`).flush(answer, { status, statusText: `${status}` });
+      return seen;
+    };
+
+    it('tells what a watchlist shows of the repository, each part with its own date (FR-PERS-08)', () => {
+      const seen = glance(ANSWER).value;
+      expect(seen?.status).toBe('found');
+      const shown = seen?.status === 'found' ? seen.glance : undefined;
+      expect(shown?.path).toBe('/Acme/Widget');
+      expect(shown?.repository).toMatchObject({
+        name: 'Acme/Widget',
+        description: 'A widget',
+        visibility: 'private',
+        archived: true,
+        fork: false,
+        pushedAt: new Date('2026-11-08T10:00:00Z'),
+        defaultBranch: 'main',
+      });
+      expect([shown?.fetchedAt, shown?.stale]).toEqual([new Date(FETCHED), undefined]);
+      // Links only to http and https URLs (NFR-SEC-03).
+      expect(shown?.latestRelease).toEqual({
+        ok: true,
+        release: { tag: 'v1.2.0', publishedAt: new Date('2026-11-01T10:00:00Z'), url: undefined },
+        fetchedAt: new Date(FETCHED),
+        stale: undefined,
+      });
+      expect(shown?.workflowRuns).toMatchObject({
+        ok: true,
+        branch: 'main',
+        passed: 2,
+        latest: { conclusion: 'success', url: RUNS.latest.url },
+        fetchedAt: new Date(RUNS.fetched_at),
+        stale: 'github',
+      });
+    });
+
+    it('tells a repository without releases, and the parts that failed alone', () => {
+      const seen = glance({
+        ...ANSWER,
+        latest_release: { release: null, fetched_at: FETCHED, stale: null },
+        workflow_runs: { failure: 'unavailable' },
+      }).value;
+      const shown = seen?.status === 'found' ? seen.glance : undefined;
+      expect(shown?.latestRelease).toMatchObject({ ok: true, release: undefined });
+      expect(shown?.workflowRuns).toEqual({ ok: false, failure: 'unavailable' });
+
+      const other = glance({ ...ANSWER, latest_release: { failure: 'whatever' } }).value;
+      expect(other?.status === 'found' && other.glance.latestRelease).toEqual({
+        ok: false,
+        failure: 'github',
+      });
+    });
+
+    it('says when GitHub shows the viewer none of it, or that it cannot be a repository', () => {
+      expect(glance(null, 404).value).toEqual({ status: 'not-found' });
+      expect(glance(null, 400).value).toEqual({ status: 'invalid' });
+      expect(glance({ denied: 'token' }, 403).value).toEqual({
+        status: 'denied',
+        denied: { reason: 'token' },
+      });
+      expect(glance({ denied: 'sso', url: 'https://github.com/orgs/acme/sso' }, 403).value).toEqual(
+        {
+          status: 'denied',
+          denied: { reason: 'sso', url: 'https://github.com/orgs/acme/sso' },
+        },
+      );
+    });
+
+    it('fails when BuhTig cannot tell now, for the row to try again', () => {
+      const failed = glance(null, 502);
+      expect(failed.value).toBeUndefined();
+      expect(failed.error).toBeInstanceOf(HttpErrorResponse);
+    });
   });
 
   it("gives an organization's or a user's repository's commit activity, or Computing", () => {

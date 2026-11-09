@@ -47,6 +47,7 @@ use crate::surprise;
 use crate::tokens::{self, Tokens};
 use crate::ui::{self, Ui};
 use crate::users;
+use crate::watchlists::{self, Watchlists};
 
 /// The page shown in place of BuhTig's own while its database is unreachable. It says
 /// what happened and what to do (NFR-UX-06), and nothing about why (NFR-SEC-09).
@@ -84,6 +85,7 @@ pub fn router(
     auth: Arc<Auth>,
     tokens: Arc<Tokens>,
     shortcuts: Arc<Shortcuts>,
+    watchlists: Arc<Watchlists>,
     animations: bool,
     github_host: &str,
 ) -> Router {
@@ -266,6 +268,10 @@ pub fn router(
             get(repositories::trends).with_state(cache.clone()),
         )
         .route(
+            "/-/api/repositories/{owner}/{repo}/glance",
+            get(repositories::glance).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}/refresh",
             post(repositories::refresh).with_state(cache.clone()),
         )
@@ -290,6 +296,28 @@ pub fn router(
             delete(shortcuts::clear_history).with_state(shortcuts.clone()),
         )
         .route("/-/api/pins", put(shortcuts::reorder).with_state(shortcuts))
+        .route(
+            "/-/api/watchlists",
+            get(watchlists::list)
+                .post(watchlists::create)
+                .with_state(watchlists.clone()),
+        )
+        .route(
+            "/-/api/watchlists/{id}",
+            put(watchlists::rename)
+                .delete(watchlists::delete)
+                .with_state(watchlists.clone()),
+        )
+        .route(
+            "/-/api/watchlists/{id}/repositories",
+            post(watchlists::add)
+                .put(watchlists::reorder)
+                .with_state(watchlists.clone()),
+        )
+        .route(
+            "/-/api/watchlists/{id}/repositories/{owner}/{repo}",
+            delete(watchlists::remove).with_state(watchlists),
+        )
         .route(
             "/-/api/token",
             put(tokens::save).delete(tokens::remove).with_state(tokens),

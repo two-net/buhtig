@@ -42,7 +42,8 @@ const APP: &str = "Basic Y2xpZW50LWlkOmNsaWVudC1zZWNyZXQ=";
 /// that one read without the PAT would be seen in the shared cache. Once `revoked`, GitHub
 /// rejects Hubot's PAT. Octo's repositories have pull requests, 2 of them open, open issues,
 /// releases and workflow runs, to whoever GitHub finds the repository for, as [`under`] tells
-/// them. Anything else is not found.
+/// them, each with an ETag, as GitHub gives them. GitHub fails to give `octo/flaky`'s latest
+/// release, and `octo/down` at all, to anyone. Anything else is not found.
 fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
     Stub::new(move |request: &Request<_>| {
         let pat = request
@@ -100,13 +101,16 @@ fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
                     _ => answer(422, &[], r#"{"message": "Validation Failed"}"#),
                 }
             }
+            "/repos/octo/flaky/releases/latest" | "/repos/octo/down" => {
+                answer(500, &[], r#"{"message": "Server Error"}"#)
+            }
             path => match path.strip_prefix("/repos/octo/") {
-                Some(name) if visible.contains(&name) || name == "leaky" => {
-                    answer(200, &[], &repository(name).to_string())
+                Some(name) if visible.contains(&name) || ["leaky", "flaky"].contains(&name) => {
+                    answer(200, ETAG, &repository(name).to_string())
                 }
                 Some(rest) => match rest.split_once('/') {
-                    Some((name, what)) if visible.contains(&name) => {
-                        answer(200, &[], &under(name, what).to_string())
+                    Some((name, what)) if visible.contains(&name) || name == "flaky" => {
+                        answer(200, ETAG, &under(name, what).to_string())
                     }
                     _ => answer(404, &[], r#"{"message": "Not Found"}"#),
                 },
@@ -116,6 +120,9 @@ fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
     })
 }
 
+/// The ETag that GitHub gives with what is under Octo, unchanging.
+const ETAG: &[(&str, &str)] = &[("etag", "\"octo\"")];
+
 /// Octo's repository `name`, as GitHub gives it: `secret` and `leaky` are private, and
 /// `inner` internal, which GitHub marks private too.
 fn repository(name: &str) -> Value {
@@ -123,6 +130,7 @@ fn repository(name: &str) -> Value {
         "secret" => ("private", 1002),
         "leaky" => ("private", 1004),
         "inner" => ("internal", 1003),
+        "flaky" => ("public", 1005),
         _ => ("public", 1001),
     };
     json!({
@@ -142,8 +150,8 @@ fn repository(name: &str) -> Value {
 }
 
 /// What GitHub gives under Octo's repository `name` at `what` (FR-REPO-13, FR-REPO-14,
-/// FR-REPO-16): its pull requests as searched for, its open issues, its releases and its
-/// workflow runs, which GitHub gives with the repository, marked private as it is.
+/// FR-REPO-16): its pull requests as searched for, its open issues, its releases, the latest
+/// of them, and its workflow runs, which GitHub gives with the repository, marked private as it is.
 fn under(name: &str, what: &str) -> Value {
     let at = "2026-10-01T00:00:00Z";
     match what {
@@ -153,6 +161,8 @@ fn under(name: &str, what: &str) -> Value {
         "issues" => json!([{"created_at": at}]),
         "releases" => json!([{"tag_name": "v1", "draft": false, "prerelease": false,
                               "published_at": at, "assets": []}]),
+        "releases/latest" => json!({"tag_name": "v1", "published_at": at,
+            "html_url": format!("https://github.com/octo/{name}/releases/tag/v1")}),
         "actions/runs" => json!({"total_count": 1, "workflow_runs": [{
             "name": "CI", "status": "completed", "conclusion": "success",
             "run_started_at": at, "created_at": at, "updated_at": at,
@@ -453,7 +463,7 @@ fn body_for(method: &Method) -> Option<Value> {
 }
 
 /// What only signed-in users may ask for or do (FR-ACC-02), whatever the mode.
-const SIGNED_IN_ONLY: [(Method, &str); 11] = [
+const SIGNED_IN_ONLY: [(Method, &str); 19] = [
     (Method::GET, "/-/api/shortcuts"),
     (Method::DELETE, "/-/api/history"),
     (Method::PUT, "/-/api/pins"),
@@ -465,6 +475,17 @@ const SIGNED_IN_ONLY: [(Method, &str); 11] = [
     (Method::POST, "/-/api/users/hubot/refresh"),
     (Method::POST, "/-/api/users/hubot/view"),
     (Method::PUT, "/-/api/users/hubot/pin"),
+    (Method::GET, "/-/api/watchlists"),
+    (Method::POST, "/-/api/watchlists"),
+    (Method::PUT, "/-/api/watchlists/1"),
+    (Method::DELETE, "/-/api/watchlists/1"),
+    (Method::POST, "/-/api/watchlists/1/repositories"),
+    (Method::PUT, "/-/api/watchlists/1/repositories"),
+    (
+        Method::DELETE,
+        "/-/api/watchlists/1/repositories/octo/public",
+    ),
+    (Method::GET, "/-/api/repositories/octo/public/glance"),
 ];
 
 /// FR-ACC-02, FR-ACC-04 and FR-DATA-02: in public mode, visitors see public dashboards,
@@ -1293,5 +1314,257 @@ async fn a_rejected_pat_never_lists_its_users_repositories_to_anyone() {
     assert_eq!(
         served.psql("SELECT status FROM credentials WHERE kind = 'pat'"),
         "invalid"
+    );
+}
+
+/// What `viewer` is told of Octo's repository `repo` at a glance, as a watchlist shows it
+/// (FR-PERS-08): the status, and the body, `null` if there is none.
+async fn glance(served: &Served, viewer: &Viewer, repo: &str) -> (u16, Value) {
+    let answer = served
+        .get(viewer, &format!("/-/api/repositories/octo/{repo}/glance"))
+        .await;
+    assert_eq!(
+        answer.cache_control.as_deref(),
+        Some("no-store"),
+        "{answer:?}"
+    );
+    let body = if answer.body.is_empty() {
+        Value::Null
+    } else {
+        answer.json()
+    };
+    (answer.status, body)
+}
+
+/// The paths of the requests to GitHub from the `from`th on, without their queries, in order.
+fn asked_since(served: &Served, from: usize) -> Vec<String> {
+    served.stub.urls()[from..]
+        .iter()
+        .map(|url| {
+            let url = url.strip_prefix("https://api.github.com").unwrap();
+            url.split('?').next().unwrap().to_owned()
+        })
+        .collect()
+}
+
+/// FR-PERS-08, FR-PERS-09: a watchlist shows a repository's latest release, last push and
+/// workflow runs, read as its dashboard reads them, under the same keys of the cache: three
+/// requests to GitHub per `cache.ttl` at most, none a search or a statistic, conditional once
+/// the cache has the data, and none at all for what the dashboard read lately.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watchlist_reads_each_repository_as_its_dashboard_does() {
+    let served = serve("public").await;
+    let mona = served.mona().await;
+    let made = served
+        .send(
+            &mona,
+            Method::POST,
+            "/-/api/watchlists",
+            Some(json!({"name": "Dependencies", "repositories": ["octo/public"]})),
+        )
+        .await;
+    assert_eq!(made.status, 201, "{made:?}");
+    // Making a watchlist asks GitHub nothing.
+    assert_eq!(served.stub.urls(), Vec::<String>::new());
+
+    let (status, public) = glance(&served, &mona, "public").await;
+    assert_eq!(status, 200, "{public}");
+    assert_eq!(public["name"], "octo/public");
+    assert_eq!(public["visibility"], "public");
+    assert_eq!(public["archived"], false);
+    assert_eq!(public["pushed_at"], "2026-10-01T00:00:00Z");
+    assert_eq!(public["stale"], Value::Null);
+    assert_eq!(
+        public["latest_release"]["release"],
+        json!({
+            "tag": "v1",
+            "published_at": "2026-10-01T00:00:00Z",
+            "url": "https://github.com/octo/public/releases/tag/v1",
+        })
+    );
+    assert_eq!(public["latest_release"]["stale"], Value::Null);
+    assert!(
+        public["latest_release"]["fetched_at"].is_string(),
+        "{public}"
+    );
+    let runs = &public["workflow_runs"];
+    assert_eq!(runs["branch"], "main");
+    assert_eq!(runs["hidden"], false);
+    assert_eq!(runs["latest"]["conclusion"], "success");
+    assert_eq!(
+        runs["latest"]["url"],
+        "https://github.com/octo/public/actions/runs/1"
+    );
+    let mut asked = asked_since(&served, 0);
+    asked.sort();
+    assert_eq!(
+        asked,
+        [
+            "/repos/octo/public",
+            "/repos/octo/public/actions/runs",
+            "/repos/octo/public/releases/latest",
+        ]
+    );
+
+    // Within cache.ttl, GitHub is not asked again.
+    let read = served.stub.urls().len();
+    assert_eq!(glance(&served, &mona, "public").await.0, 200);
+    assert_eq!(asked_since(&served, read), Vec::<String>::new());
+    // The dashboard reads the same: its stat cards ask only for the count of open pull
+    // requests, which a watchlist never searches for, and its workflow runs nothing.
+    let stats = served
+        .get(&mona, "/-/api/repositories/octo/public/stats")
+        .await;
+    assert_eq!(stats.json()["latest_release"]["tag"], "v1", "{stats:?}");
+    let runs = served
+        .get(&mona, "/-/api/repositories/octo/public/workflow-runs")
+        .await;
+    assert_eq!(runs.status, 200, "{runs:?}");
+    assert_eq!(asked_since(&served, read), ["/search/issues"]);
+
+    // Once cache.ttl has passed, GitHub is asked again, whether what it gave has changed.
+    served.psql("UPDATE cache_entries SET expires_at = now() - interval '1 minute'");
+    let read = served.stub.urls().len();
+    assert_eq!(glance(&served, &mona, "public").await.0, 200);
+    let requests = &served.stub.requests()[read..];
+    assert_eq!(requests.len(), 3, "{requests:?}");
+    for (url, headers) in requests {
+        assert_eq!(headers["if-none-match"], "\"octo\"", "{url}");
+    }
+}
+
+/// FR-PERS-08, FR-REPO-09, AC-18: what GitHub fails to give of one repository, or of part of
+/// it, keeps nothing of the others from a watchlist.
+#[tokio::test(flavor = "multi_thread")]
+async fn one_repository_failing_keeps_nothing_of_the_others() {
+    let served = serve("public").await;
+    let mona = served.mona().await;
+
+    let (status, flaky) = glance(&served, &mona, "flaky").await;
+    assert_eq!(status, 200, "{flaky}");
+    assert_eq!(flaky["latest_release"], json!({"failure": "github"}));
+    assert_eq!(flaky["workflow_runs"]["latest"]["conclusion"], "success");
+    assert_eq!(glance(&served, &mona, "down").await, (502, Value::Null));
+    assert_eq!(glance(&served, &mona, "missing").await, (404, Value::Null));
+    let (status, public) = glance(&served, &mona, "public").await;
+    assert_eq!(status, 200, "{public}");
+    assert_eq!(public["latest_release"]["release"]["tag"], "v1");
+    // A name that cannot be a repository's is refused before GitHub is asked.
+    let read = served.stub.urls().len();
+    assert_eq!(glance(&served, &mona, "a~b").await, (400, Value::Null));
+    assert_eq!(asked_since(&served, read), Vec::<String>::new());
+}
+
+/// FR-PERS-06 to FR-PERS-09, FR-ACC-06, AC-03, AC-11, DR-04: a watchlist is its user's
+/// alone, and what it shows of each repository is what that user may see now, whatever
+/// another's credentials saw. A PAT removed takes with it what the watchlist showed through
+/// it, and an account its watchlists.
+#[tokio::test(flavor = "multi_thread")]
+async fn watchlists_are_their_users_alone() {
+    let served = serve("public").await;
+    let hubot = served.hubot().await;
+    let mona = served.mona().await;
+    let made = served
+        .send(
+            &hubot,
+            Method::POST,
+            "/-/api/watchlists",
+            Some(json!({"name": "Team", "repositories": ["octo/secret", "octo/public"]})),
+        )
+        .await;
+    assert_eq!(made.status, 201, "{made:?}");
+    let id = made.json()["id"].as_i64().unwrap();
+    let (status, secret) = glance(&served, &hubot, "secret").await;
+    assert_eq!(status, 200, "{secret}");
+    assert_eq!(secret["visibility"], "private");
+    assert_eq!(secret["latest_release"]["release"]["tag"], "v1");
+    assert_eq!(secret["workflow_runs"]["latest"]["conclusion"], "success");
+
+    // Mona, whom GitHub does not let see it, is told nothing of it, from her own credential,
+    // and nothing of it reaches the shared cache.
+    assert_eq!(glance(&served, &mona, "secret").await, (404, Value::Null));
+    assert_eq!(
+        served.credentials_for("/repos/octo/secret").last().unwrap(),
+        &format!("Bearer {MONAS_SIGN_IN}")
+    );
+    assert_eq!(
+        served.psql(
+            "SELECT count(*) FROM cache_entries WHERE scope = 'shared' \
+             AND resource_key LIKE '%secret%'"
+        ),
+        "0"
+    );
+
+    // Nor does she see or change Hubot's watchlist.
+    let listed = served.get(&mona, "/-/api/watchlists").await;
+    assert_eq!(listed.json(), json!({"watchlists": []}));
+    let repositories = json!({"repositories": ["octo/public"]});
+    for (method, path, body) in [
+        (
+            Method::PUT,
+            format!("/-/api/watchlists/{id}"),
+            json!({"name": "Mine"}),
+        ),
+        (Method::DELETE, format!("/-/api/watchlists/{id}"), json!({})),
+        (
+            Method::POST,
+            format!("/-/api/watchlists/{id}/repositories"),
+            repositories.clone(),
+        ),
+        (
+            Method::PUT,
+            format!("/-/api/watchlists/{id}/repositories"),
+            repositories,
+        ),
+        (
+            Method::DELETE,
+            format!("/-/api/watchlists/{id}/repositories/octo/secret"),
+            json!({}),
+        ),
+    ] {
+        let answer = served.send(&mona, method.clone(), &path, Some(body)).await;
+        assert_eq!(
+            (answer.status, answer.body.as_str()),
+            (404, ""),
+            "{method} {path}"
+        );
+    }
+    let listed = served.get(&hubot, "/-/api/watchlists").await;
+    assert_eq!(
+        listed.json(),
+        json!({"watchlists": [
+            {"id": id, "name": "Team", "repositories": ["octo/secret", "octo/public"]}
+        ]})
+    );
+
+    // Once Hubot removes his PAT, his watchlist tells him nothing more of the repository
+    // that only it could see, though the repository stays in it.
+    let removed = served
+        .send(&hubot, Method::DELETE, "/-/api/token", Some(json!({})))
+        .await;
+    assert!(removed.status < 300, "{removed:?}");
+    assert_eq!(glance(&served, &hubot, "secret").await, (404, Value::Null));
+    assert_eq!(glance(&served, &hubot, "public").await.0, 200);
+
+    // With his account go his watchlists, and Mona's stay.
+    let mine = served
+        .send(
+            &mona,
+            Method::POST,
+            "/-/api/watchlists",
+            Some(json!({"name": "Mine", "repositories": ["octo/public"]})),
+        )
+        .await;
+    assert_eq!(mine.status, 201, "{mine:?}");
+    let deleted = served
+        .send(&hubot, Method::DELETE, "/-/api/user", Some(json!({})))
+        .await;
+    assert!(deleted.status < 300, "{deleted:?}");
+    assert_eq!(
+        served.psql(
+            "SELECT (SELECT count(*) FROM watchlists) || ' ' || \
+             (SELECT count(*) FROM watchlist_entries)"
+        ),
+        "1 1"
     );
 }

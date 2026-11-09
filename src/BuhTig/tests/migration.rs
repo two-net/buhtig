@@ -83,7 +83,7 @@ fn first_start_creates_the_schema_and_a_restart_changes_nothing() {
              FROM information_schema.tables WHERE table_schema = 'public'"
         ),
         "cache_entries credentials github_hosts history_entries pins repository_observations \
-         schema_versions sessions users"
+         schema_versions sessions users watchlist_entries watchlists"
     );
     assert_eq!(db.psql("SELECT host FROM github_hosts"), "github.com");
 
@@ -333,12 +333,17 @@ fn upgrade_keeps_data_and_adds_what_is_missing() {
             VALUES (1, 'repository', 'octocat/Hello-World', now());
         INSERT INTO pins (user_id, resource_kind, resource_name, position)
             VALUES (1, 'organization', 'github', 0);
+        INSERT INTO watchlists (user_id, name, created_at) VALUES (1, 'Dependencies', now());
+        INSERT INTO watchlist_entries (watchlist_id, repository_name, position)
+            VALUES ((SELECT id FROM watchlists), 'octocat/Spoon-Knife', 0);
 
         UPDATE schema_versions SET version = '0.0.1';
         DROP TABLE cache_entries;
         ALTER TABLE users DROP COLUMN name;
         DROP INDEX "idx-pins-resource";
         DROP INDEX "idx-sessions-user_id";
+        DROP INDEX "idx-watchlists-name";
+        DROP INDEX "idx-watchlist_entries-repository";
         "#,
     );
 
@@ -355,10 +360,13 @@ fn upgrade_keeps_data_and_adds_what_is_missing() {
              SELECT kind || ' ' || last_four FROM credentials;
              SELECT resource_name FROM history_entries;
              SELECT resource_name FROM pins;
+             SELECT name FROM watchlists;
+             SELECT repository_name FROM watchlist_entries;
              SELECT string_agg(version, ' ' ORDER BY applied_at) FROM schema_versions;"
         ),
         format!(
-            "octocat https://avatars.example/u/1\n01\npat abcd\noctocat/Hello-World\ngithub\n0.0.1 {VERSION}"
+            "octocat https://avatars.example/u/1\n01\npat abcd\noctocat/Hello-World\ngithub\n\
+             Dependencies\noctocat/Spoon-Knife\n0.0.1 {VERSION}"
         )
     );
 }
@@ -566,6 +574,12 @@ fn the_database_enforces_uniqueness_and_relationships() {
                    ('user:1', 42, '2026-11-09', 1, (SELECT id FROM credentials WHERE kind = 'pat'),
                     now(), now(), 1, 1, 1, 1),
                    ('user:1', 43, '2026-11-09', 1, NULL, now(), now(), 1, 1, 1, 1);
+        INSERT INTO watchlists (user_id, name, created_at)
+            VALUES (1, 'Dependencies', now()), (2, 'Dependencies', now());
+        INSERT INTO watchlist_entries (watchlist_id, repository_name, position)
+            VALUES ((SELECT id FROM watchlists WHERE user_id = 1), 'owner/repo', 0),
+                   ((SELECT id FROM watchlists WHERE user_id = 1), 'owner/other', 1),
+                   ((SELECT id FROM watchlists WHERE user_id = 2), 'owner/repo', 0);
         "#,
     );
 
@@ -613,6 +627,26 @@ fn the_database_enforces_uniqueness_and_relationships() {
              VALUES ('user:1', 44, '2026-11-09', 1, 99, now(), now(), 1, 1, 1, 1)",
             "violates foreign key constraint",
         ),
+        // One watchlist of a name per user, and one entry of a repository per watchlist
+        // (FR-PERS-06, FR-PERS-07).
+        (
+            "INSERT INTO watchlists (user_id, name, created_at) VALUES (1, 'Dependencies', now())",
+            "duplicate key value violates unique constraint",
+        ),
+        (
+            "INSERT INTO watchlists (user_id, name, created_at) VALUES (99, 'Mine', now())",
+            "violates foreign key constraint",
+        ),
+        (
+            "INSERT INTO watchlist_entries (watchlist_id, repository_name, position) \
+             VALUES ((SELECT id FROM watchlists WHERE user_id = 1), 'owner/repo', 2)",
+            "duplicate key value violates unique constraint",
+        ),
+        (
+            "INSERT INTO watchlist_entries (watchlist_id, repository_name, position) \
+             VALUES (99, 'owner/repo', 0)",
+            "violates foreign key constraint",
+        ),
     ] {
         let error = db.cluster.try_psql(&db.database, sql).unwrap_err();
         assert!(error.contains(problem), "{sql}: {error}");
@@ -634,8 +668,10 @@ fn the_database_enforces_uniqueness_and_relationships() {
                 || ' ' || (SELECT string_agg(scope, ' ') FROM cache_entries)
                 || ' ' || (SELECT count(*) FROM history_entries)
                 || ' ' || (SELECT string_agg(user_id::text, ' ') FROM pins)
-                || ' ' || (SELECT string_agg(scope, ' ') FROM repository_observations)"
+                || ' ' || (SELECT string_agg(scope, ' ') FROM repository_observations)
+                || ' ' || (SELECT string_agg(user_id::text, ' ') FROM watchlists)
+                || ' ' || (SELECT count(*) FROM watchlist_entries)"
         ),
-        "0 0 shared 0 2 shared"
+        "0 0 shared 0 2 shared 2 1"
     );
 }

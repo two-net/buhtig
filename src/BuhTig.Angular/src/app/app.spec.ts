@@ -67,10 +67,11 @@ describe('routes', () => {
         (route) => route.loadComponent === undefined && route.loadChildren === undefined,
       ),
     ).toEqual([{ path: '', component: Home, title: 'BuhTig' }]);
-    // A comparison's routes come with its code, as it is first opened (FR-CMP-01).
+    // A comparison's routes come with its code, as it is first opened (FR-CMP-01), and so do the
+    // watchlists' (FR-PERS-08).
     expect(
       pages.filter((route) => route.loadChildren !== undefined).map((route) => route.path),
-    ).toEqual(['compare']);
+    ).toEqual(['compare', 'watchlists']);
     // Page not found too, below /-/ and anywhere else.
     expect(pages.filter((route) => route.path === '**')).toHaveLength(2);
     expect(pages.every((route) => route.path === '' || route.component === undefined)).toBe(true);

@@ -26,6 +26,7 @@ mod trends;
 mod ui;
 mod users;
 mod visitors;
+mod watchlists;
 mod web;
 
 // The integration tests' PostgreSQL cluster, for unit tests that need a database.
@@ -62,6 +63,7 @@ use crate::preview::Previews;
 use crate::session::Sessions;
 use crate::shortcuts::Shortcuts;
 use crate::tokens::Tokens;
+use crate::watchlists::Watchlists;
 
 /// Where the config file is read from unless `--config` says otherwise (FR-CFG-01).
 const DEFAULT_CONFIG_PATH: &str = "config.toml";
@@ -238,6 +240,7 @@ fn app(config: &Config, db: &DatabaseConnection, github: Arc<github::Client>) ->
     ));
     let tokens = Arc::new(Tokens::new(db.clone(), sealer, github.clone()));
     let shortcuts = Arc::new(Shortcuts::new(db.clone()));
+    let watchlists = Arc::new(Watchlists::new(db.clone()));
     let auth = Arc::new(Auth::new(
         sessions.clone(),
         github,
@@ -253,6 +256,7 @@ fn app(config: &Config, db: &DatabaseConnection, github: Arc<github::Client>) ->
         auth,
         tokens,
         shortcuts,
+        watchlists,
         config.ui.animations,
         &config.github.host,
     )

@@ -9,17 +9,19 @@ import { OPEN_ON_GITHUB, SHARE_CARD, UPDATED } from './messages';
 import { Pin } from './pin';
 import { Refresh } from './refresh';
 import { ShareCard } from './share-card';
+import { Watch } from './watch';
 import { GITHUB_HOST } from '../github/host';
 
 /**
  * What a dashboard's head offers beside its resource: when its data was fetched (FR-DATA-06),
- * Refresh and Pin for signed-in users (FR-DATA-07, FR-PERS-02), "Compare with…", which asks what
- * to compare it with (FR-CMP-02), "Share card", which offers its card to embed elsewhere, if it is
- * public and BuhTig is (FR-NAV-08), and its page on GitHub.
+ * Refresh and Pin for signed-in users (FR-DATA-07, FR-PERS-02), and of a repository "Add to
+ * watchlist…" (FR-PERS-07), "Compare with…", which asks what to compare it with (FR-CMP-02),
+ * "Share card", which offers its card to embed elsewhere, if it is public and BuhTig is
+ * (FR-NAV-08), and its page on GitHub.
  */
 @Component({
   selector: 'app-head-actions',
-  imports: [CompareDialog, Icon, Pin, Refresh, RelativeTime, ShareCard],
+  imports: [CompareDialog, Icon, Pin, Refresh, RelativeTime, ShareCard, Watch],
   template: `
     <div class="actions">
       <div class="freshness">
@@ -29,6 +31,7 @@ import { GITHUB_HOST } from '../github/host';
         <app-refresh [resource]="resource()" (refreshed)="refreshed.emit()" />
       </div>
       <app-pin [resource]="resource()" />
+      <app-watch [resource]="resource()" />
       <button type="button" class="btn sm" (click)="comparing.set(true)">
         <app-icon name="compare" />{{ COMPARE_WITH }}
       </button>

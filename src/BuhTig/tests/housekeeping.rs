@@ -80,7 +80,9 @@ impl Setup {
              SELECT string_agg(id::text, ' ' ORDER BY id) FROM repository_observations;
              SELECT string_agg(id::text, ' ' ORDER BY id) FROM history_entries;
              SELECT count(*) FROM users;
-             SELECT count(*) FROM pins;",
+             SELECT count(*) FROM pins;
+             SELECT count(*) FROM watchlists;
+             SELECT count(*) FROM watchlist_entries;",
         )
     }
 }
@@ -177,6 +179,11 @@ fn seed(db: &Setup) {
         -- Kept, although the history entry for it goes.
         INSERT INTO pins (user_id, resource_kind, resource_name, position)
             VALUES (1, 'repository', 'alice/repo-25', 0);
+        -- Kept: watchlists go only when their users delete them (FR-PERS-06).
+        INSERT INTO watchlists (user_id, name, created_at)
+            VALUES (1, 'Dependencies', now() - interval '400 days');
+        INSERT INTO watchlist_entries (watchlist_id, repository_name, position)
+            VALUES ((SELECT id FROM watchlists), 'alice/repo-25', 0);
         "#,
     );
 }
@@ -198,8 +205,12 @@ fn assert_cleaned_up(db: &Setup) {
     assert_eq!(db.history(1), ids((1..=19).chain([21])));
     assert_eq!(db.history(2), ids(101..=120));
     assert_eq!(
-        db.psql("SELECT (SELECT count(*) FROM users) || ' ' || (SELECT count(*) FROM pins)"),
-        "2 1"
+        db.psql(
+            "SELECT (SELECT count(*) FROM users) || ' ' || (SELECT count(*) FROM pins) \
+             || ' ' || (SELECT count(*) FROM watchlists) \
+             || ' ' || (SELECT count(*) FROM watchlist_entries)"
+        ),
+        "2 1 1 1"
     );
 }
 

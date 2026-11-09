@@ -83,3 +83,39 @@
 .field-msg.err {
   color: var(--fg-danger);
 }
+/* A choice beside its box, such as to start a watchlist with one's pins (FR-PERS-07). */
+.dialog label.check,
+.dialog .choices label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-weight: 400;
+}
+/* The watchlists to show a dashboard's repository in, each a box to tick (FR-PERS-07). */
+.dialog .choices {
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+.dialog .choices label {
+  margin: 0;
+  padding: 6px 0;
+}
+.dialog .choices .grow {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dialog .choices small {
+  color: var(--fg-muted);
+}
+/* An input with its button beside it, as the name of a new watchlist (FR-PERS-07). */
+.dialog .inline {
+  display: flex;
+  gap: 8px;
+}
+.dialog .inline .input {
+  flex: 1;
+  min-width: 0;
+}

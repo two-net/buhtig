@@ -121,8 +121,8 @@ export class Session {
 
   /**
    * Deletes the signed-in user and all that BuhTig keeps of theirs: their account, sessions,
-   * credentials, private cache, history and pins (FR-PERS-04). That signs them out on every
-   * browser, this one too.
+   * credentials, private cache, history, pins and watchlists (FR-PERS-04). That signs them out on
+   * every browser, this one too.
    */
   deleteUser(): Observable<void> {
     return this.http.delete<void>('/-/api/user').pipe(tap(() => this.deletedNow.set(true)));

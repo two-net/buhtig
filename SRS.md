@@ -56,6 +56,7 @@ BuhTig is read-only: it never changes anything on GitHub. Its name is "GitHub" s
 | Sign-in credential | The access token GitHub issues to BuhTig when a user signs in. |
 | Shared cache | Cached GitHub data that contains only public information and may be served to anyone. |
 | Private cache | Cached GitHub data fetched with a user's PAT, served only to that user. |
+| Watchlist | A signed-in user's named list of repositories, of any owners, whose overview shows them together (§4.8). |
 | Observation | What a repository's stat cards showed when BuhTig read them from GitHub, kept so that its dashboard can tell how they changed (FR-DATA-13). It belongs to a cache scope as the data it was made of does. |
 | TTL | Time to live: how long cached data is considered fresh. |
 | Auto-migration | Automatic creation and update of the database schema when BuhTig starts. |
@@ -111,7 +112,7 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 - **Comparison:** two repositories, or two organizations or users, side by side (§4.14).
 - **Accounts:** sign-in with GitHub (§4.5) and an optional personal access token (§4.6).
 - **Access:** public and private access rules and modes (§4.7).
-- **Personal shortcuts:** history and pinned dashboards (§4.8).
+- **Personal shortcuts:** history, pinned dashboards, and watchlists of repositories (§4.8).
 - **Data:** GitHub retrieval with caching in PostgreSQL, and observations of how repositories' figures change (§4.9).
 - **Motion:** animation throughout the UI (§4.10).
 - **Operation:** one config file, auto-migration, and a health check (§4.11–§4.13).
@@ -121,7 +122,7 @@ The browser talks only to BuhTig, except during sign-in, when it is redirected t
 | Class | What they can access | Typical goal |
 |---|---|---|
 | Visitor | Public mode only. Dashboards of public repositories, organizations and users, with public data only. | Size up a project before using or contributing to it. |
-| Signed-in user | Everything a visitor can, plus history, pins, and manual refresh. GitHub requests count against the user's own rate limit. Still public data only. | Keep an eye on projects they care about. |
+| Signed-in user | Everything a visitor can, plus history, pins, watchlists, and manual refresh. GitHub requests count against the user's own rate limit. Still public data only. | Keep an eye on projects they care about. |
 | Token user | Everything a signed-in user can, plus private and internal repositories and organization data their PAT can access, and their own private repositories on their own dashboard. | Monitor their team's private repositories. |
 | Operator | No in-app role. Controls the instance through the config file and the database. | Run BuhTig with minimal effort. |
 
@@ -221,9 +222,9 @@ BuhTig looks like GitHub, after its open-source Primer design system, so that it
 | ID | Requirement | Priority |
 |---|---|---|
 | UI-01 | Every screen shall have one obvious primary action, generous whitespace, and a restrained palette. | Must |
-| UI-02 | A visitor's home page shall center the BuhTig wordmark, the search box, and a primary "Show dashboard" button, with "Surprise me" (FR-SRCH-10) and repositories to try (FR-SRCH-11) below. A signed-in user's home page shall show the search box with their shortcuts beside it (FR-SRCH-08). The top-right corner shall hold "Sign in" or, when signed in, the user's avatar with a menu (Home, Settings, Sign out) that says whether BuhTig has a personal access token of theirs. | Must |
+| UI-02 | A visitor's home page shall center the BuhTig wordmark, the search box, and a primary "Show dashboard" button, with "Surprise me" (FR-SRCH-10) and repositories to try (FR-SRCH-11) below. A signed-in user's home page shall show the search box with their shortcuts beside it (FR-SRCH-08). The top-right corner shall hold "Sign in" or, when signed in, the user's avatar with a menu (Home, Watchlists, Settings, Sign out) that says whether BuhTig has a personal access token of theirs. | Must |
 | UI-03 | The dashboard header shall show the wordmark (linking home), breadcrumbs of the resource, the search box pre-filled with the current resource, and "Sign in" or the avatar menu. Below it, the dashboard's tabs shall show how many items each has, once known. | Must |
-| UI-04 | Page titles shall be "BuhTig" on the home page and "{owner}/{repo} · BuhTig", "{org} · BuhTig" or "{user} · BuhTig" on dashboards, and "{first} vs {second} · BuhTig" on comparisons (§4.14). | Must |
+| UI-04 | Page titles shall be "BuhTig" on the home page and "{owner}/{repo} · BuhTig", "{org} · BuhTig" or "{user} · BuhTig" on dashboards, "{first} vs {second} · BuhTig" on comparisons (§4.14), and "Watchlists · BuhTig" on watchlists (FR-PERS-08). | Must |
 | UI-05 | Dashboard widgets shall sit in a main column with a sidebar, which collapses to one column below 1012 px. | Must |
 | UI-06 | Large numbers shall be shown compactly (e.g., 12.3k) and dates relatively (e.g., "3 days ago"). Exact values shall appear on hover and focus. All numbers and dates shall be formatted for the browser's locale. | Must |
 | UI-07 | Light and dark themes shall follow the operating system's preference. | Should |
@@ -377,13 +378,13 @@ In Table 4-1, `github.com` stands for `github.host` (CON-09): with GitHub Enterp
 | Viewer | Public mode (default) | Private mode |
 |---|---|---|
 | Visitor | Home page and dashboards of public resources (public data only) | Sign-in, About, and Privacy pages only |
-| Signed-in user | Public dashboards, plus history, pins, and refresh | Same as public mode |
+| Signed-in user | Public dashboards, plus history, pins, watchlists, and refresh | Same as public mode |
 | Token user | Everything above, plus private and internal resources their PAT can access | Same as public mode |
 
 | ID | Requirement | Priority |
 |---|---|---|
 | FR-ACC-01 | The access mode shall be set by `access.mode`: `public` (default) or `private`. | Must |
-| FR-ACC-02 | In public mode, visitors shall be able to use the home page and view dashboards of public repositories and organizations, limited to public data. Settings, history, pins, and refresh shall require sign-in. | Must |
+| FR-ACC-02 | In public mode, visitors shall be able to use the home page and view dashboards of public repositories and organizations, limited to public data. Settings, history, pins, watchlists, and refresh shall require sign-in. | Must |
 | FR-ACC-03 | In private mode, every page and data request shall require sign-in, except the sign-in page and callback, the About and Privacy pages, the health check, and the static assets these need. Visitors shall be redirected to sign in and then returned to the page they requested. | Must |
 | FR-ACC-04 | In both modes, private and internal repositories and private organization data shall be shown only to token users whose PAT gives them access on GitHub. | Must |
 | FR-ACC-05 | GitHub answers "not found" both for missing resources and for private ones the caller cannot access, so BuhTig shall show one "Not found or private" page tailored to the viewer. Visitors get a sign-in prompt, and signed-in users without a PAT get an add-token prompt. Token users are told the resource does not exist or their PAT cannot access it. The page shall reveal nothing about the resource. | Must |
@@ -398,8 +399,12 @@ In Table 4-1, `github.com` stands for `github.host` (CON-09): with GitHub Enterp
 | FR-PERS-01 | For signed-in users, BuhTig shall record the 20 most recently viewed dashboards (resource and time only). | Should |
 | FR-PERS-02 | Signed-in users shall be able to pin up to 12 dashboards and unpin them. Pins come first among the home-page shortcuts. | Should |
 | FR-PERS-03 | Signed-in users shall be able to clear their history. | Should |
-| FR-PERS-04 | After confirmation, signed-in users shall be able to delete all their BuhTig data from Settings: account, sessions, credentials, private cache, the observations made with their PAT, history, and pins. BuhTig shall explain that removing its access on GitHub is done in GitHub's settings, and link there. | Must |
+| FR-PERS-04 | After confirmation, signed-in users shall be able to delete all their BuhTig data from Settings: account, sessions, credentials, private cache, the observations made with their PAT, history, pins, and watchlists. BuhTig shall explain that removing its access on GitHub is done in GitHub's settings, and link there. | Must |
 | FR-PERS-05 | Signed-in users shall be able to reorder their pins. | Could |
+| FR-PERS-06 | Signed-in users shall be able to create up to 10 watchlists, rename them, and delete them. A watchlist's name shall have 1 to 50 characters, with no control characters and no spaces before or after them, and shall differ from the names of the user's other watchlists in more than letter case. | Should |
+| FR-PERS-07 | Signed-in users shall be able to add up to 25 repositories, of any owners, to each watchlist, in any form of Table 4-1 that names a repository, to remove them, and to reorder them. A watchlist shall hold a repository once, whatever the letter case of its name. Adding a repository shall not call GitHub, and shall keep its name alone (DR-01). A watchlist shall offer the user's pinned repositories that it lacks, to add one by one or all at once, and a new watchlist may start with them; pins shall stay as they are (FR-PERS-02). The heads of repositories' dashboards shall offer "Add to watchlist…", which adds the repository to, or removes it from, each of the user's watchlists, and creates a watchlist. | Should |
+| FR-PERS-08 | A watchlist shall have an overview at `/-/watchlists/{id}`, and `/-/watchlists` shall show the user's first. The overview shall show each repository in a row: its name as GitHub spells it, linking to its dashboard; its visibility, Archived and Fork badges; the release GitHub marks as the latest, with its age; when it was last pushed to; its commits per week over the last 26 weeks as a sparkline; and the state of the latest workflow run for a push to its default branch, in words and with an icon, linking to the run (FR-REPO-02, FR-REPO-03, FR-REPO-14). Each row shall say when its data was fetched, by its oldest part, and when it is saved data (FR-DATA-05, FR-DATA-06). Each row shall have its own loading, empty and error states, and shall load, fail and try again apart from the others (FR-REPO-09). A repository that is not found or private shall be said to be so, and nothing more (FR-ACC-05); one that GitHub keeps from the viewer's credential shall say why and how to fix it (FR-PAT-08); and a part that fails, such as the latest release, shall say so in its place. The overview shall say what it shows in words, without a composite score. A watchlist shall be its user's alone: to anyone else, its URL shall show that there is no such watchlist. | Should |
+| FR-PERS-09 | A watchlist shall read each repository as its dashboard reads it: with the viewer's own credentials and cache scope, from the same cache, under the same rules (FR-ACC-06, FR-DATA-04), and the repository itself first, so that a viewer who may no longer see a repository is told nothing of it after one cache TTL (FR-ACC-07), whatever else the watchlist holds. A row shall be read only once it is in view, and no more than 4 rows' data shall be requested at once. A repository shall cost at most 4 requests to GitHub per `cache.ttl`, besides GitHub's retries while it computes statistics (FR-REPO-10), each conditional where GitHub allows (FR-DATA-09), and none of them a search or a count. The overview shall have no refresh of its own: refreshing a repository's dashboard shall refresh its row too (FR-DATA-07). | Should |
 
 ### 4.9 GitHub data and caching
 
@@ -480,10 +485,10 @@ Motion is part of BuhTig's character, but it must feel fast and stay out of the 
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-DB-01 | All persistent state (users, sessions, credentials, cache, observations, history, pins, schema version, and GitHub host) shall be stored in the one PostgreSQL database given in the config file. BuhTig shall keep no persistent state anywhere else, such as local files or other databases. | Must |
+| FR-DB-01 | All persistent state (users, sessions, credentials, cache, observations, history, pins, watchlists, schema version, and GitHub host) shall be stored in the one PostgreSQL database given in the config file. BuhTig shall keep no persistent state anywhere else, such as local files or other databases. | Must |
 | FR-DB-02 | On every start, before accepting requests, BuhTig shall automatically bring the schema in line with the ORM data model. No manual step, separate tool, or separate job shall be needed. | Must |
 | FR-DB-03 | Auto-migration shall be idempotent: starting a version whose schema is already up to date shall change nothing. | Must |
-| FR-DB-04 | Auto-migration shall not destroy user data. It may add tables, columns, and indexes, but shall not drop or rename tables or columns holding users, credentials, observations, history, or pins. Cache tables may be emptied and rebuilt; observations, which cannot be fetched again, shall be kept. | Must |
+| FR-DB-04 | Auto-migration shall not destroy user data. It may add tables, columns, and indexes, but shall not drop or rename tables or columns holding users, credentials, observations, history, pins, or watchlists. Cache tables may be emptied and rebuilt; observations, which cannot be fetched again, shall be kept. | Must |
 | FR-DB-05 | If migration fails, BuhTig shall log the cause, exit with a non-zero status, and serve no requests. | Must |
 | FR-DB-06 | If several BuhTig processes start against the same database, only one shall migrate at a time, and the others shall wait for it to finish. | Should |
 | FR-DB-07 | BuhTig shall refuse to start, with a clear message, if its version is older than the schema in the database. Downgrades are not supported. | Should |
@@ -532,6 +537,8 @@ The physical design (tables, columns, types, and indexes) follows from the ORM e
 | Repository observation | What a repository's stat cards showed when GitHub gave them (FR-DATA-13) | Scope (shared, or one user with the PAT that read them), the repository's GitHub ID, UTC day, stars, forks, open issues, open pull requests, when observed | 90 days |
 | History entry | A recently viewed dashboard | User, resource kind and name, last viewed at | The 20 newest per user |
 | Pin | A pinned dashboard | User, resource kind and name, position | Unpinned (at most 12 per user) |
+| Watchlist | A named list of repositories (FR-PERS-06) | User, name, created at | Deleted (at most 10 per user) |
+| Watchlist entry | A repository in a watchlist (FR-PERS-07) | Watchlist, repository name as the user gave it, position | Removed, or its watchlist deleted (at most 25 per watchlist) |
 | Schema version | Migration bookkeeping | Version, applied at | Permanent |
 | GitHub host | The GitHub host the data is from (FR-DB-11) | Host, recorded at | Permanent |
 
@@ -542,13 +549,13 @@ The physical design (tables, columns, types, and indexes) follows from the ORM e
 | DR-01 | BuhTig shall store only the personal data listed in §5.1. It shall not store email addresses, or any GitHub content other than cache entries and repository observations. | Must |
 | DR-02 | Session identifiers shall be stored only as hashes. | Must |
 | DR-03 | Credentials shall be encrypted at rest with `security.encryption_key`. If the key changes, any credential that can no longer be decrypted shall be treated as invalid: affected users are signed out and asked to re-enter their PAT. | Must |
-| DR-04 | Deleting a user shall delete their sessions, credentials, private cache, the observations made with their PAT, history, and pins. | Must |
-| DR-05 | The database itself, not only the application, shall enforce uniqueness and relationships (e.g., one user per GitHub user ID, one pin per user and resource). | Should |
+| DR-04 | Deleting a user shall delete their sessions, credentials, private cache, the observations made with their PAT, history, pins, and watchlists. | Must |
+| DR-05 | The database itself, not only the application, shall enforce uniqueness and relationships (e.g., one user per GitHub user ID, one pin per user and resource, one entry per watchlist and repository). | Should |
 | DR-06 | All timestamps shall be stored in UTC. | Must |
 
 ### 5.3 Expected volume
 
-The design targets one instance with up to 10,000 users, up to 100,000 cache entries, and a database of a few gigabytes at most. Repository observations add at most one small row for each repository, scope and day the repository's dashboard is opened, kept for 90 days. Housekeeping keeps every table bounded, which is why partitioning is unnecessary (CON-05).
+The design targets one instance with up to 10,000 users, up to 100,000 cache entries, and a database of a few gigabytes at most. Repository observations add at most one small row for each repository, scope and day the repository's dashboard is opened, kept for 90 days. Watchlists add at most 10 names and 250 repository names per user. Housekeeping keeps every table bounded, which is why partitioning is unnecessary (CON-05).
 
 ---
 
@@ -646,6 +653,7 @@ These scenarios are the minimum release checks. Each should be automated where p
 | AC-15 | `github.host` is `ghe.example.com`. A user enters `github.com/owner/repo`, then `https://ghe.example.com/owner/repo`. Then the operator removes `github.host` and restarts BuhTig. | The inline message "BuhTig supports ghe.example.com URLs only." appears, and the page does not navigate; the second input opens `/owner/repo`. BuhTig then refuses to start, naming `github.host`, and the database is unchanged. |
 | AC-16 | Alice saves a fine-grained PAT that can read `owner/repo` and `owner/other`, and the GitHub Actions of `owner/repo` only. `owner/other` has no releases. She opens `/-/compare/owner/repo...owner/other`. | The workflow runs section shows the pass rate and average duration of `owner/repo`, and says of `owner/other` that GitHub won't show its runs to her token, and that the token needs read access to Actions. The release cadence section says that `owner/other` has no releases. Neither shows a zero for `owner/other`, nor how the two differ there. The other sections show both repositories' figures, with what each is of and when it was fetched. |
 | AC-17 | Public mode. Alice saves a PAT that can read `owner/secret-repo` and opens `/owner/secret-repo/activity`, and a visitor opens `/owner/repo/activity`. A week later, after `owner/repo` went unopened for some days, both open them again. Then Bob, signed in without access, opens `/owner/secret-repo/activity`. | At first, each Trends widget says when BuhTig began recording, and that there is no earlier baseline. A week later, each tells the change over 7 days between its two observations, with the figures and the times recorded. The days without an observation show as gaps, not zeros, and the 30 and 90 days say that BuhTig began recording after they began. Bob gets "Not found or private", and nothing observed with Alice's PAT. |
+| AC-18 | Alice saves a PAT that can read `owner/secret-repo`, creates a watchlist "Dependencies" of `octo/lib`, `acme/tool`, `owner/secret-repo` and `nobody/missing`, and opens it. Then Bob, signed in without access, opens its URL, and adds `owner/secret-repo` to a watchlist of his own. | Alice sees, in a row each, the latest release, last push and latest workflow run of `octo/lib`, `acme/tool` and `owner/secret-repo`, each with when it was fetched. `nobody/missing` says that it is not found or private, and keeps none of the others from loading. Bob is told that Alice's watchlist does not exist, and that `owner/secret-repo` is not found or private, and receives no data from Alice's private cache. |
 
 ---
 
@@ -659,7 +667,7 @@ These items are not part of this release; they are candidates for later versions
 - Data that needs bulk crawling or elevated access, such as star history from before BuhTig observed a repository (FR-DATA-13), and traffic (views and clones).
 - Real-time updates through webhooks, notifications, and email.
 - Custom dashboard layouts, comparing more than two resources at once, and exporting data or images, other than the cards of FR-NAV-07.
-- An administration UI, teams, and sharing private dashboards with other users.
+- An administration UI, teams, and sharing private dashboards or watchlists with other users.
 - Native mobile apps and a public API.
 - Horizontal scaling, partitioning, external caches, and queues. These are excluded by design (CON-05, CON-06).
 

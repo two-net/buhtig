@@ -10,8 +10,8 @@ import { TOKEN_STATES } from './messages';
 /**
  * The corner that says who is viewing (UI-02, UI-03): "Sign in" for a visitor, or the user's
  * avatar with a menu: who they are, whether BuhTig has a personal access token of theirs that
- * GitHub accepts (FR-PAT-04), and Home, Settings and Sign out. ↑ and ↓ move through the menu,
- * and Esc closes it, with focus back on the avatar (NFR-UX-03).
+ * GitHub accepts (FR-PAT-04), and Home, Watchlists (FR-PERS-08), Settings and Sign out. ↑ and ↓
+ * move through the menu, and Esc closes it, with focus back on the avatar (NFR-UX-03).
  */
 @Component({
   selector: 'app-account',

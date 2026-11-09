@@ -133,14 +133,21 @@ pub async fn summary(
         Ok(cached) => cached,
         Err(code) => return status(code),
     };
+    match summarized(&cached) {
+        Some(summary) => respond(summary),
+        None => status(StatusCode::BAD_GATEWAY),
+    }
+}
+
+/// What [`summary`] answers of the repository that GitHub gave as `cached`, unless GitHub
+/// gave no name.
+fn summarized(cached: &Cached<Value>) -> Option<Value> {
     let data = &cached.data;
-    let Some(name) = data.get("full_name").and_then(Value::as_str) else {
-        return status(StatusCode::BAD_GATEWAY);
-    };
-    respond(json!({
+    let name = data.get("full_name").and_then(Value::as_str)?;
+    Some(json!({
         "name": name,
         "fetched_at": cached.fetched_at_iso(),
-        "stale": stale(&cached),
+        "stale": stale(cached),
         "owner_avatar_url": link(data.pointer("/owner/avatar_url"), &["https"]),
         "description": text(data, "description"),
         "visibility": visibility(data),
@@ -740,9 +747,19 @@ pub async fn workflow_runs(
         Ok(repository) => repository,
         Err(code) => return status(code),
     };
+    match runs(&cache, &repository).await {
+        Ok(runs) => respond(runs),
+        Err(code) => status(code),
+    }
+}
+
+/// What [`workflow_runs`] answers for the repository, or the status that says why it cannot.
+/// A watchlist's [`glance`] reads the runs here too, so that both read them under one key of
+/// the cache.
+async fn runs(cache: &Cache, repository: &Under) -> Result<Value, StatusCode> {
     let host = cache.github_host();
     let Some(branch) = text(&repository.data, "default_branch") else {
-        return respond(repository.dated(health(None, &List::default(), false, host)));
+        return Ok(repository.dated(health(None, &List::default(), false, host)));
     };
     let path = repository
         .path(&["actions", "runs"])
@@ -760,19 +777,99 @@ pub async fn workflow_runs(
         .await;
     match list {
         // GitHub just answered, and nothing is cached of a refusal.
-        Err(error) if refused(&error) => respond(dated(
+        Err(error) if refused(&error) => Ok(dated(
             health(Some(branch), &List::default(), true, host),
             ChronoUtc::now(),
             None,
         )),
-        list => match data(list) {
-            Ok(list) => respond(dated_by(
-                health(Some(branch), &list.data, false, host),
-                &list,
-            )),
-            Err(code) => status(code),
-        },
+        list => {
+            data(list).map(|list| dated_by(health(Some(branch), &list.data, false, host), &list))
+        }
     }
+}
+
+/// `/-/api/repositories/{owner}/{repo}/glance`: what a watchlist shows of the repository
+/// (FR-PERS-08), which is what [`summary`] answers, and
+///
+/// ```json
+/// {"latest_release": {"release": {"tag": …, "published_at": …, "url": …} | null,
+///                     "fetched_at": …, "stale": …},
+///  "workflow_runs": {…, "fetched_at": …, "stale": …}}
+/// ```
+///
+/// `latest_release` is the release that GitHub marks as the latest, as the stat cards show it
+/// ([`stats`]), and `workflow_runs` what [`workflow_runs`] answers. Each says when its data
+/// was fetched, as [`dated`] tells it, and is `{"failure": "github" | "unavailable" | "held"}`
+/// in its place when it cannot be read, as a dashboard's widget would fail apart from the
+/// others (FR-REPO-09).
+///
+/// The repository is read first, with the viewer's credential at least once per `cache.ttl`,
+/// as its dashboard reads it, so that a watchlist tells each repository only to whom may see
+/// it now, whatever else the watchlist holds (FR-ACC-06, FR-ACC-07). The rest is read under
+/// the same keys of the cache as the dashboard reads it, with conditional requests: a
+/// repository costs at most three requests to GitHub per `cache.ttl`, none of them a search or
+/// a statistic, and none at all for a repository whose dashboard was opened lately
+/// (FR-PERS-09). A refresh of its dashboard refreshes it too.
+///
+/// Watchlists are signed-in users' alone (FR-ACC-02), so this is 401 for a visitor. Its
+/// statuses are otherwise those of [`summary`], including 403 with why GitHub keeps the
+/// repository from the viewer's credential.
+pub async fn glance(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    if !is_account_name(&owner) || !is_repository_name(&repo) {
+        return status(StatusCode::BAD_REQUEST);
+    }
+    if viewer.user_id().is_none() {
+        return status(StatusCode::UNAUTHORIZED);
+    }
+    let host = cache.github_host();
+    let result = read(&cache, &viewer, &owner, &repo).await;
+    if let Some(denied) = denied(&viewer, &result, host) {
+        return denied;
+    }
+    let cached = match data(result) {
+        Ok(cached) => cached,
+        Err(code) => return status(code),
+    };
+    let Some(mut glance) = summarized(&cached) else {
+        return status(StatusCode::BAD_GATEWAY);
+    };
+    let repository = match within(viewer, &owner, &repo, cached) {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    let latest = repository.path(&["releases", "latest"]);
+    let (latest, runs) = tokio::join!(
+        cache.get_optional(&repository.viewer, &repository.dashboard, &latest),
+        runs(&cache, &repository),
+    );
+    let latest = data(latest).map(|latest| {
+        let found = latest.data.as_ref().and_then(|found| release(found, host));
+        dated_by(json!({ "release": found }), &latest)
+    });
+    // GitHub rejected the signed-in user's credential, and so signed them out (FR-AUTH-09).
+    if [&latest, &runs].contains(&&Err(StatusCode::UNAUTHORIZED)) {
+        return status(StatusCode::UNAUTHORIZED);
+    }
+    glance["latest_release"] = part(latest);
+    glance["workflow_runs"] = part(runs);
+    respond(glance)
+}
+
+/// A part of a [`glance`], or why it could not be read, as the UI tells it of a widget that
+/// failed: `"held"` when the viewer may not fetch from GitHub now, `"unavailable"` when the
+/// database failed, and `"github"` when GitHub did.
+fn part(result: Result<Value, StatusCode>) -> Value {
+    let failure = match result {
+        Ok(part) => return part,
+        Err(StatusCode::TOO_MANY_REQUESTS) => "held",
+        Err(StatusCode::SERVICE_UNAVAILABLE) => "unavailable",
+        Err(_) => "github",
+    };
+    json!({ "failure": failure })
 }
 
 /// `/-/api/repositories/{owner}/{repo}/code-frequency`: how many lines were added to and
@@ -961,6 +1058,17 @@ async fn under(
         return Err(StatusCode::BAD_REQUEST);
     }
     let cached = repository(cache, &viewer, owner, repo).await?;
+    within(viewer, owner, repo, cached)
+}
+
+/// The repository `owner/repo`, which the cache had for the viewer as `cached`, for what is
+/// read under it, or 502 if GitHub gave no name of it that can be a repository's.
+fn within(
+    viewer: Viewer,
+    owner: &str,
+    repo: &str,
+    cached: Cached<Value>,
+) -> Result<Under, StatusCode> {
     let (fetched_at, stale, source) = (cached.fetched_at, stale(&cached), cached.source);
     let data = cached.data;
     let name = data

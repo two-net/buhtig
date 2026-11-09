@@ -1,0 +1,290 @@
+<app-page-styles />
+<app-watchlist-styles />
+<app-header />
+<main id="main" class="page" tabindex="-1">
+  @if (user() === null) {
+    <app-center icon="eye" [heading]="SIGN_IN_FOR_WATCHLISTS" [text]="SIGN_IN_FIRST">
+      <div class="row">
+        <a class="btn primary" [href]="signIn">{{ SIGN_IN_WITH_GITHUB }}</a>
+      </div>
+    </app-center>
+  } @else if (user()) {
+    @if (failed()) {
+      <app-center icon="cloudoff" [heading]="WATCHLISTS_UNAVAILABLE" [text]="TRY_AGAIN_SOON">
+        <div class="row">
+          <button type="button" class="btn" (click)="reload()">{{ TRY_AGAIN }}</button>
+        </div>
+      </app-center>
+    } @else if (lists(); as lists) {
+      @if (lists.length === 0) {
+        <app-center icon="eye" [heading]="NO_WATCHLISTS" [text]="WATCHLISTS_PURPOSE">
+          <div class="row">
+            <button type="button" class="btn primary new" (click)="openCreate()">
+              <app-icon name="plus" />{{ NEW_WATCHLIST }}
+            </button>
+          </div>
+        </app-center>
+      } @else if (missing()) {
+        <app-center icon="question" [heading]="NO_SUCH_WATCHLIST" [text]="NO_SUCH_WATCHLIST_TEXT">
+          <div class="row">
+            <a class="btn" routerLink="/-/watchlists">{{ ALL_WATCHLISTS }}</a>
+          </div>
+        </app-center>
+      } @else if (current(); as current) {
+        <div class="container">
+          <div class="wl-layout">
+            <nav class="wl-nav" aria-labelledby="watchlists-heading">
+              <h2 id="watchlists-heading" class="sublabel">
+                {{ WATCHLISTS }} <span class="counter">{{ watchlistCount(lists.length) }}</span>
+              </h2>
+              <ul class="side-nav">
+                @for (list of lists; track list.id) {
+                  <li>
+                    <a
+                      [routerLink]="['/-', 'watchlists', '' + list.id]"
+                      [attr.aria-current]="list.id === current.id ? 'page' : null"
+                    >
+                      <app-icon name="eye" />
+                      <span class="grow">{{ list.name }}</span
+                      >{{ ' ' }}
+                      <span class="counter">{{ list.repositories.length }}</span>
+                    </a>
+                  </li>
+                }
+              </ul>
+              <button type="button" class="btn sm new" (click)="openCreate()">
+                <app-icon name="plus" />{{ NEW_WATCHLIST }}
+              </button>
+            </nav>
+
+            <section aria-labelledby="watchlist-heading">
+              <div class="wl-head">
+                <h1 id="watchlist-heading" tabindex="-1">{{ current.name }}</h1>
+                <span class="counter">{{ repositoryCount(current.repositories.length) }}</span>
+                <span class="grow"></span>
+                <button type="button" class="btn sm rename" (click)="openRename()">
+                  {{ RENAME }}
+                </button>
+                <button type="button" class="btn sm delete" (click)="openDelete()">
+                  <app-icon name="trash" />{{ DELETE }}
+                </button>
+              </div>
+              <p class="help">{{ WATCHLIST_PURPOSE }}</p>
+
+              @if (current.repositories.length > 0) {
+                <ol class="Box wl-rows">
+                  @for (
+                    repository of current.repositories;
+                    track repository.toLowerCase();
+                    let index = $index, first = $first, last = $last
+                  ) {
+                    <li>
+                      <app-watchlist-entry [name]="repository" />
+                      <div class="wl-controls">
+                        <button
+                          type="button"
+                          class="iconbtn up"
+                          [attr.aria-label]="moveUpLabel(repository)"
+                          [disabled]="busy() || first"
+                          (click)="move(index, -1)"
+                        >
+                          <app-icon name="up" />
+                        </button>
+                        <button
+                          type="button"
+                          class="iconbtn down"
+                          [attr.aria-label]="moveDownLabel(repository)"
+                          [disabled]="busy() || last"
+                          (click)="move(index, 1)"
+                        >
+                          <app-icon name="down" />
+                        </button>
+                        <button
+                          type="button"
+                          class="iconbtn remove"
+                          [attr.aria-label]="removeLabel(repository)"
+                          [disabled]="busy()"
+                          (click)="drop(index)"
+                        >
+                          <app-icon name="x" />
+                        </button>
+                      </div>
+                    </li>
+                  }
+                </ol>
+              } @else {
+                <p class="empty-note">{{ NO_REPOSITORIES }}</p>
+              }
+              @if (problem(); as problem) {
+                <p class="field-msg err" role="alert"><app-icon name="alert" />{{ problem }}</p>
+              }
+
+              <form class="wl-add" novalidate (submit)="addTyped($event)">
+                <label for="watchlist-add" class="sublabel">{{ ADD_REPOSITORY }}</label>
+                <div class="field">
+                  <input
+                    #input
+                    id="watchlist-add"
+                    class="input"
+                    type="text"
+                    name="repository"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    [placeholder]="placeholder"
+                    [value]="draft()"
+                    [attr.aria-invalid]="addProblem() ? 'true' : null"
+                    [attr.aria-describedby]="addProblem() ? 'watchlist-add-problem' : null"
+                    (input)="draft.set(input.value); addProblem.set('')"
+                  />
+                  <button type="submit" class="btn" [attr.aria-disabled]="busy() ? 'true' : null">
+                    <app-icon name="plus" />{{ ADD }}
+                  </button>
+                </div>
+                @if (addProblem(); as problem) {
+                  <p id="watchlist-add-problem" class="field-msg err" role="alert">
+                    <app-icon name="alert" />{{ problem }}
+                  </p>
+                }
+              </form>
+
+              @if (unlisted().length > 0) {
+                <div class="wl-from-pins">
+                  <h2 id="pins-heading" class="sublabel">{{ FROM_YOUR_PINS }}</h2>
+                  <ul class="mini-list wl-pins" aria-labelledby="pins-heading">
+                    @for (pin of unlisted(); track pin.toLowerCase()) {
+                      <li>
+                        <app-avatar [name]="pin.split('/')[0]" [round]="true" />
+                        <span class="grow">{{ pin }}</span>
+                        <button
+                          type="button"
+                          class="btn sm"
+                          [attr.aria-label]="addPinLabel(pin, current.name)"
+                          [attr.aria-disabled]="busy() ? 'true' : null"
+                          (click)="addPins([pin])"
+                        >
+                          <app-icon name="plus" />{{ ADD }}
+                        </button>
+                      </li>
+                    }
+                  </ul>
+                  @if (unlisted().length > 1) {
+                    <div class="field wl-add-all">
+                      <button
+                        type="button"
+                        class="btn sm add-all"
+                        [attr.aria-disabled]="busy() ? 'true' : null"
+                        (click)="addPins(unlisted())"
+                      >
+                        <app-icon name="pin" />{{ ADD_ALL }}
+                      </button>
+                    </div>
+                  }
+                </div>
+              }
+            </section>
+          </div>
+        </div>
+      }
+    }
+  }
+</main>
+
+@switch (dialog()) {
+  @case ('create') {
+    <app-dialog [heading]="NEW_WATCHLIST" (closed)="closeDialog()">
+      <form id="watchlist-create" novalidate (submit)="create($event)">
+        <label for="watchlist-create-name">{{ NAME_LABEL }}</label>
+        <input
+          #name
+          id="watchlist-create-name"
+          class="input"
+          type="text"
+          name="name"
+          autocomplete="off"
+          [placeholder]="NAME_PLACEHOLDER"
+          [value]="nameDraft()"
+          [attr.aria-invalid]="dialogProblem() ? 'true' : null"
+          [attr.aria-describedby]="dialogProblem() ? 'watchlist-dialog-problem' : null"
+          (input)="nameDraft.set(name.value); dialogProblem.set('')"
+        />
+        @if (pins().length > 0) {
+          <label class="check">
+            <input
+              #withPinsBox
+              type="checkbox"
+              name="pins"
+              [checked]="withPins()"
+              (change)="withPins.set(withPinsBox.checked)"
+            />{{ startWithPins(pins().length) }}
+          </label>
+        }
+        @if (dialogProblem(); as problem) {
+          <p id="watchlist-dialog-problem" class="field-msg err" role="alert">
+            <app-icon name="alert" />{{ problem }}
+          </p>
+        }
+      </form>
+      <button actions type="button" class="btn" (click)="closeDialog()">{{ CANCEL }}</button>
+      <button
+        actions
+        type="submit"
+        class="btn primary"
+        form="watchlist-create"
+        [attr.aria-disabled]="busy() ? 'true' : null"
+      >
+        {{ CREATE }}
+      </button>
+    </app-dialog>
+  }
+  @case ('rename') {
+    <app-dialog [heading]="RENAME_HEADING" (closed)="closeDialog()">
+      <form id="watchlist-rename" novalidate (submit)="rename($event)">
+        <label for="watchlist-rename-name">{{ NAME_LABEL }}</label>
+        <input
+          #name
+          id="watchlist-rename-name"
+          class="input"
+          type="text"
+          name="name"
+          autocomplete="off"
+          [value]="nameDraft()"
+          [attr.aria-invalid]="dialogProblem() ? 'true' : null"
+          [attr.aria-describedby]="dialogProblem() ? 'watchlist-dialog-problem' : null"
+          (input)="nameDraft.set(name.value); dialogProblem.set('')"
+        />
+        @if (dialogProblem(); as problem) {
+          <p id="watchlist-dialog-problem" class="field-msg err" role="alert">
+            <app-icon name="alert" />{{ problem }}
+          </p>
+        }
+      </form>
+      <button actions type="button" class="btn" (click)="closeDialog()">{{ CANCEL }}</button>
+      <button
+        actions
+        type="submit"
+        class="btn primary"
+        form="watchlist-rename"
+        [attr.aria-disabled]="busy() ? 'true' : null"
+      >
+        {{ SAVE }}
+      </button>
+    </app-dialog>
+  }
+  @case ('delete') {
+    @if (current(); as current) {
+      <app-dialog [heading]="DELETE_WATCHLIST" (closed)="closeDialog()">
+        <p>{{ deleteWarning(current.name, current.repositories.length) }}</p>
+        @if (dialogProblem(); as problem) {
+          <p class="field-msg err" role="alert"><app-icon name="alert" />{{ problem }}</p>
+        }
+        <button actions type="button" class="btn" [disabled]="busy()" (click)="closeDialog()">
+          {{ CANCEL }}
+        </button>
+        <button actions type="button" class="btn danger" [disabled]="busy()" (click)="delete()">
+          {{ DELETE_WATCHLIST }}
+        </button>
+      </app-dialog>
+    }
+  }
+}

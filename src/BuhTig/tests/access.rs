@@ -92,6 +92,8 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         "/-/api/users/mona/stats",
         "/-/api/surprise",
         "/-/api/shortcuts",
+        "/-/api/watchlists",
+        "/-/api/repositories/owner/repo/glance",
     ] {
         let response = running.get(path);
         assert_status(&response, 401);
@@ -105,6 +107,12 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         "POST /-/api/users/mona/refresh",
         "PUT /-/api/users/mona/pin",
         "PUT /-/api/pins",
+        "POST /-/api/watchlists",
+        "PUT /-/api/watchlists/1",
+        "DELETE /-/api/watchlists/1",
+        "POST /-/api/watchlists/1/repositories",
+        "PUT /-/api/watchlists/1/repositories",
+        "DELETE /-/api/watchlists/1/repositories/owner/repo",
         "DELETE /-/api/history",
         "DELETE /-/api/user",
     ] {
@@ -149,7 +157,7 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
 }
 
 /// FR-ACC-02: in public mode, a visitor may open any dashboard, but neither refresh it nor
-/// keep it in a history or among pins.
+/// keep it in a history, among pins or in a watchlist.
 #[test]
 fn public_mode_lets_visitors_view_dashboards() {
     let (running, log, _dir) = buhtig(r#"mode = "public""#);
@@ -179,6 +187,8 @@ fn public_mode_lets_visitors_view_dashboards() {
         "POST /-/api/users/mona/refresh",
         "POST /-/api/users/mona/view",
         "DELETE /-/api/users/mona/pin",
+        "DELETE /-/api/watchlists/1",
+        "DELETE /-/api/watchlists/1/repositories/owner/repo",
         "DELETE /-/api/history",
         "DELETE /-/api/user",
     ] {
@@ -186,7 +196,13 @@ fn public_mode_lets_visitors_view_dashboards() {
         assert_status(&response, 401);
         assert_eq!(body(&response), "", "{request}");
     }
-    let shortcuts = running.get("/-/api/shortcuts");
-    assert_status(&shortcuts, 401);
-    assert_eq!(body(&shortcuts), "");
+    for path in [
+        "/-/api/shortcuts",
+        "/-/api/watchlists",
+        "/-/api/repositories/owner/repo/glance",
+    ] {
+        let response = running.get(path);
+        assert_status(&response, 401);
+        assert_eq!(body(&response), "", "{path}");
+    }
 }

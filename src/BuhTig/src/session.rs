@@ -21,9 +21,9 @@
 //!
 //! A signed-in user may delete all that BuhTig keeps of theirs (FR-PERS-04): their user,
 //! and with it, as the database deletes what belongs to a user, their sessions,
-//! credentials, private cache, history and pins (DR-04). They are signed out everywhere.
-//! BuhTig stays among the apps they authorized on GitHub until they revoke it there, since
-//! BuhTig changes nothing on GitHub (CON-08).
+//! credentials, private cache, history, pins and watchlists (DR-04). They are signed out
+//! everywhere. BuhTig stays among the apps they authorized on GitHub until they revoke it
+//! there, since BuhTig changes nothing on GitHub (CON-08).
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -383,8 +383,8 @@ pub async fn end_all(db: &DatabaseConnection, user_id: i64) -> Result<(), DbErr>
 }
 
 /// Deletes the user `user_id` and all that BuhTig keeps of theirs (FR-PERS-04). The
-/// database deletes their sessions, credentials, private cache, history and pins with them,
-/// in the same statement (DR-04), so that either all of it goes or none.
+/// database deletes their sessions, credentials, private cache, history, pins and watchlists
+/// with them, in the same statement (DR-04), so that either all of it goes or none.
 pub async fn delete_user(db: &DatabaseConnection, user_id: i64) -> Result<(), DbErr> {
     let deleted = user::Entity::delete_by_id(user_id).exec(db).await?;
     if deleted.rows_affected > 0 {
@@ -1198,7 +1198,8 @@ mod tests {
     }
 
     /// Signs `profile` in on two browsers, and gives them a PAT, data cached with it, a
-    /// history entry and a pin. Returns the cookies of both browsers, and the user's ID.
+    /// history entry, a pin, and a watchlist of one repository. Returns the cookies of both
+    /// browsers, and the user's ID.
     async fn everything_of(
         db: &DatabaseConnection,
         sessions: &Sessions,
@@ -1206,7 +1207,7 @@ mod tests {
     ) -> (HeaderValue, HeaderValue, i64) {
         use crate::entity::cache_entry::{self, Scope};
         use crate::entity::credential::PatType;
-        use crate::entity::{ResourceKind, history_entry, pin};
+        use crate::entity::{ResourceKind, history_entry, pin, watchlist, watchlist_entry};
         use sea_orm::ActiveModelTrait;
 
         let github_id = profile.github_id;
@@ -1272,14 +1273,40 @@ mod tests {
         .insert(db)
         .await
         .unwrap();
+        let watchlist = watchlist::ActiveModel {
+            user_id: Set(user_id),
+            name: Set("Dependencies".to_owned()),
+            created_at: Set(at(0)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+        watchlist_entry::ActiveModel {
+            watchlist_id: Set(watchlist.id),
+            repository_name: Set("owner/repo".to_owned()),
+            position: Set(0),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
         (here, elsewhere, user_id)
     }
 
     /// How many rows of the user `user_id` each table holds: users, sessions, credentials,
-    /// cache entries, history entries and pins.
-    async fn rows_of(db: &DatabaseConnection, user_id: i64) -> [usize; 6] {
-        use crate::entity::{cache_entry, history_entry, pin};
+    /// cache entries, history entries, pins, watchlists and their repositories.
+    async fn rows_of(db: &DatabaseConnection, user_id: i64) -> [usize; 8] {
+        use crate::entity::{cache_entry, history_entry, pin, watchlist, watchlist_entry};
 
+        let watchlists: Vec<i64> = watchlist::Entity::find()
+            .filter(watchlist::Column::UserId.eq(user_id))
+            .all(db)
+            .await
+            .unwrap()
+            .iter()
+            .map(|watchlist| watchlist.id)
+            .collect();
         [
             user::Entity::find_by_id(user_id)
                 .all(db)
@@ -1316,6 +1343,13 @@ mod tests {
                 .await
                 .unwrap()
                 .len(),
+            watchlists.len(),
+            watchlist_entry::Entity::find()
+                .filter(watchlist_entry::Column::WatchlistId.is_in(watchlists))
+                .all(db)
+                .await
+                .unwrap()
+                .len(),
         ]
     }
 
@@ -1348,9 +1382,9 @@ mod tests {
                 .unwrap()
                 .len()
         };
-        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 1, 1]);
+        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 1, 1, 1, 1]);
         let bobs = rows_of(&db, bob_id).await;
-        assert_eq!(bobs, [1, 2, 2, 1, 1, 1]);
+        assert_eq!(bobs, [1, 2, 2, 1, 1, 1, 1, 1]);
         let delete = async |headers| delete(Extension(sessions.clone()), headers).await;
 
         // A visitor has no one to delete.
@@ -1362,7 +1396,7 @@ mod tests {
                 String::new()
             )
         );
-        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 1, 1]);
+        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 1, 1, 1, 1]);
 
         // FR-PERS-04, DR-04: all of Mona's goes, and the browser forgets her session.
         let response = delete(carrying(&here)).await;
@@ -1371,7 +1405,7 @@ mod tests {
             parts(response).await,
             (StatusCode::NO_CONTENT, "no-store".to_owned(), String::new())
         );
-        assert_eq!(rows_of(&db, mona_id).await, [0; 6]);
+        assert_eq!(rows_of(&db, mona_id).await, [0; 8]);
         // Bob's and the shared cache stay.
         assert_eq!(rows_of(&db, bob_id).await, bobs);
         assert_eq!(shared().await, 1);
@@ -1397,6 +1431,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_ne!(again.id, mona_id);
-        assert_eq!(rows_of(&db, again.id).await, [1, 1, 1, 0, 0, 0]);
+        assert_eq!(rows_of(&db, again.id).await, [1, 1, 1, 0, 0, 0, 0, 0]);
     }
 }

@@ -41,6 +41,18 @@ export class HomeStyles {}
 })
 export class PageStyles {}
 
+/**
+ * The styles of a user's watchlists (FR-PERS-08), beside Settings': each repository's row, with its
+ * placeholders and sparkline, as a dashboard draws them.
+ */
+@Component({
+  selector: 'app-watchlist-styles',
+  template: '',
+  styleUrls: ['./dashboard.css', './charts.css', './watchlists.css'],
+  encapsulation: ViewEncapsulation.None,
+})
+export class WatchlistStyles {}
+
 /** The styles of a comparison of two repositories or two accounts, beside a dashboard's. */
 @Component({
   selector: 'app-compare-styles',

@@ -63,6 +63,11 @@ export const routes: Routes = [
         path: 'compare',
         loadChildren: () => import('./compare/routes').then((module) => module.COMPARE_ROUTES),
       },
+      // A signed-in user's watchlists, each at its own URL (FR-PERS-08).
+      {
+        path: 'watchlists',
+        loadChildren: () => import('./watchlists/routes').then((module) => module.WATCHLIST_ROUTES),
+      },
       { path: '**', loadComponent: notFound, title: TITLES.notFound },
     ],
   },

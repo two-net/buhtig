@@ -159,18 +159,32 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   header. Their home page lists up to 12 of them beside the search box, pins first. In
   Settings, users can reorder or unpin their pins and clear their history. Housekeeping
   trims each user's history to 20 entries.
+- **Watchlists:** a signed-in user may keep up to 10 named watchlists, of up to 25
+  repositories each, of any owners, at `/-/watchlists`, which the avatar menu links to.
+  They add repositories by name or URL, from their pins, or with "Add to watchlist…" in a
+  repository dashboard's header, and may reorder or remove them, and rename or delete a
+  watchlist. A watchlist keeps the repositories' names alone, so adding one asks GitHub
+  nothing. Its overview shows each repository in a row: its latest release, its last push,
+  its commits over the last 26 weeks, and its latest workflow run on its default branch, with
+  when each was fetched. Each row is read as the repository's dashboard is, with the user's
+  own credentials and cache, so one they may not see says "Not found or private" and nothing
+  more, and none keeps the others from loading. A row is read once it comes into view, 4 at
+  a time, and costs at most 4 requests to GitHub per `cache.ttl`: the repository, its latest
+  release, one page of its workflow runs and its commit activity, each conditional and cached
+  with its dashboard's, so a repository whose dashboard was opened lately costs nothing. A
+  watchlist has no refresh of its own: refreshing a repository's dashboard refreshes its row.
 - **Recently viewed:** the signed-in home page lists up to 8 public repositories whose
   dashboards were opened on this instance lately, and the visitor's home page suggests the
   first 3 to try. They come from the shared cache alone, never from data fetched with a
   personal access token, and BuhTig asks GitHub nothing for them. The Privacy page says so.
 - **Deleting data:** in Settings, once they confirm, signed-in users can delete everything
   BuhTig keeps of theirs: their account, sessions, credentials, the data cached and the
-  figures observed with their token, their history and their pins. This signs them out on every browser. BuhTig stays
+  figures observed with their token, their history, their pins and their watchlists. This signs them out on every browser. BuhTig stays
   among their authorized OAuth apps on GitHub until they revoke it there, which Settings
   links to, since BuhTig changes nothing on GitHub.
 - **Access:** in public mode, the default, anyone may open the home page and the
   dashboards of public repositories, organizations and users, with public data only. Settings,
-  shortcuts and refreshing a dashboard need sign-in. With `access.mode = "private"`,
+  shortcuts, watchlists and refreshing a dashboard need sign-in. With `access.mode = "private"`,
   every page needs sign-in but the sign-in page, the About and Privacy pages and
   `/-/health`: a visitor is sent to sign in, and then back to the page they opened. In
   either mode, private and internal repositories and private organization data are shown

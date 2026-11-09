@@ -292,7 +292,7 @@ async fn pins_of(db: &impl ConnectionTrait, user_id: i64) -> Result<Vec<pin::Mod
 
 /// Locks the row of the user `user_id` until `txn` ends, so that their pins change one
 /// request at a time: two at once could pin more than they may, or give two pins one place.
-async fn lock(txn: &DatabaseTransaction, user_id: i64) -> Result<(), DbErr> {
+pub(crate) async fn lock(txn: &DatabaseTransaction, user_id: i64) -> Result<(), DbErr> {
     user::Entity::find_by_id(user_id)
         .lock_exclusive()
         .one(txn)
@@ -462,16 +462,16 @@ fn viewed(entry: &history_entry::Model) -> Value {
 }
 
 /// The response to a request that the database failed, as it did to `doing` with `error`.
-fn unavailable(doing: &str, error: DbErr) -> Response {
+pub(crate) fn unavailable(doing: &str, error: DbErr) -> Response {
     error!("cannot {doing}: {error}");
     status(StatusCode::SERVICE_UNAVAILABLE)
 }
 
-fn answer(status: StatusCode, body: Value) -> Response {
+pub(crate) fn answer(status: StatusCode, body: Value) -> Response {
     (status, [(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
 }
 
-fn status(status: StatusCode) -> Response {
+pub(crate) fn status(status: StatusCode) -> Response {
     (status, [(header::CACHE_CONTROL, "no-store")]).into_response()
 }
 

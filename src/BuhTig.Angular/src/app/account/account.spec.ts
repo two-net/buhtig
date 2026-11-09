@@ -116,7 +116,7 @@ describe('Account', () => {
     expect(menu()).toBeNull();
   });
 
-  it('says who is signed in, and leads home, to Settings, and to sign out', async () => {
+  it('says who is signed in, and leads home, to their watchlists, to Settings, and to sign out', async () => {
     await answer({ user: MONA, token: null });
     await open();
     expect(menu()!.querySelector('.who strong')?.textContent).toBe('@mona');
@@ -124,11 +124,13 @@ describe('Account', () => {
     expect(menu()!.querySelector('[role="menu"]')?.getAttribute('aria-label')).toBe('Account');
     expect(items().map((item) => item.textContent?.trim())).toEqual([
       'Home',
+      'Watchlists',
       'Settings',
       'Sign out',
     ]);
-    const [home, settings] = items();
+    const [home, watchlists, settings] = items();
     expect(home.getAttribute('href')).toBe('/');
+    expect(watchlists.getAttribute('href')).toBe('/-/watchlists');
     expect(settings.getAttribute('href')).toBe('/-/settings');
     // Signing out changes state, so it is no GET (NFR-SEC-02).
     const form = menu()!.querySelector('form')!;
@@ -169,8 +171,10 @@ describe('Account', () => {
   it('moves the focus through the menu with ↑ and ↓, round and round', async () => {
     await answer({ user: MONA });
     await open();
-    const [home, settings, signOut] = items();
+    const [home, watchlists, settings, signOut] = items();
     expect(press('ArrowDown').defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(watchlists);
+    press('ArrowDown');
     expect(document.activeElement).toBe(settings);
     press('ArrowDown');
     expect(document.activeElement).toBe(signOut);
@@ -199,7 +203,7 @@ describe('Account', () => {
   it('closes the menu as one of its links is followed', async () => {
     await answer({ user: MONA });
     await open();
-    items()[1].click();
+    items()[2].click();
     await fixture.whenStable();
     expect(menu()).toBeNull();
     expect(TestBed.inject(Router).url).toBe('/-/settings');

@@ -152,8 +152,8 @@ export function unpinned(name: string): string {
 export const DELETION_PURPOSE =
   'You can delete everything BuhTig keeps about you: your account here, your sign-ins on every ' +
   'browser, the access GitHub gave BuhTig when you signed in, your token and the data BuhTig ' +
-  "read with it, your history and your pins. You'll be signed out everywhere. If you sign in " +
-  'again later, you start afresh.';
+  "read with it, your history, your pins and your watchlists. You'll be signed out everywhere. If " +
+  'you sign in again later, you start afresh.';
 
 /** FR-PERS-04: BuhTig's access to the user's GitHub account is removed on GitHub. */
 export const GITHUB_ACCESS =

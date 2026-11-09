@@ -439,6 +439,38 @@ export interface WorkflowRun {
   url: string | undefined;
 }
 
+/**
+ * A part of what a watchlist shows of a repository (FR-PERS-08), with when its data was fetched,
+ * or why it failed, apart from the rest, which still shows.
+ */
+export type GlancePart<T> = ({ ok: true } & Dated<T>) | { ok: false; failure: Failure };
+
+/**
+ * What a watchlist shows of one of its repositories (FR-PERS-08): what its header shows, its
+ * latest release, and how its latest workflow runs on the default branch fared, each read as its
+ * dashboard reads it, with the viewer's own credential (FR-PERS-09).
+ */
+export interface Glance extends Freshness {
+  /** The path of its dashboard, with the names as GitHub spells them, unless the answer names none. */
+  path: string | undefined;
+  repository: Repository;
+  /** The release GitHub marks as the latest, `undefined` when there is none. */
+  latestRelease: GlancePart<{ release: Release | undefined }>;
+  workflowRuns: GlancePart<WorkflowRuns>;
+}
+
+/**
+ * What the server answers about one of a watchlist's repositories (FR-PERS-08): what it shows of
+ * it, or that GitHub says there is no such repository, which it says too of one the viewer may not
+ * see (FR-ACC-05), or keeps it from the viewer's credential (FR-PAT-08), or that its name cannot be
+ * a repository's (FR-SRCH-04).
+ */
+export type Glanced =
+  | { status: 'found'; glance: Glance }
+  | { status: 'not-found' }
+  | { status: 'invalid' }
+  | { status: 'denied'; denied: Denied };
+
 /** How many lines were added to and deleted from a repository each week (FR-REPO-15). */
 export interface CodeFrequency {
   /** The last 52, oldest first, the current one last, or none for an empty repository. */
@@ -668,7 +700,25 @@ interface StatsAnswer {
   watchers: number;
   open_issues: number;
   open_pull_requests: number;
-  latest_release: { tag: string; published_at: string | null; url: string | null } | null;
+  latest_release: ReleaseAnswer | null;
+}
+
+/** The server's answer about a release, as its stat card shows it. */
+interface ReleaseAnswer {
+  tag: string;
+  published_at: string | null;
+  url: string | null;
+}
+
+/** The server's word that a part of a repository's glance failed alone (FR-PERS-08). */
+interface PartFailureAnswer {
+  failure: string;
+}
+
+/** The server's answer about one of a watchlist's repositories (FR-PERS-08). */
+interface GlanceAnswer extends RepositoryAnswer {
+  latest_release?: (DatedAnswer & { release: ReleaseAnswer | null }) | PartFailureAnswer | null;
+  workflow_runs: WorkflowRunsAnswer | PartFailureAnswer;
 }
 
 /** The server's answer about a repository, for its commit-activity chart. */
@@ -968,22 +1018,56 @@ export class Resources {
   /** The figures of the stat cards of the repository `owner/repo`, which fail as it does. */
   stats(owner: string, repo: string): Observable<Stats> {
     return this.http.get<StatsAnswer>(`${repositoryUrl(owner, repo)}/stats`).pipe(
-      map((stats) => {
-        const release = stats.latest_release;
+      map((stats) => ({
+        stars: stats.stars,
+        forks: stats.forks,
+        watchers: stats.watchers,
+        openIssues: stats.open_issues,
+        openPullRequests: stats.open_pull_requests,
+        latestRelease: release(stats.latest_release),
+      })),
+    );
+  }
+
+  /**
+   * What a watchlist shows of the repository `owner/repo` (FR-PERS-08), or why GitHub shows the
+   * viewer none of it. It fails only when BuhTig cannot tell now, as `summary` does, with the
+   * `Failure` that its status says. A part that failed alone, such as its latest release, says so
+   * in its place.
+   */
+  glance(owner: string, repo: string): Observable<Glanced> {
+    return this.http.get<GlanceAnswer>(`${repositoryUrl(owner, repo)}/glance`).pipe(
+      map((answer): Glanced => {
+        const latest = answer.latest_release;
+        const runs = answer.workflow_runs;
         return {
-          stars: stats.stars,
-          forks: stats.forks,
-          watchers: stats.watchers,
-          openIssues: stats.open_issues,
-          openPullRequests: stats.open_pull_requests,
-          latestRelease: release
-            ? {
-                tag: release.tag,
-                publishedAt: date(release.published_at),
-                url: link(release.url, ['https:']),
-              }
-            : undefined,
+          status: 'found',
+          glance: {
+            path: canonicalPath(answer.name, 'repository'),
+            repository: header(answer),
+            ...freshness(answer),
+            latestRelease: isFailure(latest)
+              ? { ok: false, failure: partFailure(latest.failure) }
+              : { ok: true, release: release(latest?.release), ...freshness(latest ?? {}) },
+            workflowRuns: isFailure(runs)
+              ? { ok: false, failure: partFailure(runs.failure) }
+              : { ok: true, ...workflowRuns(runs) },
+          },
         };
+      }),
+      catchError((error: unknown) => {
+        const denied = deniedBy(error, this.gitHub);
+        if (denied) {
+          return of<Glanced>({ status: 'denied', denied });
+        }
+        switch (error instanceof HttpErrorResponse ? error.status : undefined) {
+          case HttpStatusCode.NotFound:
+            return of<Glanced>({ status: 'not-found' });
+          case HttpStatusCode.BadRequest:
+            return of<Glanced>({ status: 'invalid' });
+          default:
+            return throwError(() => error);
+        }
       }),
     );
   }
@@ -1239,29 +1323,7 @@ export class Resources {
    * which fail as `commitActivity` does (FR-REPO-14).
    */
   workflowRuns(owner: string, repo: string): Observable<Dated<WorkflowRuns>> {
-    return this.part<WorkflowRunsAnswer>(owner, repo, 'workflow-runs').pipe(
-      map((answer) => {
-        const latest = answer.latest;
-        return {
-          branch: answer.branch || undefined,
-          sampled: count(answer.sampled),
-          passed: count(answer.passed),
-          failed: count(answer.failed),
-          averageDuration: seconds(answer.average_duration),
-          latest: latest
-            ? {
-                name: latest.name || undefined,
-                status: latest.status || undefined,
-                conclusion: latest.conclusion || undefined,
-                startedAt: date(latest.started_at),
-                url: link(latest.url, ['https:']),
-              }
-            : undefined,
-          hidden: answer.hidden === true,
-          ...freshness(answer),
-        };
-      }),
-    );
+    return this.part<WorkflowRunsAnswer>(owner, repo, 'workflow-runs').pipe(map(workflowRuns));
   }
 
   /**
@@ -1438,6 +1500,50 @@ function unsupported(reason: unknown): Unsupported {
     default:
       return 'no_observation_then';
   }
+}
+
+/** How the workflow runs that the server describes as `answer` fared (FR-REPO-14). */
+function workflowRuns(answer: WorkflowRunsAnswer): Dated<WorkflowRuns> {
+  const latest = answer.latest;
+  return {
+    branch: answer.branch || undefined,
+    sampled: count(answer.sampled),
+    passed: count(answer.passed),
+    failed: count(answer.failed),
+    averageDuration: seconds(answer.average_duration),
+    latest: latest
+      ? {
+          name: latest.name || undefined,
+          status: latest.status || undefined,
+          conclusion: latest.conclusion || undefined,
+          startedAt: date(latest.started_at),
+          url: link(latest.url, ['https:']),
+        }
+      : undefined,
+    hidden: answer.hidden === true,
+    ...freshness(answer),
+  };
+}
+
+/** The release that the server describes as `answer`, if it describes one. */
+function release(answer: ReleaseAnswer | null | undefined): Release | undefined {
+  return answer
+    ? {
+        tag: answer.tag,
+        publishedAt: date(answer.published_at),
+        url: link(answer.url, ['https:']),
+      }
+    : undefined;
+}
+
+/** Whether `part` of a repository's glance is the server's word that it failed alone. */
+function isFailure(part: object | null | undefined): part is PartFailureAnswer {
+  return typeof part === 'object' && part !== null && 'failure' in part;
+}
+
+/** Why a part of a repository's glance failed alone, as the server tells it (FR-PERS-08). */
+function partFailure(value: unknown): Failure {
+  return value === 'held' || value === 'unavailable' ? value : 'github';
 }
 
 /** The commit activity that the server describes as `answer`. */
