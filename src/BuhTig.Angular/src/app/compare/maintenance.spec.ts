@@ -181,8 +181,13 @@ describe('maintenance comparison (FR-CMP-06)', () => {
 
   describe('open issue age', () => {
     it('shows the median age of both, or why one has none', () => {
-      const age: IssueAge = { sampled: 37, medianAge: 60 * DAY, truncated: true };
-      const none: IssueAge = { sampled: 0, medianAge: undefined, truncated: false };
+      const age: IssueAge = { sampled: 37, medianAge: 60 * DAY, olderThan: [], truncated: true };
+      const none: IssueAge = {
+        sampled: 0,
+        medianAge: undefined,
+        olderThan: [],
+        truncated: false,
+      };
       const [card] = issueAgeCards([age, none], NAMES);
       expect(card.values).toEqual([
         { kind: 'figure', text: duration(60 * DAY), sub: ofOpenIssues(37) },

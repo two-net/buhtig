@@ -466,8 +466,19 @@ export interface IssueAge {
   sampled: number;
   /** The median time since they were opened, in seconds, unless there were none. */
   medianAge: number | undefined;
+  /**
+   * How many of them have been open longer than each number of days, the fewest days first, or
+   * none if the server did not say.
+   */
+  olderThan: AgeCut[];
   /** Whether the repository has more open issues and pull requests than were read. */
   truncated: boolean;
+}
+
+/** How many of a repository's sampled open issues have been open longer than `days` (FR-REPO-13). */
+export interface AgeCut {
+  days: number;
+  count: number;
 }
 
 /**
@@ -965,6 +976,7 @@ interface MergeVelocityAnswer extends DatedAnswer {
 interface IssueAgeAnswer extends DatedAnswer {
   sampled: number;
   median_age: number | null;
+  older_than?: { days: number; count: number }[] | null;
   truncated: boolean;
 }
 
@@ -1537,6 +1549,7 @@ export class Resources {
       map((answer) => ({
         sampled: count(answer.sampled),
         medianAge: seconds(answer.median_age),
+        olderThan: ageCuts(answer.older_than),
         truncated: answer.truncated === true,
         ...freshness(answer),
       })),
@@ -1946,6 +1959,28 @@ function userHeader(answer: UserAnswer): User {
 /** `value` if it is a count, or else none. */
 function count(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+/**
+ * The age cuts of `value` that tell a whole number of days, more than none, and how many are past
+ * each, the fewest days first, or none at all if it is not a list of them.
+ */
+function ageCuts(value: unknown): AgeCut[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const cuts = value.filter(
+    (cut): cut is AgeCut =>
+      typeof cut === 'object' &&
+      cut !== null &&
+      typeof cut.days === 'number' &&
+      Number.isInteger(cut.days) &&
+      cut.days > 0 &&
+      typeof cut.count === 'number' &&
+      Number.isInteger(cut.count) &&
+      cut.count >= 0,
+  );
+  return cuts.map(({ days, count }) => ({ days, count })).sort((a, b) => a.days - b.days);
 }
 
 /** `value` if it is a whole change, up or down, or else none. */

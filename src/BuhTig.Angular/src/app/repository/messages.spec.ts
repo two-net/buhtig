@@ -8,6 +8,8 @@ import {
   unsupportedReason,
   activityDescription,
   codeFrequencyDescription,
+  commitShareDescription,
+  issueAgeCuts,
   issueAgeDescription,
   mergeVelocityDescription,
   releaseCadenceDescription,
@@ -138,11 +140,65 @@ describe('repository messages', () => {
 
   it('describes how long open issues have been open, over those read (FR-REPO-13)', () => {
     const age = 66 * 24 * 60 * 60;
-    expect(issueAgeDescription({ sampled: 37, medianAge: age, truncated: true })).toBe(
-      `The 37 open issues updated last have been open for a median of ${duration(age)}.`,
+    expect(
+      issueAgeDescription({ sampled: 37, medianAge: age, olderThan: [], truncated: true }),
+    ).toBe(`The 37 open issues updated last have been open for a median of ${duration(age)}.`);
+    expect(
+      issueAgeDescription({ sampled: 1, medianAge: age, olderThan: [], truncated: false }),
+    ).toBe(`Its 1 open issue has been open for ${duration(age)}.`);
+  });
+
+  it('says how many open issues are older than each cut, of the sample (FR-REPO-13)', () => {
+    const cuts = (counts: [number, number, number]) =>
+      [7, 30, 90].map((days, index) => ({ days, count: counts[index] }));
+    expect(
+      issueAgeCuts({ sampled: 37, medianAge: 1, olderThan: cuts([30, 22, 12]), truncated: true }),
+    ).toBe(
+      'Of the 37 open issues updated last, 30 are older than 7 days, 22 are older than 30 days, ' +
+        'and 12 are older than 90 days.',
     );
-    expect(issueAgeDescription({ sampled: 1, medianAge: age, truncated: false })).toBe(
-      `Its 1 open issue has been open for ${duration(age)}.`,
+    expect(
+      issueAgeCuts({ sampled: 1, medianAge: 1, olderThan: cuts([1, 1, 0]), truncated: false }),
+    ).toBe(
+      'Of its 1 open issue, 1 is older than 7 days, 1 is older than 30 days, and 0 are older ' +
+        'than 90 days.',
+    );
+    expect(
+      issueAgeCuts({
+        sampled: 1_200,
+        medianAge: 1,
+        olderThan: [
+          { days: 1, count: 1_100 },
+          { days: 30, count: 1 },
+        ],
+        truncated: false,
+      }),
+    ).toBe('Of its 1,200 open issues, 1,100 are older than 1 day and 1 is older than 30 days.');
+  });
+
+  it('says nothing of the age cuts of an empty sample, or without cuts (FR-REPO-13)', () => {
+    expect(
+      issueAgeCuts({ sampled: 0, medianAge: undefined, olderThan: [], truncated: false }),
+    ).toBeUndefined();
+    expect(
+      issueAgeCuts({
+        sampled: 0,
+        medianAge: undefined,
+        olderThan: [{ days: 7, count: 0 }],
+        truncated: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      issueAgeCuts({ sampled: 37, medianAge: 1, olderThan: [], truncated: true }),
+    ).toBeUndefined();
+  });
+
+  it('says how few of the listed authors made half their commits (FR-REPO-05)', () => {
+    expect(commitShareDescription({ few: 2, listed: 10, made: 640, total: 800 })).toBe(
+      '2 of the 10 listed authors made 640 of these 800 commits.',
+    );
+    expect(commitShareDescription({ few: 1, listed: 2, made: 1_500, total: 3_000 })).toBe(
+      '1 of the 2 listed authors made 1,500 of these 3,000 commits.',
     );
   });
 

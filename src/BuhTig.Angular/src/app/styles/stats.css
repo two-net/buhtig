@@ -87,6 +87,16 @@
     grid-template-columns: 1fr;
   }
 }
+/* A reading of a widget's figures in words, below them (FR-REPO-05, FR-REPO-13). */
+.reading {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+.w-body.flush > .reading {
+  margin: 0;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-muted);
+}
 /* A widget's few figures, side by side as stat cards are, and one above another when narrow. */
 .stats.few {
   grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr));

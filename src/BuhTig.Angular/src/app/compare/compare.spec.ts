@@ -695,7 +695,7 @@ describe('Comparison', () => {
     ]);
     expect(notesOf('Open issue age')).toEqual([
       expect.stringContaining(
-        `acme/widget ${issueAgeDescription({ sampled: 37, medianAge: 60 * DAY, truncated: true })}`,
+        `acme/widget ${issueAgeDescription({ sampled: 37, medianAge: 60 * DAY, olderThan: [], truncated: true })}`,
       ),
       expect.stringContaining(`umbrella/gadget ${NO_OPEN_ISSUES}`),
     ]);

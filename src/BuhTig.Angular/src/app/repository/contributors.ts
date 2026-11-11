@@ -10,15 +10,18 @@ import {
   CONTRIBUTORS_HEADERS,
   NO_CONTRIBUTORS,
   TOO_MANY_CONTRIBUTORS,
+  commitShareDescription,
   contributorsDescription,
 } from './messages';
+import { commitShare } from './metrics';
 
 /**
  * A repository's Contributors tab: its top 10 contributors by commits (FR-REPO-05), as bars, each
  * with the contributor's avatar and login, linking to their profile on GitHub (FR-REPO-12). When
- * GitHub does not list them, as for its largest repositories, it says so. Its CSV file lists
- * them as its table does, with how many there are in all, when GitHub says, and when they were
- * fetched (FR-EXP-02).
+ * GitHub does not list them, as for its largest repositories, it says so. Below them, how few of
+ * them made at least half of their commits, unless fewer than two have a count. Its CSV file
+ * lists them as its table does, with how many there are in all, when GitHub says, and when they
+ * were fetched (FR-EXP-02).
  */
 @Component({
   selector: 'app-repository-contributors-tab',
@@ -40,6 +43,9 @@ import {
             </p>
           } @else {
             <app-bar-chart [bars]="bars()" unit="commits" [summary]="summary() ?? ''" />
+            @if (share(); as share) {
+              <p class="reading">{{ share }}</p>
+            }
           }
         </ng-template>
       </app-widget>
@@ -68,6 +74,12 @@ export class RepositoryContributorsTab {
       avatar: { name: contributor.login, src: contributor.avatarUrl },
     })),
   );
+
+  /** How few of those listed made at least half of their commits, if two or more have a count. */
+  protected readonly share = computed(() => {
+    const share = commitShare(this.listed());
+    return share && commitShareDescription(share);
+  });
 
   protected readonly summary = computed(() =>
     this.listed().length > 0

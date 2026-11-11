@@ -17,6 +17,7 @@ import {
   NO_FIGURE,
   NO_MERGES,
   NO_OPEN_ISSUES,
+  issueAgeCuts,
   issueAgeDescription,
   mergeVelocityDescription,
 } from './messages';
@@ -32,7 +33,16 @@ const VELOCITY: MergeVelocity = {
 };
 
 /** How long the open issues of `acme/widget` updated last have been open. */
-const AGE: IssueAge = { sampled: 37, medianAge: 66 * 24 * 60 * 60, truncated: true };
+const AGE: IssueAge = {
+  sampled: 37,
+  medianAge: 66 * 24 * 60 * 60,
+  olderThan: [
+    { days: 7, count: 30 },
+    { days: 30, count: 22 },
+    { days: 90, count: 12 },
+  ],
+  truncated: true,
+};
 
 /** The stat cards' names and figures in `element`, each a list. */
 function figures(element: HTMLElement): string[][] {
@@ -148,8 +158,27 @@ describe('RepositoryIssueAge', () => {
     expect(element().querySelector('.Box-footer')?.textContent?.trim()).toBe(ISSUE_AGE_SAMPLE);
   });
 
+  it('says how many of the open issues are older than 7, 30 and 90 days (FR-REPO-13)', async () => {
+    await answer(AGE);
+    expect(element().querySelector('.reading')?.textContent?.trim()).toBe(
+      'Of the 37 open issues updated last, 30 are older than 7 days, 22 are older than 30 days, ' +
+        'and 12 are older than 90 days.',
+    );
+    expect(issueAgeCuts(AGE)).toBe(element().querySelector('.reading')?.textContent?.trim());
+  });
+
+  it('says nothing of the cuts when the server does not tell them (FR-REPO-13)', async () => {
+    await answer({ ...AGE, olderThan: [] });
+    expect(figures(element())).toEqual([
+      [MEDIAN_AGE, duration(AGE.medianAge!), 'of 37 open issues'],
+    ]);
+    expect(element().querySelector('.reading')).toBeNull();
+  });
+
   it('says when there are no open issues to measure (FR-REPO-11)', async () => {
-    await answer({ sampled: 0, medianAge: undefined, truncated: false });
+    await answer({ sampled: 0, medianAge: undefined, olderThan: [], truncated: false });
     expect(element().querySelector('.w-state span')?.textContent).toBe(NO_OPEN_ISSUES);
+    // Nor how many are older than each cut.
+    expect(element().querySelector('.reading')).toBeNull();
   });
 });

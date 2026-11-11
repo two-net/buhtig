@@ -13,8 +13,10 @@ import {
   CONTRIBUTORS_HEADERS,
   NO_CONTRIBUTORS,
   TOO_MANY_CONTRIBUTORS,
+  commitShareDescription,
   contributorsDescription,
 } from './messages';
+import { commitShare } from './metrics';
 
 /** The top contributors of `acme/widget`. */
 const CONTRIBUTORS: Contributors = {
@@ -62,6 +64,18 @@ describe('RepositoryContributorsTab', () => {
   const bars = () => [...element().querySelectorAll('.hbar')];
   const summary = () => element().querySelector('.w-sub')?.textContent?.trim();
   const message = () => element().querySelector('.w-state span')?.textContent;
+  const reading = () => element().querySelector('.reading')?.textContent?.trim();
+  /** Contributors who made `commits` each, most first. */
+  const made = (...commits: number[]): Contributors => ({
+    contributors: commits.map((count, index) => ({
+      login: `author-${index + 1}`,
+      avatarUrl: undefined,
+      url: undefined,
+      commits: count,
+    })),
+    tooLarge: false,
+    count: commits.length,
+  });
   /** The CSV file that the widget downloads, if it offers one. */
   const csv = () =>
     (fixture.debugElement.query(By.directive(Widget)).componentInstance as Widget).table()?.csv;
@@ -154,18 +168,44 @@ describe('RepositoryContributorsTab', () => {
     expect(csv()!.rows.map((row) => row[4])).toEqual([undefined, undefined]);
   });
 
+  it('says how few of those listed made at least half their commits (FR-REPO-05)', async () => {
+    await answer(made(390, 250, 60, 40, 20, 15, 10, 8, 5, 2));
+    expect(reading()).toBe('2 of the 10 listed authors made 640 of these 800 commits.');
+    expect(reading()).toBe(
+      commitShareDescription(
+        commitShare(made(390, 250, 60, 40, 20, 15, 10, 8, 5, 2).contributors)!,
+      ),
+    );
+  });
+
+  it('says one of two made half the commits when they share them evenly (FR-REPO-05)', async () => {
+    await answer(made(150, 150));
+    expect(reading()).toBe('1 of the 2 listed authors made 150 of these 300 commits.');
+  });
+
+  it('says so when one of them made at least half the commits (FR-REPO-05)', async () => {
+    await answer(CONTRIBUTORS);
+    expect(reading()).toBe('1 of the 2 listed authors made 12,345 of these 12,346 commits.');
+  });
+
+  it('says nothing of their share when only one is listed (FR-REPO-05)', async () => {
+    await answer(made(1_000));
+    expect(bars()).toHaveLength(1);
+    expect(reading()).toBeUndefined();
+  });
+
   it("says GitHub doesn't list the contributors of repositories this large", async () => {
     await answer({ contributors: [], tooLarge: true, count: undefined });
     expect(element().querySelector('.w-body p.w-state')?.textContent?.trim()).toBe(
       TOO_MANY_CONTRIBUTORS,
     );
-    expect(element().querySelector('.hbars, .w-sub, .w-head button')).toBeNull();
+    expect(element().querySelector('.hbars, .w-sub, .w-head button, .reading')).toBeNull();
   });
 
   it('says when there are none (FR-REPO-11)', async () => {
     await answer({ contributors: [], tooLarge: false, count: 0 });
     expect(message()).toBe(NO_CONTRIBUTORS);
-    expect(element().querySelector('.hbars, button')).toBeNull();
+    expect(element().querySelector('.hbars, button, .reading')).toBeNull();
   });
 
   it('says when they failed to load, and tries again (FR-REPO-09)', async () => {

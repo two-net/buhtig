@@ -17,6 +17,7 @@ import {
   NO_FIGURE,
   NO_MERGES,
   NO_OPEN_ISSUES,
+  issueAgeCuts,
   issueAgeDescription,
   mergeVelocityDescription,
   mergedAndClosed,
@@ -91,8 +92,9 @@ export class RepositoryMergeVelocity {
 
 /**
  * How long a repository's open issues updated last have been open, on its Issues tab
- * (FR-REPO-13): their median age, with a sentence that says how many issues it is of, and a note
- * below that it is not of the list below it, whose filters do not change it.
+ * (FR-REPO-13): their median age, with a sentence that says how many issues it is of, then how
+ * many of them are older than 7, 30 and 90 days, and a note below that these are not of the list
+ * below them, whose filters do not change them.
  */
 @Component({
   selector: 'app-repository-issue-age',
@@ -114,6 +116,9 @@ export class RepositoryMergeVelocity {
             <dd class="sub">{{ ofOpenIssues(age.sampled) }}</dd>
           </div>
         </dl>
+        @if (cuts(age); as cuts) {
+          <p class="reading">{{ cuts }}</p>
+        }
       </ng-template>
       <div class="Box-footer sample" footer>{{ ISSUE_AGE_SAMPLE }}</div>
     </app-widget>
@@ -133,6 +138,7 @@ export class RepositoryIssueAge {
     return medianAge === undefined ? NO_FIGURE : duration(medianAge);
   }
 
+  protected readonly cuts = issueAgeCuts;
   protected readonly ofOpenIssues = ofOpenIssues;
   protected readonly ISSUE_AGE = ISSUE_AGE;
   protected readonly MEDIAN_AGE = MEDIAN_AGE;

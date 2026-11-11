@@ -86,6 +86,10 @@ const VELOCITY_SAMPLE: usize = 100;
 const PULL_FIELDS: &[&str] = &["created_at", "closed_at", "pull_request.merged_at"];
 const ISSUE_FIELDS: &[&str] = &["created_at", "pull_request"];
 
+/// FR-REPO-13: the ages, in days, past which the Issues tab says how many of the open issues
+/// it ages are, the fewest days first.
+const AGE_CUTS: [i64; 3] = [7, 30, 90];
+
 /// FR-REPO-14: the latest workflow runs on the default branch whose health the Activity tab
 /// tells, and what is kept of each.
 const WORKFLOW_RUNS: usize = 50;
@@ -816,12 +820,15 @@ pub async fn merge_velocity(
 /// repository's 100 open issues and pull requests updated last have been open (FR-REPO-13),
 ///
 /// ```json
-/// {"sampled": 37, "median_age": 5184000 | null, "truncated": true,
-///  "fetched_at": …, "stale": null | "held" | "github"}
+/// {"sampled": 37, "median_age": 5184000 | null,
+///  "older_than": [{"days": 7, "count": 30}, {"days": 30, "count": 22},
+///                 {"days": 90, "count": 12}],
+///  "truncated": true, "fetched_at": …, "stale": null | "held" | "github"}
 /// ```
 ///
 /// `sampled` is how many open issues were read, and `median_age` the median time, in
-/// seconds, since they were opened, `null` if there were none. `truncated` says whether the
+/// seconds, since they were opened, `null` if there were none. `older_than` says how many of
+/// them have been open longer than each of 7, 30 and 90 days. `truncated` says whether the
 /// repository has more open issues and pull requests than were read. One that has turned
 /// issues off on GitHub has none, and GitHub is not asked. `fetched_at` and `stale` say when
 /// the issues were fetched, as [`dated`] tells it, or the repository when GitHub was not asked.
@@ -1971,13 +1978,24 @@ fn ages(items: &List, now: DateTimeUtc) -> Value {
         .iter()
         .filter(|item| item.is_object() && !item.get("pull_request").is_some_and(Value::is_object))
         .collect();
-    let ages = issues
+    let ages: Vec<i64> = issues
         .iter()
         .filter_map(|issue| since(issue, "created_at", now))
+        .collect();
+    let older_than: Vec<Value> = AGE_CUTS
+        .iter()
+        .map(|days| {
+            let count = ages
+                .iter()
+                .filter(|age| **age > days * 24 * 60 * 60)
+                .count();
+            json!({ "days": days, "count": count })
+        })
         .collect();
     json!({
         "sampled": issues.len(),
         "median_age": median(ages),
+        "older_than": older_than,
         "truncated": items.truncated,
     })
 }
@@ -4794,7 +4812,10 @@ mod tests {
 
     /// What [`issue_age`] answers without open issues.
     fn no_ages() -> Value {
-        json!({"sampled": 0, "median_age": null, "truncated": false, "stale": null})
+        json!({"sampled": 0, "median_age": null,
+               "older_than": [{"days": 7, "count": 0}, {"days": 30, "count": 0},
+                              {"days": 90, "count": 0}],
+               "truncated": false, "stale": null})
     }
 
     /// What [`workflow_runs`] answers without workflow runs on `branch`, or when GitHub
@@ -5104,7 +5125,38 @@ mod tests {
         };
         assert_eq!(
             ages(&items, now),
-            json!({"sampled": 3, "median_age": 2 * 24 * 60 * 60, "truncated": true})
+            json!({"sampled": 3, "median_age": 2 * 24 * 60 * 60,
+                   "older_than": [{"days": 7, "count": 0}, {"days": 30, "count": 0},
+                                  {"days": 90, "count": 0}],
+                   "truncated": true})
+        );
+    }
+
+    #[test]
+    fn open_issues_are_counted_past_each_age_cut() {
+        let now: DateTimeUtc = "2026-11-01T00:00:00Z".parse().unwrap();
+        let opened = |days: i64| json!({"created_at": (now - TimeDelta::days(days)).to_rfc3339()});
+        let items = List {
+            items: vec![
+                opened(1),
+                // Exactly 7 days is not older than 7 days.
+                opened(7),
+                opened(10),
+                opened(45),
+                opened(120),
+                opened(400),
+                // Without a time it was opened, it counts in none.
+                json!({"number": 1}),
+                // A pull request is not an issue, however old.
+                json!({"created_at": "2020-01-01T00:00:00Z", "pull_request": {}}),
+            ],
+            truncated: false,
+        };
+        let answer = ages(&items, now);
+        assert_eq!(answer["sampled"], json!(7));
+        assert_eq!(
+            answer["older_than"],
+            json!([{"days": 7, "count": 4}, {"days": 30, "count": 3}, {"days": 90, "count": 2}])
         );
     }
 

@@ -713,10 +713,63 @@ describe('Resources', () => {
 
   it('gives how long the open issues updated last have been open (FR-REPO-13)', () => {
     const seen = outcome(resources.issueAge('acme', 'widget'));
+    http.expectOne(`${WIDGET}/issue-age`).flush({
+      sampled: 37,
+      median_age: 5_184_000,
+      older_than: [
+        { days: 7, count: 30 },
+        { days: 30, count: 22 },
+        { days: 90, count: 12 },
+      ],
+      truncated: true,
+    });
+    expect(seen.value).toEqual({
+      sampled: 37,
+      medianAge: 5_184_000,
+      olderThan: [
+        { days: 7, count: 30 },
+        { days: 30, count: 22 },
+        { days: 90, count: 12 },
+      ],
+      truncated: true,
+    });
+  });
+
+  it('leaves out the age cuts the server does not tell, or tells oddly (FR-REPO-13)', () => {
+    const without = outcome(resources.issueAge('acme', 'widget'));
     http
       .expectOne(`${WIDGET}/issue-age`)
       .flush({ sampled: 37, median_age: 5_184_000, truncated: true });
-    expect(seen.value).toEqual({ sampled: 37, medianAge: 5_184_000, truncated: true });
+    expect(without.value).toMatchObject({ olderThan: [] });
+
+    const odd = outcome(resources.issueAge('acme', 'widget'));
+    http.expectOne(`${WIDGET}/issue-age`).flush({
+      sampled: 37,
+      median_age: 5_184_000,
+      older_than: [
+        { days: 90, count: 12, extra: true },
+        { days: 0, count: 37 },
+        { days: 7.5, count: 30 },
+        { days: 30, count: -1 },
+        { days: 30, count: '22' },
+        null,
+        'odd',
+        { days: 7, count: 30 },
+      ],
+      truncated: true,
+    });
+    expect(odd.value).toMatchObject({
+      olderThan: [
+        { days: 7, count: 30 },
+        { days: 90, count: 12 },
+      ],
+    });
+
+    const notAList = outcome(resources.issueAge('acme', 'widget'));
+    http
+      .expectOne(`${WIDGET}/issue-age`)
+      .flush({ sampled: 37, median_age: 5_184_000, older_than: { 7: 30 }, truncated: true });
+    expect(notAList.value).toMatchObject({ olderThan: [] });
   });
 
   it('gives how the latest workflow runs fared, linking only to GitHub (FR-REPO-14)', () => {

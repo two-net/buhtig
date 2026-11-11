@@ -23,6 +23,7 @@ import {
   weekDate,
 } from '../format/format';
 import { IssueKind, IssueSort, IssueState } from './issue-query';
+import { CommitShare } from './metrics';
 import { CommitComparison, Metric } from './observations';
 
 /** "commit" or "commits", as a count of them, such as 12, takes. */
@@ -110,6 +111,17 @@ export const CONTRIBUTORS_HEADERS = ['Contributor', 'Commits'] as const;
 export function contributorsDescription(shown: number, branch: string | undefined): string {
   const to = branch ? ` to ${branch}` : '';
   return `The ${exactNumber(shown)} most active contributors${to}, by commits.`;
+}
+
+/**
+ * FR-REPO-05: how few of the listed contributors made at least half of their commits, such as
+ * "2 of the 10 listed authors made 640 of these 800 commits."
+ */
+export function commitShareDescription({ few, listed, made, total }: CommitShare): string {
+  return (
+    `${exactNumber(few)} of the ${exactNumber(listed)} listed authors made ` +
+    `${exactNumber(made)} of these ${exactNumber(total)} commits.`
+  );
 }
 
 /** FR-REPO-06: what an issue or pull request is, and its state, such as "Pull request, merged". */
@@ -325,7 +337,7 @@ export const NO_OPEN_ISSUES = 'No open issues to measure.';
  * filters do not change it.
  */
 export const ISSUE_AGE_SAMPLE =
-  'This figure is of the open issues among the 100 open issues and pull requests updated ' +
+  'These figures are of the open issues among the 100 open issues and pull requests updated ' +
   'last, not of the list below.';
 
 /** FR-REPO-13: how many open issues the age is of, such as "of 37 open issues". */
@@ -345,6 +357,28 @@ export function issueAgeDescription({ sampled, medianAge, truncated }: IssueAge)
   return sampled === 1
     ? `${which} ${have} been open for ${age}.`
     : `${which} ${have} been open for a median of ${age}.`;
+}
+
+/**
+ * FR-REPO-13: how many of the open issues whose age is told have been open longer than each of
+ * its cuts, such as "Of the 37 open issues updated last, 30 are older than 7 days, 22 are older
+ * than 30 days, and 12 are older than 90 days.", unless there are none, or no cuts.
+ */
+export function issueAgeCuts({ sampled, olderThan, truncated }: IssueAge): string | undefined {
+  if (sampled === 0 || olderThan.length === 0) {
+    return undefined;
+  }
+  const issues = `${exactNumber(sampled)} open ${sampled === 1 ? 'issue' : 'issues'}`;
+  const which = truncated ? `Of the ${issues} updated last` : `Of its ${issues}`;
+  const cuts = olderThan.map(
+    ({ days, count }) =>
+      `${exactNumber(count)} ${count === 1 ? 'is' : 'are'} older than ` +
+      `${exactNumber(days)} ${days === 1 ? 'day' : 'days'}`,
+  );
+  const last = cuts.pop();
+  const listed =
+    cuts.length === 0 ? last : `${cuts.join(', ')}${cuts.length > 1 ? ',' : ''} and ${last}`;
+  return `${which}, ${listed}.`;
 }
 
 /** FR-REPO-14: the widget of how a repository's workflow runs fare, and its figures. */
