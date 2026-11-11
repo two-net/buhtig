@@ -79,7 +79,7 @@
                     let index = $index, first = $first, last = $last
                   ) {
                     <li>
-                      <app-watchlist-entry [name]="repository" />
+                      <app-watchlist-entry [name]="repository" [watchlist]="current.id" />
                       <div class="wl-controls">
                         <button
                           type="button"

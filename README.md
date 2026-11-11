@@ -178,13 +178,22 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   release, one page of its workflow runs and its commit activity, each conditional and cached
   with its dashboard's, so a repository whose dashboard was opened lately costs nothing. A
   watchlist has no refresh of its own: refreshing a repository's dashboard refreshes its row.
+  Each row also tells how the repository's stars, forks, open issues and open pull requests
+  changed over 7 days, from what its dashboard observed (see Trends), or why it can't; a row
+  observes nothing itself, since that would need a search. Once a row has loaded, BuhTig
+  remembers, for that user and that entry, the latest release's tag, whether the latest workflow
+  run passed or failed, and the last push it showed. The next time, the row marks a release
+  with another tag, a run that fails after one that passed, and a newer push as new since the
+  user last looked. What failed to load keeps what was remembered. Reordering keeps it; removing
+  the repository, or deleting the watchlist or the account, deletes it.
 - **Recently viewed:** the signed-in home page lists up to 8 public repositories whose
   dashboards were opened on this instance lately, and the visitor's home page suggests the
   first 3 to try. They come from the shared cache alone, never from data fetched with a
   personal access token, and BuhTig asks GitHub nothing for them. The Privacy page says so.
 - **Deleting data:** in Settings, once they confirm, signed-in users can delete everything
   BuhTig keeps of theirs: their account, sessions, credentials, the data cached and the
-  figures observed with their token, their history, their pins and their watchlists. This signs them out on every browser. BuhTig stays
+  figures observed with their token, their history, their pins and their watchlists, with what
+  their rows last showed. This signs them out on every browser. BuhTig stays
   among their authorized OAuth apps on GitHub until they revoke it there, which Settings
   links to, since BuhTig changes nothing on GitHub.
 - **Access:** in public mode, the default, anyone may open the home page and the
@@ -226,7 +235,8 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   sign-on, or doesn't accept a user's token, the dashboard says so and how to fix it.
 - **Trends:** each time a repository's stat cards are made from data GitHub has just given
   or confirmed, BuhTig records its stars, forks, open issues and open pull requests, and
-  the Activity tab tells how they changed over 7, 30 and 90 days. It keeps the latest of
+  the Activity tab tells how they changed over 7, 30 and 90 days, as watchlists' rows do over
+  7. It keeps the latest of
   each day, per repository and cache scope, for 90 days, after which housekeeping deletes
   them; the period isn't configurable. Observations cost GitHub nothing extra, and nothing
   is crawled or backfilled: a repository whose dashboard isn't opened isn't observed, and

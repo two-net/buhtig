@@ -524,7 +524,49 @@ export interface Glance extends Freshness {
   /** The release GitHub marks as the latest, `undefined` when there is none. */
   latestRelease: GlancePart<{ release: Release | undefined }>;
   workflowRuns: GlancePart<WorkflowRuns>;
+  /**
+   * How its figures changed over a week, as BuhTig observed them (FR-PERS-10), or why that could
+   * not be read. `undefined` unless GitHub has just given or confirmed the repository to the
+   * viewer, so that nothing observed of it is told from data that may no longer be theirs to see
+   * (FR-DATA-14).
+   */
+  trend: ({ ok: true } & RowTrend) | { ok: false; failure: Failure } | undefined;
+  /**
+   * What the row of the viewer's watchlist is to mark as new since it last showed the repository
+   * (FR-PERS-11), `undefined` when it was not read for a row of theirs.
+   */
+  since: SinceSeen | undefined;
 }
+
+/**
+ * How a repository's figures changed over a week, as a watchlist's row tells it (FR-PERS-10): the
+ * change between the observations that FR-DATA-14 picks, or why there is none, and the latest.
+ */
+export interface RowTrend {
+  /** Whether what was observed was read with the viewer's own token, for them alone. */
+  scope: 'shared' | 'private';
+  /** When the oldest observation kept was made, unless there are none. */
+  trackingSince: Date | undefined;
+  /** The latest observation, unless there are none. */
+  latest: Observation | undefined;
+  period: Period;
+}
+
+/**
+ * What a watchlist's row last showed of a repository's parts, and when, and whether what it shows
+ * now is new since (FR-PERS-11). A part is `undefined` until the row has shown it.
+ */
+export interface SinceSeen {
+  /** The latest release's tag then, `undefined` if there was none. */
+  release: Seen<{ tag: string | undefined }> | undefined;
+  /** Whether the latest workflow run then passed or failed. */
+  run: Seen<{ outcome: 'passed' | 'failed' }> | undefined;
+  /** When the repository had last been pushed to then. */
+  push: Seen<{ pushedAt: Date }> | undefined;
+}
+
+/** What a row showed of a part, at `seenAt`, and whether what it shows now is `new` since. */
+export type Seen<T> = { seenAt: Date; new: boolean } & T;
 
 /**
  * What the server answers about one of a watchlist's repositories (FR-PERS-08): what it shows of
@@ -801,6 +843,23 @@ interface PartFailureAnswer {
 interface GlanceAnswer extends RepositoryAnswer {
   latest_release?: (DatedAnswer & { release: ReleaseAnswer | null }) | PartFailureAnswer | null;
   workflow_runs: WorkflowRunsAnswer | PartFailureAnswer;
+  trend?: RowTrendAnswer | PartFailureAnswer | null;
+  since?: SinceSeenAnswer | null;
+}
+
+/** The server's answer about how a repository's figures changed over a week (FR-PERS-10). */
+interface RowTrendAnswer {
+  scope: string;
+  tracking_since: string | null;
+  latest: ObservationAnswer | null;
+  period: PeriodAnswer;
+}
+
+/** The server's answer about what a watchlist's row last showed, and what is new (FR-PERS-11). */
+interface SinceSeenAnswer {
+  release: { seen_at: string; tag: string | null; new: boolean } | null;
+  run: { seen_at: string; outcome: string; new: boolean } | null;
+  push: { seen_at: string; pushed_at: string; new: boolean } | null;
 }
 
 /** The server's answer about a repository, for its commit-activity chart. */
@@ -950,17 +1009,20 @@ interface TrendsAnswer extends DatedAnswer {
   tracking_since: string | null;
   observations: ObservationAnswer[];
   gaps: { from: string; to: string }[];
-  periods: {
-    days: number;
-    target?: string;
-    first_day?: string;
-    observed_days?: number;
-    supported: boolean;
-    reason?: string;
-    from?: ObservationAnswer;
-    to?: ObservationAnswer;
-    changes?: { stars: number; forks: number; open_issues: number; open_pull_requests: number };
-  }[];
+  periods: PeriodAnswer[];
+}
+
+/** The server's answer about how a repository's figures changed over a period. */
+interface PeriodAnswer {
+  days: number;
+  target?: string;
+  first_day?: string;
+  observed_days?: number;
+  supported: boolean;
+  reason?: string;
+  from?: ObservationAnswer;
+  to?: ObservationAnswer;
+  changes?: { stars: number; forks: number; open_issues: number; open_pull_requests: number };
 }
 
 /** The server's answer about a repository, for how often it is released. */
@@ -1135,13 +1197,18 @@ export class Resources {
    * What a watchlist shows of the repository `owner/repo` (FR-PERS-08), or why GitHub shows the
    * viewer none of it. It fails only when BuhTig cannot tell now, as `summary` does, with the
    * `Failure` that its status says. A part that failed alone, such as its latest release, says so
-   * in its place.
+   * in its place. For the row of the viewer's `watchlist`, it says what is new since that row last
+   * showed the repository (FR-PERS-11). It changes nothing: the row says what it showed once it has
+   * loaded, with `Watchlists.seen`.
    */
-  glance(owner: string, repo: string): Observable<Glanced> {
-    return this.http.get<GlanceAnswer>(`${repositoryUrl(owner, repo)}/glance`).pipe(
+  glance(owner: string, repo: string, watchlist?: number): Observable<Glanced> {
+    const params =
+      watchlist === undefined ? undefined : new HttpParams().set('watchlist', watchlist);
+    return this.http.get<GlanceAnswer>(`${repositoryUrl(owner, repo)}/glance`, { params }).pipe(
       map((answer): Glanced => {
         const latest = answer.latest_release;
         const runs = answer.workflow_runs;
+        const trend = answer.trend;
         return {
           status: 'found',
           glance: {
@@ -1154,6 +1221,12 @@ export class Resources {
             workflowRuns: isFailure(runs)
               ? { ok: false, failure: partFailure(runs.failure) }
               : { ok: true, ...workflowRuns(runs) },
+            trend: !trend
+              ? undefined
+              : isFailure(trend)
+                ? { ok: false, failure: partFailure(trend.failure) }
+                : { ok: true, ...rowTrend(trend) },
+            since: answer.since ? sinceSeen(answer.since) : undefined,
           },
         };
       }),
@@ -1587,40 +1660,72 @@ function trends(answer: TrendsAnswer): Dated<Trends> {
     const [start, end] = [date(from), date(to)];
     return start && end ? [{ from: start, to: end }] : [];
   });
-  const periods = (answer.periods ?? []).map((period): Period => {
-    const told = {
-      days: count(period.days),
-      firstDay: date(period.first_day),
-      observedDays: count(period.observed_days),
-      target: date(period.target),
-    };
-    const from = period.from && observed(period.from);
-    const to = period.to && observed(period.to);
-    if (period.supported === true && from && to && period.changes) {
-      const changes = period.changes;
-      return {
-        ...told,
-        supported: true,
-        from,
-        to,
-        changes: {
-          stars: change(changes.stars),
-          forks: change(changes.forks),
-          openIssues: change(changes.open_issues),
-          openPullRequests: change(changes.open_pull_requests),
-        },
-      };
-    }
-    return { ...told, supported: false, reason: unsupported(period.reason) };
-  });
   return {
     scope: answer.scope === 'private' ? 'private' : 'shared',
     keptDays: count(answer.kept_days),
     trackingSince: date(answer.tracking_since),
     observations,
     gaps,
-    periods,
+    periods: (answer.periods ?? []).map(periodOf),
     ...freshness(answer),
+  };
+}
+
+/** The change over a period that the server tells as `answer`, or why there is none. */
+function periodOf(answer: PeriodAnswer): Period {
+  const told = {
+    days: count(answer.days),
+    firstDay: date(answer.first_day),
+    observedDays: count(answer.observed_days),
+    target: date(answer.target),
+  };
+  const from = answer.from && observed(answer.from);
+  const to = answer.to && observed(answer.to);
+  if (answer.supported === true && from && to && answer.changes) {
+    const changes = answer.changes;
+    return {
+      ...told,
+      supported: true,
+      from,
+      to,
+      changes: {
+        stars: change(changes.stars),
+        forks: change(changes.forks),
+        openIssues: change(changes.open_issues),
+        openPullRequests: change(changes.open_pull_requests),
+      },
+    };
+  }
+  return { ...told, supported: false, reason: unsupported(answer.reason) };
+}
+
+/** How a repository's figures changed over a week, as the server tells a watchlist's row. */
+function rowTrend(answer: RowTrendAnswer): RowTrend {
+  return {
+    scope: answer.scope === 'private' ? 'private' : 'shared',
+    trackingSince: date(answer.tracking_since),
+    latest: answer.latest ? observed(answer.latest) : undefined,
+    period: periodOf(answer.period ?? { days: 0, supported: false }),
+  };
+}
+
+/**
+ * What a watchlist's row last showed, and what it is to mark as new, as the server tells it: of
+ * each part, nothing unless the server says what it showed and when.
+ */
+function sinceSeen(answer: SinceSeenAnswer): SinceSeen {
+  const { release, run, push } = answer;
+  const when = (part: { seen_at: string; new: boolean } | null) => {
+    const seenAt = date(part?.seen_at);
+    return seenAt && { seenAt, new: part?.new === true };
+  };
+  const [releaseSeen, runSeen, pushSeen] = [when(release), when(run), when(push)];
+  const outcome = run?.outcome === 'passed' || run?.outcome === 'failed' ? run.outcome : undefined;
+  const pushedAt = date(push?.pushed_at);
+  return {
+    release: releaseSeen && { ...releaseSeen, tag: release?.tag ?? undefined },
+    run: runSeen && outcome && { ...runSeen, outcome },
+    push: pushSeen && pushedAt && { ...pushSeen, pushedAt },
   };
 }
 

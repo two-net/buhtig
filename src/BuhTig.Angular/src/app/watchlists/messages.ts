@@ -185,6 +185,28 @@ export function loadingRow(repository: string): string {
   return `Loading ${repository}…`;
 }
 
+/** FR-PERS-10: how a repository's figures changed over a week, in its row. */
+export const OVER_A_WEEK = 'Last 7 days:';
+export const NO_FIGURES_YET =
+  "BuhTig hasn't recorded this repository's figures yet. It records them when the " +
+  "repository's dashboard is opened.";
+export const TREND_FAILED = "Couldn't load how its figures changed";
+
+/**
+ * FR-PERS-11: what is new in a row since its user last looked at it, before when they did, such
+ * as "New since you looked 3 days ago".
+ */
+export const NEW_SINCE = 'New since you looked';
+export const FAILING_SINCE = 'Failing since you looked';
+
+/** FR-PERS-11: what the row showed of the release when its user last looked, after when. */
+export function releaseThen(tag: string | undefined): string {
+  return tag === undefined ? ', when there was none' : `, when it was ${tag}`;
+}
+
+/** FR-PERS-11: what the row showed of the latest workflow run when its user last looked. */
+export const PASSED_THEN = ', when it passed';
+
 /** FR-PERS-07: the button in a dashboard's head that adds its repository to watchlists. */
 export const ADD_TO_WATCHLIST = 'Add to watchlist…';
 

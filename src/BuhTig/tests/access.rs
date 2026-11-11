@@ -113,6 +113,7 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         "POST /-/api/watchlists/1/repositories",
         "PUT /-/api/watchlists/1/repositories",
         "DELETE /-/api/watchlists/1/repositories/owner/repo",
+        "PUT /-/api/watchlists/1/repositories/owner/repo/seen",
         "DELETE /-/api/history",
         "DELETE /-/api/user",
     ] {

@@ -17,14 +17,20 @@ import {
   staleData,
 } from '../dashboard/messages';
 import { Clock } from '../format/clock';
-import { relativeTime } from '../format/format';
+import { exactTime, relativeTime, utcDay } from '../format/format';
 import { TITLES } from '../messages';
 import { problemMessage as searchProblem } from '../search/messages';
-import { RUN_STATES, noRuns } from '../repository/messages';
+import { PRIVATE_TRENDS, RUN_STATES, noBaseline, noRuns } from '../repository/messages';
 import { Toasts } from '../toast/toasts';
 import {
+  FAILING_SINCE,
+  NEW_SINCE,
   NOT_A_REPOSITORY,
+  NO_FIGURES_YET,
   NO_SUCH_WATCHLIST,
+  OVER_A_WEEK,
+  PASSED_THEN,
+  TREND_FAILED,
   NO_WATCHLISTS,
   RELEASE_FAILED,
   RUNS_FAILED,
@@ -37,6 +43,7 @@ import {
   deleted,
   movedDown,
   problemMessage,
+  releaseThen,
   removedFrom,
   renamedTo,
   rowFailure,
@@ -63,6 +70,8 @@ describe('Watchlists page', () => {
 
   afterEach(() => {
     http.match('/-/api/session');
+    // What the rows that loaded say they showed, which the tests of what is new check.
+    seenRequests();
     http.verify();
   });
 
@@ -103,7 +112,12 @@ describe('Watchlists page', () => {
     while (walker.nextNode()) {
       texts.push(walker.currentNode.textContent ?? '');
     }
-    return texts.join(' ').replace(/\s+/g, ' ').trim();
+    // Text that a component's text follows on, as a comma does, is laid out without a space.
+    return texts
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .replace(/ ([,.])/g, '$1')
+      .trim();
   }
 
   async function settle(): Promise<void> {
@@ -130,6 +144,10 @@ describe('Watchlists page', () => {
 
   /** The requests for what rows show of their repositories, on their way. */
   const glances = () => http.match((request) => request.url.endsWith('/glance'));
+
+  /** What rows that loaded said they showed (FR-PERS-11), on their way. */
+  const seenRequests = () =>
+    http.match((request) => request.method === 'PUT' && request.url.endsWith('/seen'));
 
   /** What the server answers of `name` when GitHub shows it, with `changes`. */
   function glance(name: string, changes: object = {}): object {
@@ -250,9 +268,11 @@ describe('Watchlists page', () => {
       'acme/widget',
       'octo/thing',
     ]);
-    http.expectOne('/-/api/repositories/acme/widget/glance').flush(glance('Acme/Widget'));
     http
-      .expectOne('/-/api/repositories/octo/thing/glance')
+      .expectOne('/-/api/repositories/acme/widget/glance?watchlist=7')
+      .flush(glance('Acme/Widget'));
+    http
+      .expectOne('/-/api/repositories/octo/thing/glance?watchlist=7')
       .flush(glance('octo/thing', { visibility: 'private', archived: true }));
     await settle();
     answerActivity();
@@ -289,7 +309,7 @@ describe('Watchlists page', () => {
 
   it('says what a repository has none of, and what failed alone, beside the rest', async () => {
     await open('/-/watchlists/7');
-    http.expectOne('/-/api/repositories/acme/widget/glance').flush(
+    http.expectOne('/-/api/repositories/acme/widget/glance?watchlist=7').flush(
       glance('acme/widget', {
         latest_release: { release: null, fetched_at: '2026-11-09T11:50:00.000Z', stale: null },
         workflow_runs: {
@@ -305,7 +325,7 @@ describe('Watchlists page', () => {
         },
       }),
     );
-    http.expectOne('/-/api/repositories/octo/thing/glance').flush(
+    http.expectOne('/-/api/repositories/octo/thing/glance?watchlist=7').flush(
       glance('octo/thing', {
         latest_release: { failure: 'github' },
         workflow_runs: { failure: 'unavailable' },
@@ -326,13 +346,13 @@ describe('Watchlists page', () => {
 
   it('says when it shows saved data, and how old (FR-DATA-05)', async () => {
     await open('/-/watchlists/7');
-    http.expectOne('/-/api/repositories/acme/widget/glance').flush(
+    http.expectOne('/-/api/repositories/acme/widget/glance?watchlist=7').flush(
       glance('acme/widget', {
         fetched_at: '2026-11-09T09:00:00.000Z',
         stale: 'github',
       }),
     );
-    http.expectOne('/-/api/repositories/octo/thing/glance').flush(glance('octo/thing'));
+    http.expectOne('/-/api/repositories/octo/thing/glance?watchlist=7').flush(glance('octo/thing'));
     await settle();
     answerActivity();
     await settle();
@@ -350,12 +370,14 @@ describe('Watchlists page', () => {
       { ...DEPENDENCIES, repositories: ['acme/secret', 'acme/sso', 'acme/widget'] },
     ]);
     http
-      .expectOne('/-/api/repositories/acme/secret/glance')
+      .expectOne('/-/api/repositories/acme/secret/glance?watchlist=7')
       .flush(null, { status: 404, statusText: 'Not Found' });
     http
-      .expectOne('/-/api/repositories/acme/sso/glance')
+      .expectOne('/-/api/repositories/acme/sso/glance?watchlist=7')
       .flush({ denied: 'token' }, { status: 403, statusText: 'Forbidden' });
-    http.expectOne('/-/api/repositories/acme/widget/glance').flush(glance('acme/widget'));
+    http
+      .expectOne('/-/api/repositories/acme/widget/glance?watchlist=7')
+      .flush(glance('acme/widget'));
     await settle();
     answerActivity();
     await settle();
@@ -376,9 +398,9 @@ describe('Watchlists page', () => {
   it('says when a row failed, and tries it again alone, while the others show (FR-PERS-08)', async () => {
     await open('/-/watchlists/7');
     http
-      .expectOne('/-/api/repositories/acme/widget/glance')
+      .expectOne('/-/api/repositories/acme/widget/glance?watchlist=7')
       .flush(null, { status: 502, statusText: 'Bad Gateway' });
-    http.expectOne('/-/api/repositories/octo/thing/glance').flush(glance('octo/thing'));
+    http.expectOne('/-/api/repositories/octo/thing/glance?watchlist=7').flush(glance('octo/thing'));
     await settle();
     answerActivity();
     await settle();
@@ -388,7 +410,7 @@ describe('Watchlists page', () => {
     row(0).querySelector<HTMLButtonElement>('.retry')!.click();
     await settle();
     // Only the row that failed asks again.
-    const again = http.expectOne('/-/api/repositories/acme/widget/glance');
+    const again = http.expectOne('/-/api/repositories/acme/widget/glance?watchlist=7');
     expect(glances()).toEqual([]);
     again.flush(glance('acme/widget'));
     await settle();
@@ -417,10 +439,224 @@ describe('Watchlists page', () => {
       request.flush(null, { status: 404, statusText: 'Not Found' });
     }
     await settle();
-    http.expectOne('/-/api/repositories/a/six/glance').flush(null, {
+    http.expectOne('/-/api/repositories/a/six/glance?watchlist=7').flush(null, {
       status: 404,
       statusText: 'Not Found',
     });
+  });
+
+  /** An observation of a repository's figures, at `at`, as the server tells it. */
+  function observation(at: string, stars: number): object {
+    return {
+      day: at.slice(0, 10),
+      observed_at: at,
+      pull_requests_observed_at: at,
+      stars,
+      forks: 5,
+      open_issues: 7,
+      open_pull_requests: 2,
+    };
+  }
+
+  it("tells how each repository's figures changed over a week, between which observations (FR-PERS-10)", async () => {
+    await open('/-/watchlists/7');
+    const from = observation('2026-11-02T10:00:00.000Z', 41);
+    const to = observation('2026-11-09T11:50:00.000Z', 50);
+    http.expectOne('/-/api/repositories/acme/widget/glance?watchlist=7').flush(
+      glance('acme/widget', {
+        trend: {
+          scope: 'shared',
+          tracking_since: '2026-11-02T10:00:00.000Z',
+          latest: to,
+          period: {
+            days: 7,
+            target: '2026-11-02T11:50:00.000Z',
+            first_day: '2026-11-02',
+            observed_days: 2,
+            supported: true,
+            from,
+            to,
+            changes: { stars: 9, forks: 0, open_issues: 0, open_pull_requests: 0 },
+          },
+        },
+      }),
+    );
+    // Observed once, with the viewer's token.
+    const once = observation('2026-11-09T11:40:00.000Z', 12);
+    http.expectOne('/-/api/repositories/octo/thing/glance?watchlist=7').flush(
+      glance('octo/thing', {
+        trend: {
+          scope: 'private',
+          tracking_since: '2026-11-09T11:40:00.000Z',
+          latest: once,
+          period: {
+            days: 7,
+            target: '2026-11-02T11:40:00.000Z',
+            first_day: '2026-11-02',
+            observed_days: 1,
+            supported: false,
+            reason: 'first_observation',
+          },
+        },
+      }),
+    );
+    await settle();
+    answerActivity();
+    await settle();
+
+    // Each figure at either observation, when each was made, and the days between as gaps.
+    expect(shown(row(0).querySelector('.wl-trend')!)).toBe(
+      `${OVER_A_WEEK} Between ${exactTime(new Date('2026-11-02T10:00:00.000Z'))} and ` +
+        `${exactTime(new Date('2026-11-09T11:50:00.000Z'))}, stars went from 41 to 50 (+9), ` +
+        'forks stayed at 5, open issues stayed at 7 and open pull requests stayed at 2. ' +
+        `Observed on 2 of the 8 days from ${utcDay(new Date('2026-11-02'))} to ` +
+        `${utcDay(new Date('2026-11-09'))}.`,
+    );
+    // No change at all, never a zero, and what the token observed is the viewer's alone.
+    expect(shown(row(1).querySelector('.wl-trend')!)).toBe(
+      `${OVER_A_WEEK} ${noBaseline({
+        day: new Date('2026-11-09'),
+        observedAt: new Date('2026-11-09T11:40:00.000Z'),
+        pullRequestsObservedAt: new Date('2026-11-09T11:40:00.000Z'),
+        figures: { stars: 12, forks: 5, openIssues: 7, openPullRequests: 2 },
+      })} ${PRIVATE_TRENDS}`,
+    );
+    expect(row(1).querySelector('.wl-trend')!.textContent).not.toMatch(/\+0|\b0\b/);
+    expect(page().textContent).not.toMatch(/score|health/i);
+  });
+
+  it('says why there is no change, and none from saved data, or when it failed (FR-PERS-10)', async () => {
+    await open('/-/watchlists/7', [
+      { ...DEPENDENCIES, repositories: ['a/new', 'a/down', 'a/saved'] },
+    ]);
+    const answers: Record<string, object> = {
+      'a/new': {
+        trend: {
+          scope: 'shared',
+          tracking_since: null,
+          latest: null,
+          period: { days: 7, supported: false, reason: 'no_observations' },
+        },
+      },
+      'a/down': { trend: { failure: 'unavailable' } },
+      // GitHub failed, so what the cache has is shown, without what was observed of it.
+      'a/saved': { stale: 'github', trend: null },
+    };
+    for (const request of glances()) {
+      const name = request.request.url.split('/').slice(4, 6).join('/');
+      request.flush(glance(name, answers[name]));
+    }
+    await settle();
+    answerActivity();
+    await settle();
+
+    expect(shown(row(0).querySelector('.wl-trend')!)).toBe(`${OVER_A_WEEK} ${NO_FIGURES_YET}`);
+    const failed = row(1).querySelector('.wl-trend')!;
+    expect(shown(failed)).toBe(TREND_FAILED);
+    expect(failed.classList).toContain('err');
+    expect(row(2).querySelector('.wl-trend')).toBeNull();
+    expect(row(2).querySelector('.wl-note.warn')).not.toBeNull();
+  });
+
+  it('marks what is new since the user last looked, beside the part it is of (FR-PERS-11)', async () => {
+    await open('/-/watchlists/7');
+    const looked = '2026-11-06T12:00:00.000Z';
+    http.expectOne('/-/api/repositories/acme/widget/glance?watchlist=7').flush(
+      glance('acme/widget', {
+        since: {
+          release: { seen_at: looked, tag: 'v1.1.0', new: true },
+          run: { seen_at: looked, outcome: 'passed', new: true },
+          push: { seen_at: looked, pushed_at: '2026-11-01T09:00:00.000Z', new: true },
+        },
+      }),
+    );
+    // What is no newer than when the user looked, or was never shown, is not marked.
+    http.expectOne('/-/api/repositories/octo/thing/glance?watchlist=7').flush(
+      glance('octo/thing', {
+        since: {
+          release: { seen_at: looked, tag: 'v1.2.0', new: false },
+          run: null,
+          push: { seen_at: looked, pushed_at: '2026-11-09T09:00:00.000Z', new: false },
+        },
+      }),
+    );
+    await settle();
+    answerActivity();
+    await settle();
+
+    const ago = (time: string) => relativeTime(new Date(time), now);
+    const first = row(0);
+    expect(shown(first.querySelector('.release')!)).toBe(
+      `Latest release v1.2.0 · ${ago('2026-11-02T12:00:00Z')} ` +
+        `${NEW_SINCE} ${ago(looked)}${releaseThen('v1.1.0')}`,
+    );
+    expect(shown(first.querySelector('.runs')!)).toBe(
+      `${RUN_STATES.failing} CI ${FAILING_SINCE} ${ago(looked)}${PASSED_THEN}`,
+    );
+    expect(first.querySelector('.runs .wl-new.failing')).not.toBeNull();
+    expect(shown(first.querySelector('.pushed')!)).toBe(
+      `Pushed ${ago('2026-11-09T09:00:00Z')} ${NEW_SINCE} ${ago(looked)}`,
+    );
+    expect(row(1).querySelector('.wl-new')).toBeNull();
+    expect(releaseThen(undefined)).toBe(', when there was none');
+    expect(page().textContent).not.toMatch(/score|health/i);
+  });
+
+  it('says what each row showed once it loaded, of what loaded alone (FR-PERS-11)', async () => {
+    const names = ['acme/widget', 'octo/thing', 'octo/flaky', 'acme/secret'];
+    await open('/-/watchlists/7', [{ ...DEPENDENCIES, repositories: names }]);
+    // Nothing is said before a row has loaded.
+    expect(seenRequests()).toEqual([]);
+    const answers: Record<string, object | null> = {
+      'acme/widget': glance('Acme/Widget'),
+      // No releases yet, and a run that has not ended.
+      'octo/thing': glance('octo/thing', {
+        latest_release: { release: null, fetched_at: '2026-11-09T11:50:00.000Z', stale: null },
+        workflow_runs: {
+          ...(glance('octo/thing') as { workflow_runs: object }).workflow_runs,
+          latest: { name: 'CI', status: 'in_progress', conclusion: null, started_at: null },
+        },
+      }),
+      // A release that failed to load, and runs the viewer's token may not list.
+      'octo/flaky': glance('octo/flaky', {
+        latest_release: { failure: 'github' },
+        workflow_runs: { branch: 'main', hidden: true, fetched_at: null, stale: null },
+      }),
+      'acme/secret': null,
+    };
+    for (const request of glances()) {
+      const name = request.request.url.split('/').slice(4, 6).join('/');
+      const answer = answers[name];
+      if (answer) {
+        request.flush(answer);
+      } else {
+        request.flush(null, { status: 404, statusText: 'Not Found' });
+      }
+    }
+    await settle();
+    answerActivity();
+    await settle();
+
+    const said = seenRequests();
+    // Each by its name in the watchlist, and none of a repository that GitHub did not show.
+    expect(said.map((request) => request.request.url)).toEqual([
+      '/-/api/watchlists/7/repositories/acme/widget/seen',
+      '/-/api/watchlists/7/repositories/octo/thing/seen',
+      '/-/api/watchlists/7/repositories/octo/flaky/seen',
+    ]);
+    expect(said.map((request) => request.request.body)).toEqual([
+      { release: { tag: 'v1.2.0' }, conclusion: 'failure', pushed_at: '2026-11-09T09:00:00.000Z' },
+      { release: { tag: null }, pushed_at: '2026-11-09T09:00:00.000Z' },
+      { pushed_at: '2026-11-09T09:00:00.000Z' },
+    ]);
+    // A failure to say so changes nothing that the row shows.
+    said[0].flush(null, { status: 503, statusText: 'Unavailable' });
+    said
+      .slice(1)
+      .forEach((request) => request.flush(null, { status: 204, statusText: 'No Content' }));
+    await settle();
+    expect(row(0).querySelector('.wl-note')).toBeNull();
+    expect(toasts()).toEqual([]);
   });
 
   describe('changes', () => {

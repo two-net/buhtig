@@ -89,6 +89,19 @@ describe('Watchlists', () => {
     ]);
   });
 
+  it('says what a row showed of a repository, by its name in the watchlist (FR-PERS-11)', () => {
+    const said = outcome(
+      watchlists.seen(7, 'Acme/Widget', { release: { tag: null }, conclusion: 'success' }),
+    );
+    const request = http.expectOne({
+      method: 'PUT',
+      url: '/-/api/watchlists/7/repositories/Acme/Widget/seen',
+    });
+    expect(request.request.body).toEqual({ release: { tag: null }, conclusion: 'success' });
+    request.flush(null, { status: 204, statusText: 'No Content' });
+    expect(said.error).toBeUndefined();
+  });
+
   it('fails with what the server says was wrong, or that it could not change them', () => {
     const problem = (status: number, body: object | null): WatchlistProblem => {
       const seen = outcome(watchlists.add(7, ['acme/widget']));

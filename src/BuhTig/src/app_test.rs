@@ -474,7 +474,7 @@ fn body_for(method: &Method) -> Option<Value> {
 }
 
 /// What only signed-in users may ask for or do (FR-ACC-02), whatever the mode.
-const SIGNED_IN_ONLY: [(Method, &str); 19] = [
+const SIGNED_IN_ONLY: [(Method, &str); 20] = [
     (Method::GET, "/-/api/shortcuts"),
     (Method::DELETE, "/-/api/history"),
     (Method::PUT, "/-/api/pins"),
@@ -495,6 +495,10 @@ const SIGNED_IN_ONLY: [(Method, &str); 19] = [
     (
         Method::DELETE,
         "/-/api/watchlists/1/repositories/octo/public",
+    ),
+    (
+        Method::PUT,
+        "/-/api/watchlists/1/repositories/octo/public/seen",
     ),
     (Method::GET, "/-/api/repositories/octo/public/glance"),
 ];
@@ -1349,9 +1353,23 @@ async fn a_rejected_pat_never_lists_its_users_repositories_to_anyone() {
 /// What `viewer` is told of Octo's repository `repo` at a glance, as a watchlist shows it
 /// (FR-PERS-08): the status, and the body, `null` if there is none.
 async fn glance(served: &Served, viewer: &Viewer, repo: &str) -> (u16, Value) {
-    let answer = served
-        .get(viewer, &format!("/-/api/repositories/octo/{repo}/glance"))
-        .await;
+    glanced(
+        served,
+        viewer,
+        &format!("/-/api/repositories/octo/{repo}/glance"),
+    )
+    .await
+}
+
+/// The same, as the row of Octo's repository `repo` in the watchlist `id` is told it, with
+/// what is new since it last showed it (FR-PERS-11).
+async fn glance_in(served: &Served, viewer: &Viewer, id: i64, repo: &str) -> (u16, Value) {
+    let path = format!("/-/api/repositories/octo/{repo}/glance?watchlist={id}");
+    glanced(served, viewer, &path).await
+}
+
+async fn glanced(served: &Served, viewer: &Viewer, path: &str) -> (u16, Value) {
+    let answer = served.get(viewer, path).await;
     assert_eq!(
         answer.cache_control.as_deref(),
         Some("no-store"),
@@ -1482,6 +1500,250 @@ async fn one_repository_failing_keeps_nothing_of_the_others() {
     let read = served.stub.urls().len();
     assert_eq!(glance(&served, &mona, "a~b").await, (400, Value::Null));
     assert_eq!(asked_since(&served, read), Vec::<String>::new());
+}
+
+/// Makes `viewer` a watchlist named `name` of `repositories`, and answers its ID.
+async fn watchlist(served: &Served, viewer: &Viewer, name: &str, repositories: &[&str]) -> i64 {
+    let made = served
+        .send(
+            viewer,
+            Method::POST,
+            "/-/api/watchlists",
+            Some(json!({"name": name, "repositories": repositories})),
+        )
+        .await;
+    assert_eq!(made.status, 201, "{made:?}");
+    made.json()["id"].as_i64().unwrap()
+}
+
+/// FR-PERS-10, FR-DATA-13, FR-DATA-14, AC-21: a watchlist's row tells how the repository's
+/// figures changed over a week, between the observations its dashboard made, or why it
+/// cannot, and observes nothing itself, as that would need a search.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watchlist_row_tells_the_change_over_a_week_and_observes_nothing() {
+    let served = serve("public").await;
+    let mona = served.mona().await;
+    let id = watchlist(&served, &mona, "Dependencies", &["octo/public"]).await;
+    let observed = || served.psql("SELECT count(*) FROM repository_observations");
+    let searched = |from| {
+        asked_since(&served, from)
+            .iter()
+            .any(|path| path.starts_with("/search/"))
+    };
+
+    // Nothing was observed yet, and the row observes nothing.
+    let (status, public) = glance_in(&served, &mona, id, "public").await;
+    assert_eq!(status, 200, "{public}");
+    assert_eq!(
+        public["trend"],
+        json!({
+            "scope": "shared",
+            "tracking_since": null,
+            "latest": null,
+            "period": {"days": 7, "supported": false, "reason": "no_observations"},
+        })
+    );
+    assert_eq!(observed(), "0");
+    assert!(!searched(0));
+
+    // Once its dashboard has observed it, the row says that it was observed once.
+    let stats = served
+        .get(&mona, "/-/api/repositories/octo/public/stats")
+        .await;
+    assert_eq!(stats.status, 200, "{stats:?}");
+    assert_eq!(observed(), "1");
+    let (_, public) = glance_in(&served, &mona, id, "public").await;
+    let trend = &public["trend"];
+    assert_eq!(trend["period"]["reason"], "first_observation", "{public}");
+    assert_eq!(trend["latest"]["stars"], 50);
+    assert_eq!(trend["tracking_since"], trend["latest"]["observed_at"]);
+
+    // A week later, the row tells the change between the two observations, with the
+    // figures and when each was made, and the days between as unobserved.
+    served.psql(
+        "UPDATE repository_observations
+            SET observed_at = observed_at - interval '7 days',
+                pull_requests_observed_at = pull_requests_observed_at - interval '7 days',
+                day = (observed_at - interval '7 days')::date, stars = 41",
+    );
+    let before = served.psql(
+        "SELECT to_char(observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"') \
+         FROM repository_observations",
+    );
+    served
+        .send(
+            &mona,
+            Method::POST,
+            "/-/api/repositories/octo/public/refresh",
+            Some(json!({})),
+        )
+        .await;
+    let stats = served
+        .get(&mona, "/-/api/repositories/octo/public/stats")
+        .await;
+    assert_eq!(stats.status, 200, "{stats:?}");
+    assert_eq!(observed(), "2");
+    let read = served.stub.urls().len();
+    let (status, public) = glance_in(&served, &mona, id, "public").await;
+    assert_eq!(status, 200, "{public}");
+    let week = &public["trend"]["period"];
+    assert_eq!(week["supported"], true, "{public}");
+    assert_eq!(week["from"]["observed_at"], before.as_str());
+    assert_eq!(week["to"], public["trend"]["latest"]);
+    assert_eq!(
+        (&week["from"]["stars"], &week["to"]["stars"]),
+        (&json!(41), &json!(50))
+    );
+    assert_eq!(
+        week["changes"],
+        json!({"stars": 9, "forks": 0, "open_issues": 0, "open_pull_requests": 0})
+    );
+    assert_eq!(week["observed_days"], 2);
+    // Still, the row observed nothing, and searched for nothing.
+    assert_eq!(observed(), "2");
+    assert!(!searched(read));
+}
+
+/// FR-PERS-11, FR-PERS-04, DR-04, AC-21: once a row has loaded, it says what it showed, and
+/// is later told what is new since: a release of another tag, a newer push, but not a run
+/// that passes after one that failed. What it remembers is its user's alone, and goes with
+/// the watchlist and the account.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watchlist_row_marks_what_is_new_since_its_user_saw_it() {
+    let served = serve("public").await;
+    let mona = served.mona().await;
+    let hubot = served.hubot().await;
+    let id = watchlist(&served, &mona, "Dependencies", &["octo/public"]).await;
+    let say = async |viewer: &Viewer, id: i64, body: Value| {
+        let path = format!("/-/api/watchlists/{id}/repositories/octo/public/seen");
+        served.send(viewer, Method::PUT, &path, Some(body)).await
+    };
+    let remembered = || {
+        served.psql(
+            "SELECT count(*) FROM watchlist_entries \
+             WHERE release_seen_at IS NOT NULL OR run_seen_at IS NOT NULL \
+                OR push_seen_at IS NOT NULL",
+        )
+    };
+
+    // Nothing remembered marks nothing.
+    let (status, public) = glance_in(&served, &mona, id, "public").await;
+    assert_eq!(status, 200, "{public}");
+    assert_eq!(
+        public["since"],
+        json!({"release": null, "run": null, "push": null})
+    );
+    // Reading the row remembers nothing: it says what it showed, once loaded.
+    assert_eq!(remembered(), "0");
+    let shown = json!({
+        "release": {"tag": public["latest_release"]["release"]["tag"]},
+        "conclusion": public["workflow_runs"]["latest"]["conclusion"],
+        "pushed_at": public["pushed_at"],
+    });
+    assert_eq!(
+        shown,
+        json!({
+            "release": {"tag": "v1"},
+            "conclusion": "success",
+            "pushed_at": "2026-10-01T00:00:00Z",
+        })
+    );
+    let said = say(&mona, id, shown.clone()).await;
+    assert_eq!((said.status, said.body.as_str()), (204, ""), "{said:?}");
+    assert_eq!(remembered(), "1");
+    let (_, public) = glance_in(&served, &mona, id, "public").await;
+    let since = &public["since"];
+    assert_eq!(since["release"]["tag"], "v1", "{public}");
+    assert_eq!(since["run"]["outcome"], "passed");
+    assert_eq!(since["push"]["pushed_at"], "2026-10-01T00:00:00.000Z");
+    for part in ["release", "run", "push"] {
+        assert_eq!(since[part]["new"], false, "{part}: {public}");
+        assert!(since[part]["seen_at"].is_string(), "{part}: {public}");
+    }
+
+    // Had it shown another tag, an earlier push, and a failed run, the release and the push
+    // are new, and the passing run is not.
+    served.psql(
+        "UPDATE watchlist_entries SET release_tag = 'v0', run_outcome = 'failed', \
+         pushed_at = pushed_at - interval '1 day'",
+    );
+    let (_, public) = glance_in(&served, &mona, id, "public").await;
+    let since = &public["since"];
+    assert_eq!(
+        (
+            &since["release"]["new"],
+            &since["run"]["new"],
+            &since["push"]["new"]
+        ),
+        (&json!(true), &json!(false), &json!(true)),
+        "{public}"
+    );
+    assert_eq!(since["release"]["tag"], "v0");
+
+    // Hubot is told nothing of Mona's row, and can say nothing of it.
+    let (status, public) = glance_in(&served, &hubot, id, "public").await;
+    assert_eq!((status, &public["since"]), (200, &Value::Null), "{public}");
+    let said = say(&hubot, id, shown.clone()).await;
+    assert_eq!((said.status, said.body.as_str()), (404, ""), "{said:?}");
+    assert_eq!(
+        served.psql("SELECT release_tag FROM watchlist_entries"),
+        "v0"
+    );
+
+    // What the row remembers goes with the watchlist, and with the account.
+    let deleted = served
+        .send(
+            &mona,
+            Method::DELETE,
+            &format!("/-/api/watchlists/{id}"),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(deleted.status, 200, "{deleted:?}");
+    assert_eq!(remembered(), "0");
+    let id = watchlist(&served, &mona, "Again", &["octo/public"]).await;
+    assert_eq!(say(&mona, id, shown).await.status, 204);
+    assert_eq!(remembered(), "1");
+    let deleted = served
+        .send(&mona, Method::DELETE, "/-/api/user", Some(json!({})))
+        .await;
+    assert!(deleted.status < 300, "{deleted:?}");
+    assert_eq!(remembered(), "0");
+    assert_eq!(served.psql("SELECT count(*) FROM watchlist_entries"), "0");
+}
+
+/// FR-PERS-10, FR-ACC-05, FR-DATA-14, AC-21: what was observed with a PAT is told in its
+/// user's row alone, and a row tells one who may not see the repository nothing of its
+/// figures, or of what is new in it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_watchlist_row_tells_nothing_of_what_its_viewer_may_not_see() {
+    let served = serve("public").await;
+    let hubot = served.hubot().await;
+    let mona = served.mona().await;
+    let stats = served
+        .get(&hubot, "/-/api/repositories/octo/secret/stats")
+        .await;
+    assert_eq!(stats.status, 200, "{stats:?}");
+    let his = watchlist(&served, &hubot, "Team", &["octo/secret"]).await;
+    let (status, secret) = glance_in(&served, &hubot, his, "secret").await;
+    assert_eq!(status, 200, "{secret}");
+    assert_eq!(secret["trend"]["scope"], "private");
+    assert_eq!(secret["trend"]["latest"]["stars"], 50);
+
+    let hers = watchlist(&served, &mona, "Mine", &["octo/secret"]).await;
+    assert_eq!(
+        glance_in(&served, &mona, hers, "secret").await,
+        (404, Value::Null)
+    );
+    // Not even through his watchlist.
+    assert_eq!(
+        glance_in(&served, &mona, his, "secret").await,
+        (404, Value::Null)
+    );
+    assert_eq!(
+        served.psql("SELECT count(*) FROM repository_observations"),
+        "1"
+    );
 }
 
 /// FR-PERS-06 to FR-PERS-09, FR-ACC-06, AC-03, AC-11, DR-04: a watchlist is its user's

@@ -27,6 +27,7 @@ use crate::cache::{self, Cache, Cached, Outcome, Page, Refused, Source, Stale, V
 use crate::entity::cache_entry::Scope;
 use crate::github::{self, List};
 use crate::trends::{self, Figures, Observation};
+use crate::watchlists;
 
 /// The longest repository name GitHub allows.
 const MAX_LENGTH: usize = 100;
@@ -100,7 +101,7 @@ const RUN_FIELDS: &[&str] = &[
 
 /// FR-REPO-14: the conclusions of the workflow runs that failed. Those cancelled, skipped,
 /// neutral or stale neither passed nor failed.
-const FAILED: &[&str] = &["failure", "timed_out", "startup_failure"];
+pub(crate) const FAILED: &[&str] = &["failure", "timed_out", "startup_failure"];
 
 /// FR-REPO-16: the latest releases whose cadence and downloads the Releases tab tells, and
 /// what is kept of each: of its assets, only how many times each was downloaded.
@@ -949,6 +950,14 @@ async fn runs(cache: &Cache, repository: &Under) -> Result<Value, StatusCode> {
 /// in its place when it cannot be read, as a dashboard's widget would fail apart from the
 /// others (FR-REPO-09).
 ///
+/// `trend` is how the repository's stars, forks, open issues and open pull requests changed
+/// over a week, as BuhTig observed them (FR-PERS-10), as [`trend`] tells it. With
+/// `?watchlist={id}`, of the viewer's watchlist that has the repository by this name, `since`
+/// is what the row is to mark as new since it last showed the repository to them
+/// (FR-PERS-11), as [`watchlists::marks`] tells it, and `null` otherwise. Neither asks GitHub
+/// anything, and a glance records nothing: neither an observation, which needs the count of
+/// the open pull requests, a search, nor what the row showed, which it says once loaded.
+///
 /// The repository is read first, with the viewer's credential at least once per `cache.ttl`,
 /// as its dashboard reads it, so that a watchlist tells each repository only to whom may see
 /// it now, whatever else the watchlist holds (FR-ACC-06, FR-ACC-07). The rest is read under
@@ -959,18 +968,24 @@ async fn runs(cache: &Cache, repository: &Under) -> Result<Value, StatusCode> {
 ///
 /// Watchlists are signed-in users' alone (FR-ACC-02), so this is 401 for a visitor. Its
 /// statuses are otherwise those of [`summary`], including 403 with why GitHub keeps the
-/// repository from the viewer's credential.
+/// repository from the viewer's credential, and 400 for a watchlist's ID that cannot be one.
 pub async fn glance(
     State(cache): State<Arc<Cache>>,
     viewer: Viewer,
     Path((owner, repo)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     if !is_account_name(&owner) || !is_repository_name(&repo) {
         return status(StatusCode::BAD_REQUEST);
     }
-    if viewer.user_id().is_none() {
+    let watchlist = match query.get("watchlist").map(|id| watchlists::id_of(id)) {
+        None => None,
+        Some(Some(id)) => Some(id),
+        Some(None) => return status(StatusCode::BAD_REQUEST),
+    };
+    let Some(user_id) = viewer.user_id() else {
         return status(StatusCode::UNAUTHORIZED);
-    }
+    };
     let host = cache.github_host();
     let result = read(&cache, &viewer, &owner, &repo).await;
     if let Some(denied) = denied(&viewer, &result, host) {
@@ -1000,9 +1015,71 @@ pub async fn glance(
     if [&latest, &runs].contains(&&Err(StatusCode::UNAUTHORIZED)) {
         return status(StatusCode::UNAUTHORIZED);
     }
+    let shown = shown(&repository, &latest, &runs);
+    let marks = async {
+        let id = watchlist?;
+        let name = format!("{owner}/{repo}");
+        match watchlists::marked(cache.db(), user_id, id, &name, &shown).await {
+            Ok(marks) => marks,
+            Err(error) => {
+                error!("cannot read what a watchlist's row showed: {error}");
+                None
+            }
+        }
+    };
+    let (trend, since) = tokio::join!(trend(&cache, &repository, ChronoUtc::now()), marks);
     glance["latest_release"] = part(latest);
     glance["workflow_runs"] = part(runs);
+    glance["trend"] = trend;
+    glance["since"] = since.into();
     respond(glance)
+}
+
+/// What a watchlist's row shows of the repository, of its parts that loaded, to tell what is
+/// new in it (FR-PERS-11): the tag of its latest release, how its latest workflow run ended,
+/// and when it was last pushed to.
+fn shown(
+    repository: &Under,
+    latest: &Result<Value, StatusCode>,
+    runs: &Result<Value, StatusCode>,
+) -> watchlists::Shown {
+    watchlists::Shown {
+        release: latest.as_ref().ok().map(|latest| {
+            latest
+                .pointer("/release/tag")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        }),
+        outcome: runs.as_ref().ok().and_then(|runs| {
+            let conclusion = runs.pointer("/latest/conclusion")?.as_str()?;
+            watchlists::Outcome::of(conclusion)
+        }),
+        pushed_at: time(&repository.data, "pushed_at"),
+    }
+}
+
+/// How the repository's stars, forks, open issues and open pull requests changed over a week,
+/// as a watchlist's row tells it (FR-PERS-10), as [`trends::change`] tells it, from what was
+/// observed of it in the scope that its data is in, with its PAT if it has one: so that no one
+/// is told what another's PAT observed (FR-DATA-14). `null` unless GitHub gave or confirmed the
+/// repository to the viewer within `cache.ttl`, as for the Activity tab's [`trends`], and
+/// `{"failure": "unavailable"}` when the database failed. It observes nothing.
+async fn trend(cache: &Cache, repository: &Under, now: DateTimeUtc) -> Value {
+    if repository.stale.is_some() {
+        return Value::Null;
+    }
+    let Some(id) = repository_id(&repository.data) else {
+        return Value::Null;
+    };
+    match trends::read(cache.db(), repository.source, id, now).await {
+        Ok(observations) => {
+            trends::change(repository.source.scope, &observations, trends::ROW_PERIOD)
+        }
+        Err(error) => {
+            error!("cannot read what was observed of a repository: {error}");
+            part(Err(StatusCode::SERVICE_UNAVAILABLE))
+        }
+    }
 }
 
 /// A part of a [`glance`], or why it could not be read, as the UI tells it of a widget that
@@ -3582,6 +3659,77 @@ mod tests {
                 .0,
             StatusCode::OK
         );
+    }
+
+    /// FR-PERS-10, FR-DATA-14: a watchlist's row tells the week's change only from a read of
+    /// the repository that GitHub gave or confirmed just now, as the Activity tab does, and
+    /// otherwise shows the rest of the row without it. It observes nothing.
+    #[tokio::test]
+    async fn a_row_tells_a_trend_only_from_a_fresh_read_of_the_repository() {
+        let down = Arc::new(AtomicBool::new(false));
+        let stub = Stub::new({
+            let down = down.clone();
+            move |_| match down.load(Ordering::Relaxed) {
+                true => answer(502, &[], r#"{"message": "Server Error"}"#),
+                false => answer(200, &[], WIDGET),
+            }
+        });
+        let cache = cache_for(&stub, 0, Duration::ZERO).await;
+        let observed_at = ChronoUtc::now() - TimeDelta::days(1);
+        let observation = Observation {
+            source: SHARED,
+            repository_id: 42,
+            observed_at,
+            pull_requests_observed_at: observed_at,
+            figures: Figures {
+                stars: 1,
+                forks: 2,
+                open_issues: 3,
+                open_pull_requests: 4,
+            },
+        };
+        assert!(trends::record(cache.db(), &observation).await.unwrap());
+        let signed_in = Viewer::SignedIn {
+            user_id: 1,
+            sign_in: Secret::new("sign-in".to_owned()),
+        };
+        let ask = async || {
+            let response = glance(
+                State(cache.clone()),
+                signed_in.clone(),
+                Path(("acme".into(), "widget".into())),
+                Query(HashMap::new()),
+            )
+            .await;
+            let status = response.status();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            (status, serde_json::from_slice::<Value>(&body).unwrap())
+        };
+        let observations = async || {
+            trends::read(cache.db(), SHARED, 42, ChronoUtc::now())
+                .await
+                .unwrap()
+                .len()
+        };
+
+        let (status, body) = ask().await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["trend"]["scope"], "shared");
+        assert_eq!(body["trend"]["latest"]["stars"], 1);
+        assert_eq!(body["trend"]["period"]["reason"], "first_observation");
+        // Without a watchlist, there is nothing to mark.
+        assert_eq!(body["since"], Value::Null);
+        assert_eq!(observations().await, 1);
+
+        // While GitHub fails, the row shows what the cache has, and no trend.
+        down.store(true, Ordering::Relaxed);
+        let (status, body) = ask().await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["stale"], "github");
+        assert_eq!(body["trend"], Value::Null);
+        assert_eq!(observations().await, 1);
     }
 
     #[tokio::test]

@@ -96,6 +96,42 @@
 .wl-entry .spark-wrap {
   display: contents;
 }
+/* FR-PERS-10: how a row's figures changed over a week, below its parts. */
+.wl-entry .t > .wl-trend {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 72ch;
+  margin-top: 6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.wl-trend app-icon {
+  --icon: 14px;
+  flex: none;
+  margin-top: 1px;
+}
+.wl-trend strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+.wl-entry .t > .wl-trend.err {
+  color: var(--fg-danger);
+}
+/* FR-PERS-11: what is new in a row since its user last looked, beside the part it is of. */
+.wl-entry .rmeta > span {
+  flex-wrap: wrap;
+}
+.wl-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-accent);
+  font-weight: 500;
+}
+.wl-new.failing {
+  color: var(--fg-danger);
+}
 .wl-controls {
   display: flex;
   flex: none;

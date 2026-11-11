@@ -32,6 +32,9 @@ use crate::entity::user;
 /// FR-REPO-17: the periods a dashboard compares, in days.
 pub const PERIODS: [i64; 3] = [7, 30, 90];
 
+/// FR-PERS-10: the period that a watchlist's row tells the change over, in days.
+pub const ROW_PERIOD: i64 = PERIODS[0];
+
 /// The most observations told of a repository: one a day over [`KEPT_DAYS`], and the day
 /// that the oldest of them is on.
 const MOST: u64 = KEPT_DAYS.unsigned_abs() + 1;
@@ -236,10 +239,7 @@ pub async fn forget_pat(db: &impl ConnectionTrait, credential_id: i64) -> Result
 /// [`period`] tells it.
 pub fn summarize(scope: Scope, observations: &[Model]) -> Value {
     json!({
-        "scope": match scope {
-            Scope::Shared => "shared",
-            Scope::User(_) => "private",
-        },
+        "scope": scope_of(scope),
         "kept_days": KEPT_DAYS,
         "tracking_since": observations.first().map(|first| iso(first.observed_at)),
         "observations": observations.iter().map(observed).collect::<Vec<_>>(),
@@ -249,6 +249,36 @@ pub fn summarize(scope: Scope, observations: &[Model]) -> Value {
             .map(|days| period(observations, *days))
             .collect::<Vec<_>>(),
     })
+}
+
+/// What a watchlist's row tells of `observations`, those of one repository in one scope
+/// oldest first, as [`read`] gives them: the change over `days` days alone (FR-PERS-10),
+///
+/// ```json
+/// {"scope": "shared" | "private", "tracking_since": … | null,
+///  "latest": {"day": …, "observed_at": …, …} | null, "period": {"days": 7, …}}
+/// ```
+///
+/// `scope` and `tracking_since` are as [`summarize`] tells them, `latest` is the latest
+/// observation, as it does, and `period` as [`period`] tells it: what the row needs to say
+/// what changed between which observations, or why nothing can be said to, without being
+/// told every observation.
+pub fn change(scope: Scope, observations: &[Model], days: i64) -> Value {
+    json!({
+        "scope": scope_of(scope),
+        "tracking_since": observations.first().map(|first| iso(first.observed_at)),
+        "latest": observations.last().map(observed),
+        "period": period(observations, days),
+    })
+}
+
+/// `private` for what was observed with the viewer's PAT, which only they are told, and
+/// `shared` otherwise.
+fn scope_of(scope: Scope) -> &'static str {
+    match scope {
+        Scope::Shared => "shared",
+        Scope::User(_) => "private",
+    }
 }
 
 /// An observation, as [`summarize`] tells it.
@@ -601,6 +631,44 @@ mod tests {
         assert_eq!(quarter["observed_days"], 2);
         // 1 August is 10 days before 11 August: further than 9.
         assert_eq!(quarter["reason"], "no_observation_then");
+    }
+
+    /// FR-PERS-10: a watchlist's row is told the week's change, between which observations,
+    /// and the latest, or why there is no change, as the Activity tab is.
+    #[test]
+    fn a_row_is_told_the_change_over_a_week_alone() {
+        assert_eq!(ROW_PERIOD, 7);
+        assert_eq!(
+            change(Scope::Shared, &[], ROW_PERIOD),
+            json!({
+                "scope": "shared",
+                "tracking_since": null,
+                "latest": null,
+                "period": {"days": 7, "supported": false, "reason": "no_observations"},
+            })
+        );
+
+        let once = [observation("2026-11-09T14:05:00Z", 120)];
+        let told = change(Scope::User(3), &once, ROW_PERIOD);
+        assert_eq!(told["scope"], "private");
+        assert_eq!(told["tracking_since"], "2026-11-09T14:05:00.000Z");
+        assert_eq!(told["latest"]["stars"], 120);
+        assert_eq!(told["period"], period_of(&once, 7));
+        assert_eq!(told["period"]["reason"], "first_observation");
+
+        let observations = [
+            observation("2026-11-02T10:00:00Z", 100),
+            observation("2026-11-05T10:00:00Z", 104),
+            observation("2026-11-09T09:00:00Z", 112),
+        ];
+        let told = change(Scope::Shared, &observations, ROW_PERIOD);
+        assert_eq!(told["tracking_since"], "2026-11-02T10:00:00.000Z");
+        assert_eq!(told["latest"]["observed_at"], "2026-11-09T09:00:00.000Z");
+        assert_eq!(told["period"], period_of(&observations, 7));
+        assert_eq!(told["period"]["from"]["stars"], 100);
+        assert_eq!(told["period"]["changes"]["stars"], 12);
+        // Nothing else of the observations is told.
+        assert!(told.get("observations").is_none() && told.get("gaps").is_none());
     }
 
     /// A database of its own, with Alice and Bob, who have each saved a PAT, as user and

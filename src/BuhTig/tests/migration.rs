@@ -315,7 +315,8 @@ fn every_earlier_release_upgrades_and_keeps_its_data() {
 
 /// FR-DB-04: what migration adds to an older schema, beyond what any earlier release's
 /// lacks (see [`every_earlier_release_upgrades_and_keeps_its_data`]): the current schema,
-/// with data, missing a whole table, a column and indexes.
+/// with data, missing a whole table, columns and indexes. Those of what watchlists' rows last
+/// showed (FR-PERS-11) are missing, as from 0.5.0, and their entries are kept.
 #[test]
 fn upgrade_keeps_data_and_adds_what_is_missing() {
     let expected = fresh_fingerprint();
@@ -340,6 +341,9 @@ fn upgrade_keeps_data_and_adds_what_is_missing() {
         UPDATE schema_versions SET version = '0.0.1';
         DROP TABLE cache_entries;
         ALTER TABLE users DROP COLUMN name;
+        ALTER TABLE watchlist_entries DROP COLUMN release_seen_at, DROP COLUMN release_tag,
+            DROP COLUMN run_seen_at, DROP COLUMN run_outcome, DROP COLUMN push_seen_at,
+            DROP COLUMN pushed_at;
         DROP INDEX "idx-pins-resource";
         DROP INDEX "idx-sessions-user_id";
         DROP INDEX "idx-watchlists-name";
@@ -361,12 +365,13 @@ fn upgrade_keeps_data_and_adds_what_is_missing() {
              SELECT resource_name FROM history_entries;
              SELECT resource_name FROM pins;
              SELECT name FROM watchlists;
-             SELECT repository_name FROM watchlist_entries;
+             SELECT repository_name || ' ' || (release_seen_at IS NULL)
+                 || ' ' || (pushed_at IS NULL) FROM watchlist_entries;
              SELECT string_agg(version, ' ' ORDER BY applied_at) FROM schema_versions;"
         ),
         format!(
             "octocat https://avatars.example/u/1\n01\npat abcd\noctocat/Hello-World\ngithub\n\
-             Dependencies\noctocat/Spoon-Knife\n0.0.1 {VERSION}"
+             Dependencies\noctocat/Spoon-Knife true true\n0.0.1 {VERSION}"
         )
     );
 }

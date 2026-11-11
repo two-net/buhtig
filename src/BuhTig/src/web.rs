@@ -328,7 +328,11 @@ pub fn router(
         )
         .route(
             "/-/api/watchlists/{id}/repositories/{owner}/{repo}",
-            delete(watchlists::remove).with_state(watchlists),
+            delete(watchlists::remove).with_state(watchlists.clone()),
+        )
+        .route(
+            "/-/api/watchlists/{id}/repositories/{owner}/{repo}/seen",
+            put(watchlists::seen).with_state(watchlists),
         )
         .route(
             "/-/api/token",

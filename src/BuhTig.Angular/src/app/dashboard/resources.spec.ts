@@ -1107,6 +1107,97 @@ describe('Resources', () => {
       expect(failed.value).toBeUndefined();
       expect(failed.error).toBeInstanceOf(HttpErrorResponse);
     });
+
+    it('tells how its figures changed over a week, or that it could not (FR-PERS-10)', () => {
+      const observed = (at: string, stars: number) => ({
+        day: at.slice(0, 10),
+        observed_at: at,
+        pull_requests_observed_at: at,
+        stars,
+        forks: 5,
+        open_issues: 7,
+        open_pull_requests: 2,
+      });
+      const [from, to] = [observed('2026-11-02T10:00:00.000Z', 41), observed(FETCHED, 50)];
+      const seen = glance({
+        ...ANSWER,
+        trend: {
+          scope: 'private',
+          tracking_since: from.observed_at,
+          latest: to,
+          period: {
+            days: 7,
+            target: '2026-11-02T10:00:00.000Z',
+            first_day: '2026-11-02',
+            observed_days: 2,
+            supported: true,
+            from,
+            to,
+            changes: { stars: 9, forks: 0, open_issues: 0, open_pull_requests: 0 },
+          },
+        },
+      }).value;
+      const trend = seen?.status === 'found' ? seen.glance.trend : undefined;
+      expect(trend).toMatchObject({
+        ok: true,
+        scope: 'private',
+        trackingSince: new Date(from.observed_at),
+        latest: { observedAt: new Date(FETCHED), figures: { stars: 50 } },
+        period: {
+          days: 7,
+          observedDays: 2,
+          supported: true,
+          from: { figures: { stars: 41 } },
+          changes: { stars: 9, forks: 0, openIssues: 0, openPullRequests: 0 },
+        },
+      });
+
+      const none = glance({
+        ...ANSWER,
+        trend: {
+          scope: 'shared',
+          tracking_since: null,
+          latest: null,
+          period: { days: 7, supported: false, reason: 'no_observations' },
+        },
+      }).value;
+      expect(none?.status === 'found' && none.glance.trend).toMatchObject({
+        ok: true,
+        scope: 'shared',
+        latest: undefined,
+        period: { supported: false, reason: 'no_observations' },
+      });
+      const failed = glance({ ...ANSWER, trend: { failure: 'unavailable' } }).value;
+      expect(failed?.status === 'found' && failed.glance.trend).toEqual({
+        ok: false,
+        failure: 'unavailable',
+      });
+      // Nothing from a read that GitHub did not just give or confirm.
+      const saved = glance({ ...ANSWER, stale: 'github', trend: null }).value;
+      expect(saved?.status === 'found' && saved.glance.trend).toBeUndefined();
+    });
+
+    it("asks for a watchlist's row what is new since it last showed it (FR-PERS-11)", () => {
+      const seen = outcome(resources.glance('acme', 'widget', 7));
+      const asked = http.expectOne(`${WIDGET}/glance?watchlist=7`);
+      asked.flush({
+        ...ANSWER,
+        since: {
+          release: { seen_at: FETCHED, tag: null, new: true },
+          run: { seen_at: FETCHED, outcome: 'passed', new: false },
+          push: { seen_at: FETCHED, pushed_at: 'not a time', new: true },
+        },
+      });
+      const since = seen.value?.status === 'found' ? seen.value.glance.since : undefined;
+      expect(since).toEqual({
+        release: { seenAt: new Date(FETCHED), new: true, tag: undefined },
+        run: { seenAt: new Date(FETCHED), new: false, outcome: 'passed' },
+        // What the server does not say, as when, is not told.
+        push: undefined,
+      });
+      // Without a watchlist, nothing is asked of one.
+      expect(glance(ANSWER).value).toMatchObject({ glance: { since: undefined } });
+    });
   });
 
   it("gives an organization's or a user's repository's commit activity, or Computing", () => {

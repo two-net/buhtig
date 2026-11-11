@@ -172,6 +172,7 @@ mod tests {
             "/-/api/pins",
             "/-/api/watchlists",
             "/-/api/watchlists/1/repositories",
+            "/-/api/watchlists/1/repositories/owner/repo/seen",
             "/-/api/repositories/owner/repo/glance",
             "/-/api/token",
             "/-/api/user",

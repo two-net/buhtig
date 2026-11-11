@@ -35,6 +35,19 @@ export type WatchlistProblem =
   | 'not_found'
   | 'failed';
 
+/**
+ * What a watchlist's row showed of a repository once it loaded, as the server is told it, for the
+ * row to mark what is new since (FR-PERS-11): each part only if the row showed it.
+ */
+export interface Shown {
+  /** The latest release's tag, or `null` for a repository without releases. */
+  release?: { tag: string | null };
+  /** How the latest workflow run ended, as GitHub says, once it has. */
+  conclusion?: string;
+  /** When the repository was last pushed to. */
+  pushed_at?: string;
+}
+
 /** The watchlists that the server answers with, after a change. */
 interface Answer {
   watchlists: Watchlist[];
@@ -89,9 +102,15 @@ export class Watchlists {
 
   /** Takes `repository`, an `owner/repo`, out of the watchlist `id` (FR-PERS-07). */
   drop(id: number, repository: string): Observable<Watchlist[]> {
-    const [owner, repo] = repository.split('/');
-    const url = `${watchlistUrl(id)}/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-    return lists(this.http.delete<Answer>(url));
+    return lists(this.http.delete<Answer>(entryUrl(id, repository)));
+  }
+
+  /**
+   * Says that the row of `repository` in the watchlist `id` showed `shown` once it loaded, for the
+   * server to remember, so that the row can mark what is new the next time (FR-PERS-11).
+   */
+  seen(id: number, repository: string, shown: Shown): Observable<void> {
+    return this.http.put<void>(`${entryUrl(id, repository)}/seen`, shown);
   }
 
   /**
@@ -106,6 +125,12 @@ export class Watchlists {
 /** Where the server keeps the watchlist `id`. */
 function watchlistUrl(id: number): string {
   return `/-/api/watchlists/${encodeURIComponent(id)}`;
+}
+
+/** Where the server keeps `repository`, an `owner/repo`, in the watchlist `id`. */
+function entryUrl(id: number, repository: string): string {
+  const [owner, repo] = repository.split('/');
+  return `${watchlistUrl(id)}/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 }
 
 /** The watchlists that `answer` gives, or the `WatchlistProblem` that says why it did not. */

@@ -3,10 +3,16 @@
 //! dashboard reads it (FR-PERS-08, FR-PERS-09).
 //!
 //! A watchlist keeps only its name and its repositories' names, as the user gave them. BuhTig
-//! asks GitHub nothing to add a repository, and keeps nothing here of what GitHub says of it.
+//! asks GitHub nothing to add a repository, and keeps nothing here of what GitHub says of it
+//! but what each row last showed its user, for the row to mark what is new since (FR-PERS-11).
 //! The overview reads each repository for the viewer, with their own credentials, through
 //! [`crate::repositories::glance`], so that one who may not see a repository is told nothing of
 //! it, whatever watchlist it is in (FR-ACC-06, FR-ACC-07).
+//!
+//! A row is told what is new as it is read, by [`marks`], and says what it showed once it has
+//! loaded, to [`seen`]: so that reading it changes nothing (NFR-SEC-02), and what it remembers
+//! is what the user was shown. What a row remembers is the user's alone, of that entry alone:
+//! reordering a watchlist keeps it, and it goes with the entry, the watchlist, or the user.
 //!
 //! A user has at most 10 watchlists, of at most 25 repositories each. No two of their
 //! watchlists have names that differ only in letter case, and no watchlist has a repository
@@ -33,7 +39,7 @@ use sea_orm::{
 };
 use serde_json::{Value, json};
 
-use crate::cache::Viewer;
+use crate::cache::{Viewer, iso};
 use crate::entity::{watchlist, watchlist_entry};
 use crate::repositories;
 use crate::shortcuts::{answer, lock, status, unavailable};
@@ -65,6 +71,55 @@ impl From<DbErr> for Refused {
     fn from(error: DbErr) -> Refused {
         Refused::Database(error)
     }
+}
+
+/// Whether a workflow run passed or failed, as FR-REPO-14 counts them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Passed,
+    Failed,
+}
+
+impl Outcome {
+    /// The outcome of a run that GitHub says ended as `conclusion`: `None` for one that
+    /// neither passed nor failed, such as one cancelled or skipped (FR-REPO-14).
+    pub fn of(conclusion: &str) -> Option<Outcome> {
+        match conclusion {
+            "success" => Some(Outcome::Passed),
+            failed if repositories::FAILED.contains(&failed) => Some(Outcome::Failed),
+            _ => None,
+        }
+    }
+
+    /// As it is kept, and as the UI is told it.
+    fn key(self) -> &'static str {
+        match self {
+            Outcome::Passed => "passed",
+            Outcome::Failed => "failed",
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Outcome> {
+        match key {
+            "passed" => Some(Outcome::Passed),
+            "failed" => Some(Outcome::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// What a watchlist's row showed of a repository (FR-PERS-11): of each part, `None` if it
+/// showed none, as when the part failed to load.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shown {
+    /// The tag of the latest release, `Some(None)` if the repository has none.
+    pub release: Option<Option<String>>,
+    /// How the latest workflow run ended. `None` too when GitHub would not list the runs,
+    /// there are none, the latest has not ended, or it neither passed nor failed: so that a
+    /// run that fails after one that passed is told, whatever ran between.
+    pub outcome: Option<Outcome>,
+    /// When the repository was last pushed to.
+    pub pushed_at: Option<DateTimeUtc>,
 }
 
 pub struct Watchlists {
@@ -288,6 +343,127 @@ impl Watchlists {
         txn.commit().await?;
         Ok(watchlists)
     }
+
+    /// Remembers that the row of `repository` in the watchlist `id` of the user `user_id`
+    /// showed `shown` at `now` (FR-PERS-11): each part that it showed, in place of what it
+    /// showed before, so that the row can mark what is new since. What it did not show, as a
+    /// part that failed, stays as it was. [`Refused::NotFound`] if the user has no such
+    /// watchlist, or it lacks the repository, whatever the case of its name.
+    pub async fn remember_at(
+        &self,
+        user_id: i64,
+        id: i64,
+        repository: &str,
+        shown: &Shown,
+        now: DateTimeUtc,
+    ) -> Result<(), Refused> {
+        use watchlist_entry::Column;
+
+        let txn = self.db.begin().await?;
+        lock(&txn, user_id).await?;
+        let entry = entry_in(&txn, user_id, id, repository)
+            .await?
+            .ok_or(Refused::NotFound)?;
+        let mut update = watchlist_entry::Entity::update_many().filter(Column::Id.eq(entry.id));
+        let mut remembered = false;
+        if let Some(tag) = &shown.release {
+            update = update
+                .col_expr(Column::ReleaseSeenAt, Expr::value(now))
+                .col_expr(Column::ReleaseTag, Expr::value(tag.clone()));
+            remembered = true;
+        }
+        if let Some(outcome) = shown.outcome {
+            update = update
+                .col_expr(Column::RunSeenAt, Expr::value(now))
+                .col_expr(Column::RunOutcome, Expr::value(outcome.key()));
+            remembered = true;
+        }
+        if let Some(pushed_at) = shown.pushed_at {
+            update = update
+                .col_expr(Column::PushSeenAt, Expr::value(now))
+                .col_expr(Column::PushedAt, Expr::value(pushed_at));
+            remembered = true;
+        }
+        if remembered {
+            update.exec(&txn).await?;
+        }
+        txn.commit().await?;
+        Ok(())
+    }
+}
+
+/// What the row of `repository` in the watchlist `id` of the user `user_id` is to mark as new
+/// in `shown`, as [`marks`] tells it: `None` if the user has no such watchlist, or it lacks the
+/// repository, so that no one is told what another's row showed (FR-PERS-11). It changes
+/// nothing: the row says what it showed once it has loaded, to [`seen`].
+pub async fn marked(
+    db: &DatabaseConnection,
+    user_id: i64,
+    id: i64,
+    repository: &str,
+    shown: &Shown,
+) -> Result<Option<Value>, DbErr> {
+    Ok(entry_in(db, user_id, id, repository)
+        .await?
+        .map(|entry| marks(&entry, shown)))
+}
+
+/// What is new in `shown` since `entry`'s row last showed its repository, for the row to mark
+/// (FR-PERS-11):
+///
+/// ```json
+/// {"release": {"seen_at": …, "tag": "v1.1" | null, "new": true} | null,
+///  "run": {"seen_at": …, "outcome": "passed" | "failed", "new": false} | null,
+///  "push": {"seen_at": …, "pushed_at": …, "new": true} | null}
+/// ```
+///
+/// Each part is what the row last showed of it, and when, or `null` if it never did, so that
+/// nothing remembered marks nothing. A part is new only if `shown` has it, and
+///
+/// - of the release, its tag differs from the one shown then, or there was none then;
+/// - of the run, it failed, and the one shown then passed;
+/// - of the push, it is later than the one shown then.
+pub fn marks(entry: &watchlist_entry::Model, shown: &Shown) -> Value {
+    let release = entry.release_seen_at.map(|seen_at| {
+        let new =
+            matches!(&shown.release, Some(Some(tag)) if entry.release_tag.as_ref() != Some(tag));
+        json!({ "seen_at": iso(seen_at), "tag": entry.release_tag, "new": new })
+    });
+    let outcome = entry.run_outcome.as_deref().and_then(Outcome::from_key);
+    let run = entry.run_seen_at.zip(outcome).map(|(seen_at, outcome)| {
+        let new = outcome == Outcome::Passed && shown.outcome == Some(Outcome::Failed);
+        json!({ "seen_at": iso(seen_at), "outcome": outcome.key(), "new": new })
+    });
+    let push = entry
+        .push_seen_at
+        .zip(entry.pushed_at)
+        .map(|(seen_at, pushed_at)| {
+            let new = shown.pushed_at.is_some_and(|shown| shown > pushed_at);
+            json!({ "seen_at": iso(seen_at), "pushed_at": iso(pushed_at), "new": new })
+        });
+    json!({ "release": release, "run": run, "push": push })
+}
+
+/// The entry of `repository` in the watchlist `id` of the user `user_id`, whatever the case of
+/// its name: `None` if the user has no such watchlist, or it lacks the repository.
+async fn entry_in(
+    db: &impl ConnectionTrait,
+    user_id: i64,
+    id: i64,
+    repository: &str,
+) -> Result<Option<watchlist_entry::Model>, DbErr> {
+    let owned = watchlist::Entity::find()
+        .filter(watchlist::Column::Id.eq(id))
+        .filter(watchlist::Column::UserId.eq(user_id))
+        .one(db)
+        .await?;
+    if owned.is_none() {
+        return Ok(None);
+    }
+    Ok(entries_of(db, &[id])
+        .await?
+        .into_iter()
+        .find(|entry| entry.repository_name.eq_ignore_ascii_case(repository)))
 }
 
 /// The watchlists of the user `user_id`, in the order they were made, with their
@@ -413,8 +589,8 @@ fn repositories_in(value: &Value) -> Option<Vec<String>> {
         .collect()
 }
 
-/// The ID of a watchlist in a path, if it can be one.
-fn id_of(raw: &str) -> Option<i64> {
+/// The ID of a watchlist in a path or a query, if it can be one.
+pub(crate) fn id_of(raw: &str) -> Option<i64> {
     let digits = !raw.is_empty() && raw.len() <= 18 && raw.bytes().all(|b| b.is_ascii_digit());
     digits.then(|| raw.parse().ok()).flatten()
 }
@@ -582,6 +758,78 @@ pub async fn reorder(
         Ok(lists) => answered(&lists),
         Err(refusal) => refused("reorder a watchlist", refusal),
     }
+}
+
+/// `PUT /-/api/watchlists/{id}/repositories/{owner}/{repo}/seen` of `{"release": {"tag":
+/// "v1.2.0" | null}, "conclusion": "success", "pushed_at": "2026-11-01T09:00:00Z"}`: what the
+/// signed-in user's watchlist row of the repository showed, once it loaded, for it to mark what
+/// is new since (FR-PERS-11), as [`Watchlists::remember_at`] remembers it. Each is left out, or
+/// `null`, for what the row did not show:
+///
+/// - `release` when the latest release failed to load, its `tag` `null` when there is none;
+/// - `conclusion` when GitHub would not list the workflow runs, there are none, or the latest
+///   has not ended. One that is neither a pass nor a failure is taken for none (FR-REPO-14);
+/// - `pushed_at` when GitHub did not say.
+///
+/// 204 once it is remembered, 422 with `{"error": "invalid_seen"}` for a body that does not
+/// say it, and otherwise as [`remove`]: 404 if the user's watchlist lacks the repository.
+pub async fn seen(
+    State(watchlists): State<Arc<Watchlists>>,
+    viewer: Viewer,
+    Path((id, owner, repo)): Path<(String, String, String)>,
+    Json(body): Json<Value>,
+) -> Response {
+    let repository = format!("{owner}/{repo}");
+    let (Some(id), Some(_)) = (id_of(&id), repositories::names(&repository)) else {
+        return status(StatusCode::BAD_REQUEST);
+    };
+    let Some(user_id) = viewer.user_id() else {
+        return status(StatusCode::UNAUTHORIZED);
+    };
+    let Some(shown) = shown_in(&body) else {
+        return invalid("invalid_seen");
+    };
+    match watchlists
+        .remember_at(user_id, id, &repository, &shown, ChronoUtc::now())
+        .await
+    {
+        Ok(()) => status(StatusCode::NO_CONTENT),
+        Err(refusal) => refused("remember what a watchlist showed", refusal),
+    }
+}
+
+/// What a row showed, as [`seen`] is sent it, if `body` can say it: a tag of 1 to
+/// [`watchlist_entry::MAX_TAG_LENGTH`] characters, none of them a control character, a
+/// conclusion as GitHub words them, and a time as GitHub gives them.
+fn shown_in(body: &Value) -> Option<Shown> {
+    let body = body.as_object()?;
+    let given = |key: &str| body.get(key).filter(|value| !value.is_null());
+    let release = match given("release") {
+        None => None,
+        Some(release) => Some(match release.as_object()?.get("tag")? {
+            Value::Null => None,
+            tag => {
+                let tag = tag.as_str()?;
+                let length = tag.chars().count();
+                let valid = (1..=watchlist_entry::MAX_TAG_LENGTH).contains(&length)
+                    && !tag.chars().any(char::is_control);
+                Some(valid.then(|| tag.to_owned())?)
+            }
+        }),
+    };
+    let outcome = match given("conclusion") {
+        None => None,
+        Some(conclusion) => Outcome::of(conclusion.as_str()?),
+    };
+    let pushed_at = match given("pushed_at") {
+        None => None,
+        Some(pushed_at) => Some(pushed_at.as_str()?.parse::<DateTimeUtc>().ok()?),
+    };
+    Some(Shown {
+        release,
+        outcome,
+        pushed_at,
+    })
 }
 
 /// `{"watchlists": […]}`, as [`list`] answers.
@@ -1189,5 +1437,409 @@ mod tests {
         let (status, body) = parts(delete(state(), signed_in(mona), id(created)).await).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["watchlists"].as_array().unwrap().len(), 9);
+    }
+
+    fn time(at: &str) -> DateTimeUtc {
+        at.parse().unwrap()
+    }
+
+    /// What a row showed: the release `tag`, if it had loaded, a run's `outcome` and a push
+    /// at `pushed_at`.
+    fn showing(
+        release: Option<Option<&str>>,
+        outcome: Option<Outcome>,
+        pushed_at: Option<&str>,
+    ) -> Shown {
+        Shown {
+            release: release.map(|tag| tag.map(str::to_owned)),
+            outcome,
+            pushed_at: pushed_at.map(time),
+        }
+    }
+
+    /// What the row of `repository` in the watchlist `id` of the user `user_id` is to mark in
+    /// `shown`, as `[release, run, push]`, each `None` if nothing of it is remembered, and
+    /// `None` if the user has no such row.
+    async fn marked_in(
+        watchlists: &Watchlists,
+        user_id: i64,
+        id: i64,
+        repository: &str,
+        shown: &Shown,
+    ) -> Option<[Option<bool>; 3]> {
+        let marks = marked(&watchlists.db, user_id, id, repository, shown)
+            .await
+            .unwrap()?;
+        Some(["release", "run", "push"].map(|part| marks[part]["new"].as_bool()))
+    }
+
+    /// The entries of the database that remember anything a row showed.
+    async fn remembering(watchlists: &Watchlists) -> usize {
+        watchlist_entry::Entity::find()
+            .all(&watchlists.db)
+            .await
+            .unwrap()
+            .iter()
+            .filter(|entry| {
+                entry.release_seen_at.is_some()
+                    || entry.run_seen_at.is_some()
+                    || entry.push_seen_at.is_some()
+            })
+            .count()
+    }
+
+    /// FR-PERS-11: a row marks a release whose tag differs, a run that fails after one that
+    /// passed, and a newer push, since it last showed them, and nothing before it showed any.
+    #[tokio::test]
+    async fn a_row_marks_what_is_new_since_it_was_shown() {
+        let (watchlists, mona, _) = setup().await;
+        let id = make(&watchlists, mona, "Deps", &["octo/lib", "acme/tool"]).await;
+        let first = showing(
+            Some(Some("v1.0")),
+            Some(Outcome::Passed),
+            Some("2026-11-01T09:00:00Z"),
+        );
+        let next = showing(
+            Some(Some("v1.1")),
+            Some(Outcome::Failed),
+            Some("2026-11-08T09:00:00Z"),
+        );
+        // Nothing remembered marks nothing.
+        assert_eq!(
+            marked(&watchlists.db, mona, id, "octo/lib", &next)
+                .await
+                .unwrap(),
+            Some(json!({ "release": null, "run": null, "push": null }))
+        );
+
+        watchlists
+            .remember_at(mona, id, "octo/lib", &first, at(1))
+            .await
+            .unwrap();
+        // What it showed then is told, with when, and is nothing new.
+        assert_eq!(
+            marked(&watchlists.db, mona, id, "octo/lib", &first)
+                .await
+                .unwrap(),
+            Some(json!({
+                "release": {"seen_at": "2026-11-09T12:01:00.000Z", "tag": "v1.0", "new": false},
+                "run": {"seen_at": "2026-11-09T12:01:00.000Z", "outcome": "passed", "new": false},
+                "push": {
+                    "seen_at": "2026-11-09T12:01:00.000Z",
+                    "pushed_at": "2026-11-01T09:00:00.000Z",
+                    "new": false,
+                },
+            }))
+        );
+        // A new tag, a failed run after one that passed, and a later push are new, whatever
+        // the case the repository is named in.
+        let all = Some([Some(true); 3]);
+        assert_eq!(
+            marked_in(&watchlists, mona, id, "OCTO/Lib", &next).await,
+            all
+        );
+        // The same tag and outcome are not, nor is an earlier push.
+        let earlier = showing(
+            Some(Some("v1.0")),
+            Some(Outcome::Passed),
+            Some("2026-10-01T09:00:00Z"),
+        );
+        assert_eq!(
+            marked_in(&watchlists, mona, id, "octo/lib", &earlier).await,
+            Some([Some(false); 3])
+        );
+        watchlists
+            .remember_at(mona, id, "octo/lib", &next, at(2))
+            .await
+            .unwrap();
+        // Once the failure is shown, a run that passes after it is not marked, while a tag
+        // that differs is, even an earlier one.
+        assert_eq!(
+            marked_in(&watchlists, mona, id, "octo/lib", &first).await,
+            Some([Some(true), Some(false), Some(false)])
+        );
+        // The other repository's row is told nothing of this one's.
+        assert_eq!(
+            marked_in(&watchlists, mona, id, "acme/tool", &next).await,
+            Some([None; 3])
+        );
+    }
+
+    /// FR-PERS-11: a part that the row did not show, as when it failed, keeps what was
+    /// remembered of it and is not marked. A run that has not ended, or neither passed nor
+    /// failed, is not remembered, so that one that fails after one that passed is marked
+    /// whatever ran between. A repository without releases is remembered as such.
+    #[tokio::test]
+    async fn what_a_row_did_not_show_keeps_what_was_remembered() {
+        let (watchlists, mona, _) = setup().await;
+        let id = make(&watchlists, mona, "Deps", &["octo/lib"]).await;
+        let remember = async |shown: &Shown, minutes| {
+            watchlists
+                .remember_at(mona, id, "octo/lib", shown, at(minutes))
+                .await
+                .unwrap();
+        };
+        remember(
+            &showing(
+                Some(None),
+                Some(Outcome::Passed),
+                Some("2026-11-01T09:00:00Z"),
+            ),
+            1,
+        )
+        .await;
+        // The release failed, the latest run is in progress, or was cancelled, and GitHub
+        // did not say when the repository was pushed to.
+        assert_eq!(Outcome::of("cancelled"), None);
+        assert_eq!(Outcome::of("timed_out"), Some(Outcome::Failed));
+        remember(&showing(None, None, None), 2).await;
+
+        let marks = marked(
+            &watchlists.db,
+            mona,
+            id,
+            "octo/lib",
+            &showing(Some(Some("v1")), Some(Outcome::Failed), None),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            marks["release"],
+            json!({"seen_at": "2026-11-09T12:01:00.000Z", "tag": null, "new": true})
+        );
+        assert_eq!(
+            marks["run"],
+            json!({"seen_at": "2026-11-09T12:01:00.000Z", "outcome": "passed", "new": true})
+        );
+        // Nor is what fails now marked from what was remembered.
+        assert_eq!(marks["push"]["new"], false);
+        assert_eq!(
+            marked_in(&watchlists, mona, id, "octo/lib", &Shown::default()).await,
+            Some([Some(false); 3])
+        );
+        // Still no release is nothing new.
+        assert_eq!(
+            marked_in(
+                &watchlists,
+                mona,
+                id,
+                "octo/lib",
+                &showing(Some(None), None, None)
+            )
+            .await,
+            Some([Some(false); 3])
+        );
+    }
+
+    /// FR-PERS-11, FR-PERS-04, DR-04: what a row remembers is its user's alone, of that entry
+    /// alone. Reordering and respelling keep it; it goes with the entry, the watchlist, and
+    /// the user.
+    #[tokio::test]
+    async fn what_a_row_remembers_is_its_users_and_goes_with_its_entry() {
+        let (watchlists, mona, hubot) = setup().await;
+        let id = make(&watchlists, mona, "Deps", &["octo/lib", "acme/tool"]).await;
+        let shown = showing(
+            Some(Some("v1.0")),
+            Some(Outcome::Passed),
+            Some("2026-11-01T09:00:00Z"),
+        );
+        let newer = showing(Some(Some("v2")), None, None);
+        watchlists
+            .remember_at(mona, id, "octo/lib", &shown, at(1))
+            .await
+            .unwrap();
+
+        // Hubot is told nothing of Mona's row, and changes nothing of it.
+        assert_eq!(
+            marked(&watchlists.db, hubot, id, "octo/lib", &newer)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(matches!(
+            watchlists
+                .remember_at(hubot, id, "octo/lib", &newer, at(2))
+                .await,
+            Err(Refused::NotFound)
+        ));
+        // Nor is anything of a repository that the watchlist lacks.
+        assert!(matches!(
+            watchlists
+                .remember_at(mona, id, "octo/other", &shown, at(2))
+                .await,
+            Err(Refused::NotFound)
+        ));
+        assert_eq!(
+            marked(&watchlists.db, mona, id, "octo/other", &shown)
+                .await
+                .unwrap(),
+            None
+        );
+
+        // Reordering and respelling keep it.
+        watchlists
+            .reorder(mona, id, &names(&["acme/tool", "octo/lib"]))
+            .await
+            .unwrap();
+        watchlists
+            .add(mona, id, &names(&["Octo/Lib"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            marked_in(&watchlists, mona, id, "octo/lib", &newer).await,
+            Some([Some(true), Some(false), Some(false)])
+        );
+        assert_eq!(remembering(&watchlists).await, 1);
+
+        // Removing the repository forgets it, and adding it again starts afresh.
+        watchlists.remove(mona, id, "octo/lib").await.unwrap();
+        watchlists
+            .add(mona, id, &names(&["octo/lib"]))
+            .await
+            .unwrap();
+        assert_eq!(
+            marked_in(&watchlists, mona, id, "octo/lib", &newer).await,
+            Some([None; 3])
+        );
+        assert_eq!(remembering(&watchlists).await, 0);
+
+        // Deleting the watchlist forgets it.
+        watchlists
+            .remember_at(mona, id, "octo/lib", &shown, at(3))
+            .await
+            .unwrap();
+        assert_eq!(remembering(&watchlists).await, 1);
+        watchlists.delete(mona, id).await.unwrap();
+        assert_eq!(remembering(&watchlists).await, 0);
+
+        // And so does deleting the user, whose others stay.
+        let monas = make(&watchlists, mona, "Mine", &["octo/lib"]).await;
+        let hubots = make(&watchlists, hubot, "His", &["octo/lib"]).await;
+        for (user_id, id) in [(mona, monas), (hubot, hubots)] {
+            watchlists
+                .remember_at(user_id, id, "octo/lib", &shown, at(4))
+                .await
+                .unwrap();
+        }
+        assert_eq!(remembering(&watchlists).await, 2);
+        user::Entity::delete_by_id(mona)
+            .exec(&watchlists.db)
+            .await
+            .unwrap();
+        assert_eq!(remembering(&watchlists).await, 1);
+        assert_eq!(
+            marked_in(&watchlists, hubot, hubots, "octo/lib", &newer).await,
+            Some([Some(true), Some(false), Some(false)])
+        );
+    }
+
+    #[test]
+    fn what_a_row_showed_is_checked() {
+        let shown = |body: Value| shown_in(&body);
+        assert_eq!(
+            shown(json!({
+                "release": {"tag": "v1.2.0"},
+                "conclusion": "startup_failure",
+                "pushed_at": "2026-11-01T09:00:00Z",
+            })),
+            Some(showing(
+                Some(Some("v1.2.0")),
+                Some(Outcome::Failed),
+                Some("2026-11-01T09:00:00Z")
+            ))
+        );
+        assert_eq!(shown(json!({})), Some(Shown::default()));
+        assert_eq!(
+            shown(json!({"release": null, "conclusion": null, "pushed_at": null})),
+            Some(Shown::default())
+        );
+        assert_eq!(
+            shown(json!({"release": {"tag": null}, "conclusion": "skipped"})),
+            Some(showing(Some(None), None, None))
+        );
+        assert_eq!(
+            shown(json!({"release": {"tag": "é".repeat(1024)}}))
+                .and_then(|shown| shown.release.flatten())
+                .map(|tag| tag.chars().count()),
+            Some(1024)
+        );
+        for invalid in [
+            json!([]),
+            json!({"release": "v1"}),
+            json!({"release": {}}),
+            json!({"release": {"tag": ""}}),
+            json!({"release": {"tag": "v1\n"}}),
+            json!({"release": {"tag": "x".repeat(1025)}}),
+            json!({"release": {"tag": 1}}),
+            json!({"conclusion": 1}),
+            json!({"pushed_at": "yesterday"}),
+            json!({"pushed_at": 1}),
+        ] {
+            assert_eq!(shown(invalid.clone()), None, "{invalid}");
+        }
+    }
+
+    /// FR-PERS-11: what the UI is told when it says what a row showed.
+    #[tokio::test]
+    async fn the_ui_says_what_a_row_showed() {
+        let (watchlists, mona, hubot) = setup().await;
+        let id = make(&watchlists, mona, "Deps", &["octo/lib"]).await;
+        let watchlists = Arc::new(watchlists);
+        let say = async |viewer: Viewer, id: String, repo: &str, body: Value| {
+            parts(
+                seen(
+                    State(watchlists.clone()),
+                    viewer,
+                    Path((id, "octo".into(), repo.into())),
+                    Json(body),
+                )
+                .await,
+            )
+            .await
+        };
+        let body = json!({"release": {"tag": "v1"}, "conclusion": "success"});
+
+        assert_eq!(
+            say(signed_in(mona), id.to_string(), "Lib", body.clone()).await,
+            (StatusCode::NO_CONTENT, Value::Null)
+        );
+        assert_eq!(
+            marked_in(&watchlists, mona, id, "octo/lib", &Shown::default()).await,
+            Some([Some(false), Some(false), None])
+        );
+        assert_eq!(
+            say(visitor(), id.to_string(), "lib", body.clone()).await,
+            (StatusCode::UNAUTHORIZED, Value::Null)
+        );
+        assert_eq!(
+            say(signed_in(hubot), id.to_string(), "lib", body.clone()).await,
+            (StatusCode::NOT_FOUND, Value::Null)
+        );
+        assert_eq!(
+            say(signed_in(mona), id.to_string(), "other", body.clone()).await,
+            (StatusCode::NOT_FOUND, Value::Null)
+        );
+        assert_eq!(
+            say(signed_in(mona), "x".into(), "lib", body.clone()).await,
+            (StatusCode::BAD_REQUEST, Value::Null)
+        );
+        assert_eq!(
+            say(signed_in(mona), id.to_string(), "a~b", body).await,
+            (StatusCode::BAD_REQUEST, Value::Null)
+        );
+        assert_eq!(
+            say(
+                signed_in(mona),
+                id.to_string(),
+                "lib",
+                json!({"release": "v1"})
+            )
+            .await,
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"error": "invalid_seen"})
+            )
+        );
     }
 }
