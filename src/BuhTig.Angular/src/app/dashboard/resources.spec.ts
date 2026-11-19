@@ -1101,6 +1101,7 @@ describe('Resources', () => {
       fork: false,
       pushed_at: '2026-11-08T10:00:00Z',
       default_branch: 'main',
+      stars: 1_234,
       latest_release: {
         release: {
           tag: 'v1.2.0',
@@ -1119,6 +1120,13 @@ describe('Resources', () => {
       return seen;
     };
 
+    it('leaves out stars that the server does not count', () => {
+      for (const stars of [null, -1, 1.5, '12', undefined]) {
+        const seen = glance({ ...ANSWER, stars }).value;
+        expect(seen?.status === 'found' && seen.glance.stars, `${stars}`).toBeUndefined();
+      }
+    });
+
     it('tells what a watchlist shows of the repository, each part with its own date (FR-PERS-08)', () => {
       const seen = glance(ANSWER).value;
       expect(seen?.status).toBe('found');
@@ -1134,6 +1142,8 @@ describe('Resources', () => {
         defaultBranch: 'main',
       });
       expect([shown?.fetchedAt, shown?.stale]).toEqual([new Date(FETCHED), undefined]);
+      // From the repository the server read already (FR-PERS-12).
+      expect(shown?.stars).toBe(1_234);
       // Links only to http and https URLs (NFR-SEC-03).
       expect(shown?.latestRelease).toEqual({
         ok: true,

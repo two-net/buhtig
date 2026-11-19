@@ -51,6 +51,17 @@
 .wl-head .grow {
   flex: 1;
 }
+/* Sorting the rows for this visit, and downloading those loaded (FR-PERS-12, FR-EXP-07). */
+.wl-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.wl-tools .counter {
+  margin-left: 4px;
+}
 .wl-rows {
   margin: 0;
   padding: 0;

@@ -1440,6 +1440,8 @@ async fn a_watchlist_reads_each_repository_as_its_dashboard_does() {
     assert_eq!(public["visibility"], "public");
     assert_eq!(public["archived"], false);
     assert_eq!(public["pushed_at"], "2026-10-01T00:00:00Z");
+    // From the repository it read, as its stat cards show them (FR-PERS-12).
+    assert_eq!(public["stars"], 50);
     assert_eq!(public["stale"], Value::Null);
     assert_eq!(
         public["latest_release"]["release"],

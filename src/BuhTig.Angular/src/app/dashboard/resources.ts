@@ -532,6 +532,8 @@ export interface Glance extends Freshness {
   /** The path of its dashboard, with the names as GitHub spells them, unless the answer names none. */
   path: string | undefined;
   repository: Repository;
+  /** How many stars GitHub counts, `undefined` if it gives none (FR-PERS-12). */
+  stars: number | undefined;
   /** The release GitHub marks as the latest, `undefined` when there is none. */
   latestRelease: GlancePart<{ release: Release | undefined }>;
   workflowRuns: GlancePart<WorkflowRuns>;
@@ -862,6 +864,7 @@ interface PartFailureAnswer {
 
 /** The server's answer about one of a watchlist's repositories (FR-PERS-08). */
 interface GlanceAnswer extends RepositoryAnswer {
+  stars?: number | null;
   latest_release?: (DatedAnswer & { release: ReleaseAnswer | null }) | PartFailureAnswer | null;
   workflow_runs: WorkflowRunsAnswer | PartFailureAnswer;
   trend?: RowTrendAnswer | PartFailureAnswer | null;
@@ -1243,6 +1246,7 @@ export class Resources {
           glance: {
             path: canonicalPath(answer.name, 'repository'),
             repository: header(answer),
+            stars: wholeNumber(answer.stars),
             ...freshness(answer),
             latestRelease: isFailure(latest)
               ? { ok: false, failure: partFailure(latest.failure) }
@@ -1995,8 +1999,13 @@ function userHeader(answer: UserAnswer): User {
 }
 
 /** `value` if it is a count, or else none. */
+/** `value`, if it is a count, of none or more. */
+function wholeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 function count(value: unknown): number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
+  return wholeNumber(value) ?? 0;
 }
 
 /**

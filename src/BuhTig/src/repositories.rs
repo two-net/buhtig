@@ -946,16 +946,18 @@ async fn runs(cache: &Cache, repository: &Under) -> Result<Value, StatusCode> {
 /// (FR-PERS-08), which is what [`summary`] answers, and
 ///
 /// ```json
-/// {"latest_release": {"release": {"tag": …, "published_at": …, "url": …} | null,
+/// {"stars": 123 | null,
+///  "latest_release": {"release": {"tag": …, "published_at": …, "url": …} | null,
 ///                     "fetched_at": …, "stale": …},
 ///  "workflow_runs": {…, "fetched_at": …, "stale": …}}
 /// ```
 ///
-/// `latest_release` is the release that GitHub marks as the latest, as the stat cards show it
-/// ([`stats`]), and `workflow_runs` what [`workflow_runs`] answers. Each says when its data
-/// was fetched, as [`dated`] tells it, and is `{"failure": "github" | "unavailable" | "held"}`
-/// in its place when it cannot be read, as a dashboard's widget would fail apart from the
-/// others (FR-REPO-09).
+/// `stars` is how many stars GitHub counts, from the repository as it was read, `null` if it
+/// gives none (FR-PERS-12). `latest_release` is the release that GitHub marks as the latest,
+/// as the stat cards show it ([`stats`]), and `workflow_runs` what [`workflow_runs`] answers.
+/// Each of those two says when its data was fetched, as [`dated`] tells it, and is
+/// `{"failure": "github" | "unavailable" | "held"}` in its place when it cannot be read, as a
+/// dashboard's widget would fail apart from the others (FR-REPO-09).
 ///
 /// `trend` is how the repository's stars, forks, open issues and open pull requests changed
 /// over a week, as BuhTig observed them (FR-PERS-10), as [`trend`] tells it. With
@@ -1005,6 +1007,12 @@ pub async fn glance(
     let Some(mut glance) = summarized(&cached) else {
         return status(StatusCode::BAD_GATEWAY);
     };
+    // From the repository as it was read, so that the row asks GitHub nothing more for them.
+    glance["stars"] = cached
+        .data
+        .get("stargazers_count")
+        .and_then(Value::as_u64)
+        .into();
     let repository = match within(viewer, &owner, &repo, cached) {
         Ok(repository) => repository,
         Err(code) => return status(code),

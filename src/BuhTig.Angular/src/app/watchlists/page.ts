@@ -1,5 +1,6 @@
 import {
   Component,
+  DOCUMENT,
   ElementRef,
   Injector,
   afterNextRender,
@@ -7,6 +8,7 @@ import {
   effect,
   inject,
   input,
+  linkedSignal,
   signal,
   untracked,
 } from '@angular/core';
@@ -16,6 +18,8 @@ import { catchError, map, of, switchMap } from 'rxjs';
 import { Avatar } from '../avatar/avatar';
 import { Center } from '../center/center';
 import { Dialog } from '../dialog/dialog';
+import { saveCsv } from '../export/download';
+import { DOWNLOAD_CSV, DOWNLOAD_FAILED, downloadedRepositories } from '../export/messages';
 import { GITHUB_HOST } from '../github/host';
 import { Header } from '../header/header';
 import { Icon } from '../icon/icon';
@@ -25,7 +29,9 @@ import { Session, signInUrl } from '../session/session';
 import { Personal } from '../shortcuts/personal';
 import { PageStyles, WatchlistStyles } from '../styles/styles';
 import { Toasts } from '../toast/toasts';
+import { watchlistCsv } from './csv';
 import { WatchlistEntry } from './entry';
+import { LoadedRows, loadedRow } from './loaded';
 import {
   ADD,
   ADD_ALL,
@@ -46,7 +52,10 @@ import {
   NO_WATCHLISTS,
   RENAME,
   RENAME_HEADING,
+  ROW_SORT_LABELS,
   SAVE,
+  SORTED_FOR_NOW,
+  SORT_ROWS,
   SIGN_IN_FIRST,
   SIGN_IN_FOR_WATCHLISTS,
   SIGN_IN_WITH_GITHUB,
@@ -64,6 +73,7 @@ import {
   created,
   deleteWarning,
   deleted,
+  loadedOf,
   moveDownLabel,
   moveUpLabel,
   movedDown,
@@ -75,8 +85,10 @@ import {
   repositoryCount,
   startWithPins,
   watchlistCount,
+  watchlistDownload,
 } from './messages';
 import { Slots } from './slots';
+import { ROW_SORTS, RowSort, isRowSort, sortRows } from './sort';
 import {
   MAX_REPOSITORIES,
   MAX_WATCHLISTS,
@@ -100,7 +112,10 @@ import {
  * as Settings' do (NFR-UX-03), and is said in a toast; what fails is said where it was tried.
  *
  * The page has its own slots, through which its rows ask the server for their data, a few at a
- * time (FR-PERS-09).
+ * time (FR-PERS-09). Its rows say what they show once they have loaded, and the viewer may sort
+ * the rows that have by name, last push, latest release, latest workflow run or stars for this
+ * visit, without changing the saved order, in which alone rows are moved (FR-PERS-12), and
+ * download them as a CSV file, made of what the page shows, without asking anything (FR-EXP-07).
  */
 @Component({
   selector: 'app-watchlists',
@@ -116,7 +131,7 @@ import {
     WatchlistStyles,
   ],
   templateUrl: './page.html',
-  providers: [Slots],
+  providers: [Slots, LoadedRows],
 })
 export class WatchlistsPage {
   /** The watchlist's ID at the URL, unless it names none, as `/-/watchlists` does. */
@@ -128,6 +143,8 @@ export class WatchlistsPage {
   private readonly toasts = inject(Toasts);
   private readonly injector = inject(Injector);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef).nativeElement;
+  private readonly document = inject(DOCUMENT);
+  private readonly rows = inject(LoadedRows);
   /** `github.host`, of the repository URLs it takes. */
   private readonly gitHub = inject(GITHUB_HOST);
 
@@ -160,6 +177,32 @@ export class WatchlistsPage {
       this.lists() !== undefined &&
       this.current() === undefined,
   );
+
+  /** How the viewer sorts the rows for this visit (FR-PERS-12). The saved order stays as it is. */
+  protected readonly sort = signal<RowSort>('saved');
+
+  /** The repositories of the watchlist at the URL, in the order their rows are shown. */
+  protected readonly shown = computed(() => {
+    const loaded = this.rows.loaded();
+    return sortRows(
+      this.current()?.repositories ?? [],
+      (name) => loadedRow(loaded, name),
+      this.sort(),
+    );
+  });
+
+  /** What the rows that have loaded show, in the order they are shown, to download. */
+  private readonly loadedRows = computed(() => {
+    const loaded = this.rows.loaded();
+    return this.shown().flatMap((name) => loadedRow(loaded, name) ?? []);
+  });
+  protected readonly loadedCount = computed(() => this.loadedRows().length);
+
+  /** Whether the browser would not save the file, until another watchlist is shown. */
+  protected readonly downloadFailed = linkedSignal({
+    source: () => this.current()?.id,
+    computation: () => false,
+  });
 
   /** The user's pinned repositories that are not in the watchlist at the URL. */
   protected readonly unlisted = computed(() => {
@@ -406,10 +449,39 @@ export class WatchlistsPage {
     });
   }
 
-  /** Moves the repository at `index` one place up, or down for a `step` of 1 (FR-PERS-07). */
-  protected move(index: number, step: -1 | 1): void {
+  /** Sorts the rows by `value`, if it is a way to sort them, for this visit (FR-PERS-12). */
+  protected setSort(value: string): void {
+    if (isRowSort(value)) {
+      this.sort.set(value);
+    }
+  }
+
+  /**
+   * Saves the rows that have loaded, in the order shown, as a CSV file, with the link to the
+   * watchlist (FR-EXP-07). It asks nothing of BuhTig or GitHub. Where the browser will not save it,
+   * the page says so beside the button.
+   */
+  protected download(): void {
     const current = this.current();
-    if (this.busy() || current === undefined) {
+    const glances = this.loadedRows();
+    if (current === undefined || glances.length === 0) {
+      return;
+    }
+    const source =
+      this.document.location.origin +
+      this.router.serializeUrl(this.router.createUrlTree(['/-', 'watchlists', String(current.id)]));
+    const filename = saveCsv(this.document, watchlistCsv(current.name, glances), source);
+    this.downloadFailed.set(filename === undefined);
+    if (filename !== undefined) {
+      this.toasts.show(downloadedRepositories(glances.length, filename), 'download');
+    }
+  }
+
+  /** Moves the repository `name` one place up, or down for a `step` of 1 (FR-PERS-07). */
+  protected move(name: string, step: -1 | 1): void {
+    const current = this.current();
+    const index = current?.repositories.findIndex((listed) => sameRepository(listed, name)) ?? -1;
+    if (this.busy() || current === undefined || index < 0) {
       return;
     }
     const order = [...current.repositories];
@@ -431,11 +503,12 @@ export class WatchlistsPage {
     });
   }
 
-  /** Takes the repository at `index` out of the watchlist (FR-PERS-07). */
-  protected drop(index: number): void {
+  /** Takes the repository `name` out of the watchlist (FR-PERS-07). */
+  protected drop(name: string): void {
     const current = this.current();
-    const name = current?.repositories[index];
-    if (this.busy() || current === undefined || name === undefined) {
+    // Its row's place, as shown.
+    const index = this.shown().findIndex((shown) => sameRepository(shown, name));
+    if (this.busy() || current === undefined || index < 0) {
       return;
     }
     this.start();
@@ -495,6 +568,14 @@ export class WatchlistsPage {
   }
 
   protected readonly placeholder = addPlaceholder(this.gitHub);
+  protected readonly ROW_SORTS = ROW_SORTS;
+  protected readonly ROW_SORT_LABELS = ROW_SORT_LABELS;
+  protected readonly SORT_ROWS = SORT_ROWS;
+  protected readonly SORTED_FOR_NOW = SORTED_FOR_NOW;
+  protected readonly DOWNLOAD_CSV = DOWNLOAD_CSV;
+  protected readonly DOWNLOAD_FAILED = DOWNLOAD_FAILED;
+  protected readonly loadedOf = loadedOf;
+  protected readonly watchlistDownload = watchlistDownload;
   protected readonly MAX_WATCHLISTS = MAX_WATCHLISTS;
   protected readonly watchlistCount = watchlistCount;
   protected readonly repositoryCount = repositoryCount;

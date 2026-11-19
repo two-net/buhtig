@@ -1,7 +1,9 @@
 // What watchlists say, kept apart from their logic so that it can be translated (NFR-UX-07).
 // Each message says what happened and what to do next (NFR-UX-06).
 
+import { exactNumber } from '../format/format';
 import { Failure } from '../widget/load';
+import type { RowSort } from './sort';
 import { MAX_NAME_LENGTH, MAX_REPOSITORIES, MAX_WATCHLISTS, WatchlistProblem } from './watchlists';
 
 /** UI-02: the avatar menu's item, and the page's heading where it lists no watchlist. */
@@ -163,6 +165,43 @@ export const NO_RELEASES = 'No releases';
 export const PUSHED = 'Pushed';
 export const LATEST_RUN = 'Latest run';
 export const UPDATED = 'Updated';
+/** FR-PERS-12: what assistive technology reads after a row's count of stars. */
+export const STARS = 'stars';
+
+/** FR-PERS-12: the control that sorts a watchlist's rows for this visit, and its choices. */
+export const SORT_ROWS = 'Sort';
+export const ROW_SORT_LABELS: Record<RowSort, string> = {
+  saved: 'Saved order',
+  name: 'Name',
+  pushed: 'Last push',
+  release: 'Latest release',
+  run: 'Failing runs first',
+  stars: 'Stars',
+};
+
+/**
+ * FR-PERS-12: what a watchlist sorted otherwise than in its saved order says, since its rows can
+ * be moved in that order alone.
+ */
+export const SORTED_FOR_NOW =
+  'Sorted for this visit. Your saved order stays as it is: choose Saved order to change it.';
+
+/** FR-EXP-07: how many of a watchlist's rows have loaded, of how many it has, such as "2 of 3 loaded". */
+export function loadedOf(loaded: number, total: number): string {
+  return `${exactNumber(loaded)} of ${exactNumber(total)} loaded`;
+}
+
+/**
+ * FR-EXP-07: what a watchlist's "Download CSV" downloads, in sentences, such as "The 2 rows loaded
+ * of this watchlist's 3 repositories, in the order shown, as a CSV file. Rows not loaded yet are
+ * left out."
+ */
+export function watchlistDownload(loaded: number, total: number): string {
+  const rows = loaded === 1 ? 'The 1 row loaded' : `The ${exactNumber(loaded)} rows loaded`;
+  const of = `of this watchlist's ${exactNumber(total)} ${total === 1 ? 'repository' : 'repositories'}`;
+  const left = loaded < total ? ' Rows not loaded yet are left out.' : '';
+  return `${rows} ${of}, in the order shown, as a CSV file.${left}`;
+}
 
 /** FR-PERS-08: a part of a repository's row that failed alone, which the rest still shows. */
 export const RELEASE_FAILED = "Couldn't load the latest release";

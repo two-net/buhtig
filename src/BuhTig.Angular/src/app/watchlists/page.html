@@ -72,39 +72,81 @@
               <p class="help">{{ WATCHLIST_PURPOSE }}</p>
 
               @if (current.repositories.length > 0) {
+                <div class="wl-tools">
+                  <select
+                    #order
+                    class="select sort"
+                    [attr.aria-label]="SORT_ROWS"
+                    (change)="setSort(order.value)"
+                  >
+                    @for (option of ROW_SORTS; track option) {
+                      <option [value]="option" [selected]="sort() === option">
+                        {{ ROW_SORT_LABELS[option] }}
+                      </option>
+                    }
+                  </select>
+                  @if (loadedCount() > 0) {
+                    <button
+                      type="button"
+                      class="btn download"
+                      [attr.aria-describedby]="
+                        downloadFailed() ? 'watchlist-csv watchlist-csv-failed' : 'watchlist-csv'
+                      "
+                      (click)="download()"
+                    >
+                      <app-icon name="download" />{{ DOWNLOAD_CSV }}
+                      <span class="counter">{{
+                        loadedOf(loadedCount(), current.repositories.length)
+                      }}</span>
+                    </button>
+                    <span id="watchlist-csv" class="sr">{{
+                      watchlistDownload(loadedCount(), current.repositories.length)
+                    }}</span>
+                  }
+                </div>
+                @if (downloadFailed()) {
+                  <p id="watchlist-csv-failed" class="field-msg err" role="alert">
+                    <app-icon name="alert" />{{ DOWNLOAD_FAILED }}
+                  </p>
+                }
+                @if (sort() !== 'saved') {
+                  <p class="help sorted">{{ SORTED_FOR_NOW }}</p>
+                }
                 <ol class="Box wl-rows">
                   @for (
-                    repository of current.repositories;
+                    repository of shown();
                     track repository.toLowerCase();
-                    let index = $index, first = $first, last = $last
+                    let first = $first, last = $last
                   ) {
                     <li>
                       <app-watchlist-entry [name]="repository" [watchlist]="current.id" />
                       <div class="wl-controls">
-                        <button
-                          type="button"
-                          class="iconbtn up"
-                          [attr.aria-label]="moveUpLabel(repository)"
-                          [disabled]="busy() || first"
-                          (click)="move(index, -1)"
-                        >
-                          <app-icon name="up" />
-                        </button>
-                        <button
-                          type="button"
-                          class="iconbtn down"
-                          [attr.aria-label]="moveDownLabel(repository)"
-                          [disabled]="busy() || last"
-                          (click)="move(index, 1)"
-                        >
-                          <app-icon name="down" />
-                        </button>
+                        @if (sort() === 'saved') {
+                          <button
+                            type="button"
+                            class="iconbtn up"
+                            [attr.aria-label]="moveUpLabel(repository)"
+                            [disabled]="busy() || first"
+                            (click)="move(repository, -1)"
+                          >
+                            <app-icon name="up" />
+                          </button>
+                          <button
+                            type="button"
+                            class="iconbtn down"
+                            [attr.aria-label]="moveDownLabel(repository)"
+                            [disabled]="busy() || last"
+                            (click)="move(repository, 1)"
+                          >
+                            <app-icon name="down" />
+                          </button>
+                        }
                         <button
                           type="button"
                           class="iconbtn remove"
                           [attr.aria-label]="removeLabel(repository)"
                           [disabled]="busy()"
-                          (click)="drop(index)"
+                          (click)="drop(repository)"
                         >
                           <app-icon name="x" />
                         </button>

@@ -47,7 +47,10 @@ import {
   removedFrom,
   renamedTo,
   rowFailure,
+  SORTED_FOR_NOW,
+  watchlistDownload,
 } from './messages';
+import { DOWNLOAD_FAILED, downloadedRepositories } from '../export/messages';
 import { Watchlist } from './watchlists';
 
 describe('Watchlists page', () => {
@@ -948,6 +951,229 @@ describe('Watchlists page', () => {
       );
       expect(rows()).toHaveLength(2);
       expect(document.activeElement).toBe(rows()[1].querySelector('.remove'));
+    });
+  });
+
+  describe('sorting and downloading the rows loaded (FR-PERS-12, FR-EXP-07)', () => {
+    const THREE: Watchlist = {
+      id: 7,
+      name: 'Dependencies',
+      repositories: ['acme/widget', 'octo/thing', 'zeta/last'],
+    };
+
+    /**
+     * What the server answers of each: `acme/widget` passes, has no stars that GitHub counts, and
+     * was released before `octo/thing`, whose latest run fails, and which has fewer stars than
+     * `zeta/last`, pushed to last, with neither releases nor runs.
+     */
+    const ANSWERS: Record<string, object> = {
+      'acme/widget': {
+        workflow_runs: {
+          ...(glance('acme/widget') as { workflow_runs: object }).workflow_runs,
+          latest: {
+            name: 'CI',
+            status: 'completed',
+            conclusion: 'success',
+            started_at: '2026-11-09T08:00:00Z',
+            url: null,
+          },
+        },
+      },
+      'octo/thing': {
+        stars: 500,
+        pushed_at: '2026-11-01T09:00:00Z',
+        latest_release: {
+          release: { tag: 'v3.0.0', published_at: '2026-11-05T12:00:00Z', url: null },
+          fetched_at: '2026-11-09T11:50:00.000Z',
+          stale: null,
+        },
+      },
+      'zeta/last': {
+        stars: 900,
+        pushed_at: '2026-11-09T10:00:00Z',
+        latest_release: { release: null, fetched_at: '2026-11-09T11:50:00.000Z', stale: null },
+        workflow_runs: {
+          branch: 'main',
+          sampled: 0,
+          passed: 0,
+          failed: 0,
+          average_duration: null,
+          latest: null,
+          hidden: false,
+          fetched_at: '2026-11-09T11:40:00.000Z',
+          stale: 'github',
+        },
+      },
+    };
+
+    const names = () => rows().map((row) => row.querySelector('h3 a')?.textContent?.trim());
+    const sortBy = async (value: string) => {
+      const select = page().querySelector<HTMLSelectElement>('select.sort')!;
+      select.value = value;
+      select.dispatchEvent(new Event('change'));
+      await settle();
+    };
+    const downloadButton = () => page().querySelector<HTMLButtonElement>('button.download');
+
+    /** The requests of rows that `answer` left unanswered. */
+    let unanswered: TestRequest[] = [];
+    beforeEach(() => (unanswered = []));
+
+    /** Answers what the rows of `loaded` show, of those asked for, and leaves the others asked. */
+    async function answer(...loaded: string[]): Promise<void> {
+      const asked = [...unanswered, ...glances()];
+      unanswered = [];
+      for (const request of asked) {
+        const name = request.request.url.split('/').slice(-3, -1).join('/');
+        if (loaded.includes(name)) {
+          request.flush(glance(name, ANSWERS[name]));
+        } else {
+          unanswered.push(request);
+        }
+      }
+      await settle();
+      answerActivity();
+      await settle();
+    }
+
+    it('sorts the rows by each key, and leaves the saved order as it is', async () => {
+      await open('/-/watchlists/7', [THREE]);
+      await answer('acme/widget', 'octo/thing', 'zeta/last');
+      expect(names()).toEqual(['acme/widget', 'octo/thing', 'zeta/last']);
+      for (const [sort, order] of [
+        ['name', ['acme/widget', 'octo/thing', 'zeta/last']],
+        ['pushed', ['zeta/last', 'acme/widget', 'octo/thing']],
+        ['release', ['octo/thing', 'acme/widget', 'zeta/last']],
+        ['run', ['octo/thing', 'acme/widget', 'zeta/last']],
+        ['stars', ['zeta/last', 'octo/thing', 'acme/widget']],
+      ] as const) {
+        await sortBy(sort);
+        expect(names(), sort).toEqual(order);
+        // Rows move in the saved order alone, which the page says how to choose.
+        expect(page().querySelector('.wl-rows .up'), sort).toBeNull();
+        expect(page().querySelector('.help.sorted')?.textContent?.trim()).toBe(SORTED_FOR_NOW);
+      }
+      // Sorting asks nothing again, and saves no order.
+      expect(glances()).toEqual([]);
+      http.expectNone({ method: 'PUT', url: '/-/api/watchlists/7/repositories' });
+
+      await sortBy('saved');
+      expect(names()).toEqual(['acme/widget', 'octo/thing', 'zeta/last']);
+      expect(page().querySelectorAll('.wl-rows .up')).toHaveLength(3);
+      expect(page().querySelector('.help.sorted')).toBeNull();
+    });
+
+    it('keeps a row that has not loaded in its saved place, until it loads and joins the sort', async () => {
+      await open('/-/watchlists/7', [THREE]);
+      await answer('octo/thing', 'zeta/last');
+      await sortBy('stars');
+      expect(names()).toEqual(['acme/widget', 'zeta/last', 'octo/thing']);
+      await answer('acme/widget');
+      expect(names()).toEqual(['zeta/last', 'octo/thing', 'acme/widget']);
+    });
+
+    it("shows each row's stars, from what it read already", async () => {
+      await open('/-/watchlists/7', [THREE]);
+      await answer('acme/widget', 'octo/thing', 'zeta/last');
+      const stars = (index: number) => row(index).querySelector('.stars');
+      expect(stars(0)).toBeNull();
+      expect(shown(stars(1)!)).toBe('500');
+      expect(stars(1)?.querySelector('.sr')?.textContent).toBe('stars');
+    });
+
+    describe('Download CSV', () => {
+      const { createObjectURL, revokeObjectURL } = URL;
+      let blobs: Blob[];
+      let saved: string[];
+
+      beforeEach(() => {
+        blobs = [];
+        saved = [];
+        URL.createObjectURL = vi.fn((blob: Blob) => {
+          blobs.push(blob);
+          return 'blob:test';
+        });
+        URL.revokeObjectURL = vi.fn();
+        vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+          this: HTMLAnchorElement,
+        ) {
+          saved.push(this.download);
+        });
+      });
+
+      afterEach(() => {
+        URL.createObjectURL = createObjectURL;
+        URL.revokeObjectURL = revokeObjectURL;
+        vi.restoreAllMocks();
+      });
+
+      const today = () => new Date().toISOString().slice(0, 10);
+      /** The lines of the file last saved, without its byte order mark. */
+      const lines = async () => (await blobs.at(-1)!.text()).replace(/^\uFEFF/, '').split('\r\n');
+
+      it('is offered once a row has loaded, saying how many of all have', async () => {
+        await open('/-/watchlists/7', [THREE]);
+        expect(downloadButton()).toBeNull();
+        await answer('octo/thing', 'zeta/last');
+        expect(downloadButton()?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+          'Download CSV 2 of 3 loaded',
+        );
+        expect(page().querySelector('#watchlist-csv')?.textContent).toBe(watchlistDownload(2, 3));
+        await answer('acme/widget');
+      });
+
+      it('saves the rows loaded alone, in the order shown, asking nothing', async () => {
+        await open('/-/watchlists/7', [THREE]);
+        await answer('octo/thing', 'zeta/last');
+        await sortBy('stars');
+        seenRequests();
+        downloadButton()!.click();
+        await settle();
+        // The file is made of what the page has, without a request to anyone (FR-EXP-06).
+        expect(http.match(() => true)).toEqual([]);
+
+        const filename = `Dependencies-watchlist-${today()}.csv`;
+        expect(saved).toEqual([filename]);
+        const source = `${location.origin}/-/watchlists/7`;
+        expect(await lines()).toEqual([
+          'repository,description,visibility,fork,archived,stars,latest_release,' +
+            'latest_release_published_at,pushed_at,latest_run_conclusion,fetched_at,stale,source_url',
+          'zeta/last,The zeta/last repository,public,false,false,900,,,2026-11-09T10:00:00.000Z,,' +
+            `2026-11-09T11:40:00.000Z,github,${source}`,
+          'octo/thing,The octo/thing repository,public,false,false,500,v3.0.0,' +
+            '2026-11-05T12:00:00.000Z,2026-11-01T09:00:00.000Z,failure,2026-11-09T11:40:00.000Z,,' +
+            source,
+          '',
+        ]);
+        expect(toasts()).toEqual([downloadedRepositories(2, filename)]);
+        await answer('acme/widget');
+      });
+
+      it('saves a description a spreadsheet would run as text (FR-EXP-05)', async () => {
+        await open('/-/watchlists/7', [{ ...THREE, repositories: ['octo/thing'] }]);
+        for (const request of glances()) {
+          request.flush(glance('octo/thing', { description: '=SUM(A1:A2)' }));
+        }
+        await settle();
+        answerActivity();
+        await settle();
+        downloadButton()!.click();
+        expect((await lines())[1].split(',')[1]).toBe("'=SUM(A1:A2)");
+      });
+
+      it('says so beside the button when the browser would not save the file', async () => {
+        URL.createObjectURL = vi.fn(() => {
+          throw new Error('Downloads are blocked');
+        });
+        await open('/-/watchlists/7', [THREE]);
+        await answer('acme/widget', 'octo/thing', 'zeta/last');
+        downloadButton()!.click();
+        await settle();
+        expect(page().querySelector('#watchlist-csv-failed')?.textContent?.trim()).toBe(
+          DOWNLOAD_FAILED,
+        );
+        expect(toasts()).toEqual([]);
+      });
     });
   });
 });

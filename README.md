@@ -2,8 +2,8 @@
 
 BuhTig turns a GitHub repository, organization or user URL into an animated dashboard,
 puts two of them side by side at `/-/compare/{a}...{b}`, and draws a card of each to embed
-at `/-/preview/{name}.svg`. Repository lists and charts' tables download as CSV files, made
-in the browser from what the page shows, with when the data was fetched. On any page, `Ctrl+K` (`⌘K` on a Mac) opens a command palette
+at `/-/preview/{name}.svg`. Repository lists, watchlists and charts' tables download as CSV
+files, made in the browser from what the page shows, with when the data was fetched. On any page, `Ctrl+K` (`⌘K` on a Mac) opens a command palette
 that finds dashboards as you type, and `owner/repo pulls` opens a dashboard's tab. It is one
 application plus one PostgreSQL database, configured by one file, for github.com or a GitHub
 Enterprise Server. What it must do is in [SRS.md](SRS.md).
@@ -178,6 +178,10 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   release, one page of its workflow runs and its commit activity, each conditional and cached
   with its dashboard's, so a repository whose dashboard was opened lately costs nothing. A
   watchlist has no refresh of its own: refreshing a repository's dashboard refreshes its row.
+  Each row shows the repository's stars, from the repository already read. The rows that have
+  loaded can be sorted by name, last push, latest release, latest workflow run (failing first) or
+  stars for the visit, while the saved order stays as it is, and downloaded as CSV, in the order
+  shown, without a request to BuhTig or GitHub; the button says how many have loaded.
   Each row also tells how the repository's stars, forks, open issues and open pull requests
   changed over 7 days, from what its dashboard observed (see Trends), or why it can't; a row
   observes nothing itself, since that would need a search. Once a row has loaded, BuhTig

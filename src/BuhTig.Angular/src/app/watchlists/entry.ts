@@ -4,9 +4,11 @@ import {
   ElementRef,
   afterNextRender,
   computed,
+  effect,
   inject,
   input,
   signal,
+  untracked,
 } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { NEVER, tap } from 'rxjs';
@@ -29,6 +31,7 @@ import {
 } from '../dashboard/messages';
 import { Glance, Resources } from '../dashboard/resources';
 import { Clock } from '../format/clock';
+import { CompactNumber } from '../format/compact-number';
 import { relativeTime } from '../format/format';
 import { RelativeTime } from '../format/relative-time';
 import { GITHUB_HOST } from '../github/host';
@@ -57,6 +60,7 @@ import {
   PUSHED,
   RELEASE_FAILED,
   RUNS_FAILED,
+  STARS,
   TREND_FAILED,
   TRY_AGAIN,
   UPDATED,
@@ -64,6 +68,8 @@ import {
   releaseThen,
   rowFailure,
 } from './messages';
+import { oldestFetch, staleOf } from './freshness';
+import { LoadedRows } from './loaded';
 import { Slots } from './slots';
 import { Shown, Watchlists } from './watchlists';
 
@@ -72,8 +78,8 @@ const WEEKS = 26;
 
 /**
  * One of a watchlist's repositories, as a row of it (FR-PERS-08): its name, linking to its
- * dashboard, with badges for its visibility and for Archived and Fork, its description, its latest
- * release, when it was last pushed to, how its latest workflow run on the default branch went, in
+ * dashboard, with badges for its visibility and for Archived and Fork, its description, its stars
+ * (FR-PERS-12), its latest release, when it was last pushed to, how its latest workflow run on the default branch went, in
  * words and with an icon (NFR-UX-05), its commits over the last 26 weeks as a sparkline, and when
  * its data was fetched, saying so when it is saved data (FR-DATA-05, FR-DATA-06). Below, how its
  * stars, forks, open issues and open pull requests changed over a week, as BuhTig observed them
@@ -82,13 +88,14 @@ const WEEKS = 26;
  * showed, for the next time. There is no score of how it fares, only what each of these says.
  *
  * It shows its name at once, and asks for the rest only once its row comes into view, through the
- * page's slots, a few rows at a time (FR-PERS-09). Each row loads, fails and tries again alone, so
+ * page's slots, a few rows at a time (FR-PERS-09). It tells the page what it shows, once it does,
+ * for the page to sort and download it. Each row loads, fails and tries again alone, so
  * that one that fails holds up no other. Of a repository that GitHub does not show the viewer, it
  * shows the name it was added by alone, and what the viewer can do (FR-ACC-05, FR-PAT-08).
  */
 @Component({
   selector: 'app-watchlist-entry',
-  imports: [Icon, RelativeTime, RouterLink, Sparkline],
+  imports: [CompactNumber, Icon, RelativeTime, RouterLink, Sparkline],
   template: `
     @let shown = found();
     <div class="t">
@@ -109,6 +116,12 @@ const WEEKS = 26;
           <p>{{ description }}</p>
         }
         <div class="rmeta">
+          @if (shown.stars !== undefined) {
+            <span class="stars"
+              ><app-icon name="star" /><app-compact-number [value]="shown.stars" />
+              <span class="sr">{{ STARS }}</span></span
+            >
+          }
           <span class="release">
             <app-icon name="tag" />
             @if (shown.latestRelease.ok) {
@@ -361,21 +374,10 @@ export class WatchlistEntry {
     sparklineLabel(this.weeks().reduce((total, commits) => total + commits, 0)),
   );
 
-  /**
-   * When the oldest of the data the row shows was fetched (FR-DATA-06): the repository's, its
-   * latest release's or its workflow runs', which may each have been fetched at another time.
-   */
+  /** When the oldest of the data the row shows was fetched (FR-DATA-06). */
   protected readonly fetchedAt = computed(() => {
     const shown = this.found();
-    if (!shown) {
-      return undefined;
-    }
-    const times = [
-      shown.fetchedAt,
-      shown.latestRelease.ok ? shown.latestRelease.fetchedAt : undefined,
-      shown.workflowRuns.ok ? shown.workflowRuns.fetchedAt : undefined,
-    ].flatMap((time) => (time ? [time.getTime()] : []));
-    return times.length > 0 ? new Date(Math.min(...times)) : undefined;
+    return shown ? oldestFetch(shown) : undefined;
   });
 
   /**
@@ -420,18 +422,11 @@ export class WatchlistEntry {
   protected readonly staleNote = computed(() => {
     const shown = this.found();
     const fetchedAt = this.fetchedAt();
-    if (!shown || !fetchedAt) {
+    const stale = shown ? staleOf(shown) : undefined;
+    if (!fetchedAt || stale === undefined) {
       return undefined;
     }
-    const stales = [
-      shown.stale,
-      shown.latestRelease.ok ? shown.latestRelease.stale : undefined,
-      shown.workflowRuns.ok ? shown.workflowRuns.stale : undefined,
-    ];
-    if (!stales.some((stale) => stale !== undefined)) {
-      return undefined;
-    }
-    const held = stales.includes('held');
+    const held = stale === 'held';
     const age = relativeTime(fetchedAt, this.clock.now());
     return { held, text: held ? heldData(age) : staleData(age) };
   });
@@ -454,6 +449,12 @@ export class WatchlistEntry {
   constructor() {
     const host = inject<ElementRef<HTMLElement>>(ElementRef).nativeElement;
     const destroyRef = inject(DestroyRef);
+    // What the row shows, for its page to sort and download (FR-PERS-12, FR-EXP-07).
+    const rows = inject(LoadedRows, { optional: true });
+    if (rows) {
+      effect(() => rows.set(this.name(), this.found()));
+      destroyRef.onDestroy(() => rows.set(untracked(this.name), undefined));
+    }
     afterNextRender(() => {
       // Where the browser cannot tell what is in view, as the tests' jsdom cannot, it loads at once.
       if (typeof IntersectionObserver !== 'function') {
@@ -493,6 +494,7 @@ export class WatchlistEntry {
   protected readonly RUNS_HIDDEN = RUNS_HIDDEN;
   protected readonly RUNS_FAILED = RUNS_FAILED;
   protected readonly UPDATED = UPDATED;
+  protected readonly STARS = STARS;
   protected readonly OVER_A_WEEK = OVER_A_WEEK;
   protected readonly NEW_SINCE = NEW_SINCE;
   protected readonly FAILING_SINCE = FAILING_SINCE;
