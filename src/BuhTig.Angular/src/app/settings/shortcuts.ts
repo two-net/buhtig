@@ -5,7 +5,14 @@ import { Avatar } from '../avatar/avatar';
 import { RelativeTime } from '../format/relative-time';
 import { Icon } from '../icon/icon';
 import { Personal, Viewed } from '../shortcuts/personal';
-import { Shortcut, sameDashboard } from '../shortcuts/pick';
+import {
+  Shortcut,
+  avatarLogin,
+  isComparison,
+  sameDashboard,
+  shortcutLabel,
+  shortcutPath,
+} from '../shortcuts/pick';
 import { Toasts } from '../toast/toasts';
 import {
   CLEAR_FAILED,
@@ -23,9 +30,9 @@ import {
 } from './messages';
 
 /**
- * The signed-in user's personal shortcuts, in Settings (§4.8): their pins, which they may put in
- * another order or unpin (FR-PERS-02, FR-PERS-05), and their history, with when they viewed each
- * dashboard, which they may clear (FR-PERS-03). Each change is a button, so that the keyboard
+ * The signed-in user's personal shortcuts, in Settings (§4.8): their pins, of dashboards and
+ * comparisons, which they may put in another order or unpin (FR-PERS-02, FR-PERS-05), and their
+ * history, with when they viewed each, which they may clear, comparisons and all (FR-PERS-03). Each change is a button, so that the keyboard
  * alone makes them all (NFR-UX-03), and focus stays where the change was.
  */
 @Component({
@@ -81,7 +88,8 @@ export class ShortcutSettings {
     this.personal.reorder(order).subscribe({
       next: (pins) => {
         this.pins.set(pins);
-        this.finish(step < 0 ? movedUp(pin.name) : movedDown(pin.name), 'up');
+        const name = shortcutLabel(pin);
+        this.finish(step < 0 ? movedUp(name) : movedDown(name), 'up');
         // On the button that moved it, unless the pin went as far as it goes that way.
         const at = pins.findIndex((other) => sameDashboard(other, pin));
         const onward = step < 0 ? at > 0 : at < pins.length - 1;
@@ -103,7 +111,7 @@ export class ShortcutSettings {
     this.personal.unpin(pin).subscribe({
       next: (pins) => {
         this.pins.set(pins);
-        this.finish(unpinned(pin.name), 'pin');
+        this.finish(unpinned(shortcutLabel(pin)), 'pin');
         // On the pin that took its place, or else the one before it, or else the heading.
         this.focus(
           pins.length > 0
@@ -159,6 +167,10 @@ export class ShortcutSettings {
   }
 
   protected readonly pinnedCount = pinnedCount;
+  protected readonly path = shortcutPath;
+  protected readonly label = shortcutLabel;
+  protected readonly isComparison = isComparison;
+  protected readonly avatarLogin = avatarLogin;
   protected readonly PINS_PURPOSE = PINS_PURPOSE;
   protected readonly NO_PINS = NO_PINS;
   protected readonly HISTORY_PURPOSE = HISTORY_PURPOSE;

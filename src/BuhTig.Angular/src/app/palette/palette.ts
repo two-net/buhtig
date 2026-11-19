@@ -125,7 +125,7 @@ export class Palette {
     this.suggestions().items.map((item) => ({
       item,
       parts: segments(item.name, item.matches),
-      source: sourceLabel(item.source, item.resource.kind),
+      source: sourceLabel(item.source, item.resource?.kind),
     })),
   );
 

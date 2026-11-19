@@ -1,15 +1,23 @@
-//! Personal shortcuts (SRS §4.8): the dashboards a signed-in user viewed recently, and those
-//! they pinned, which the home page offers below the search box, pins first (FR-SRCH-08).
+//! Personal shortcuts (SRS §4.8): the dashboards and comparisons a signed-in user viewed
+//! recently, and those they pinned, which the home page offers below the search box, pins
+//! first (FR-SRCH-08).
 //!
-//! A dashboard records a view of itself once GitHub has told it the resource's name, as
-//! GitHub spells it (FR-PERS-01). History keeps the resource and when it was last viewed,
-//! nothing else, and housekeeping keeps each user's 20 newest entries (FR-DB-08). A user may
-//! clear it (FR-PERS-03). They may pin up to 12 dashboards, unpin them (FR-PERS-02), and
-//! put their pins in the order they like (FR-PERS-05).
+//! A dashboard or a comparison records a view of itself once GitHub has told it the names,
+//! as GitHub spells them (FR-PERS-01). History keeps what was viewed and when it was last
+//! viewed, nothing else, and housekeeping keeps each user's 20 newest entries (FR-DB-08),
+//! dashboards and comparisons together. A user may clear it (FR-PERS-03). They may pin up
+//! to 12 dashboards and comparisons together, unpin them (FR-PERS-02), and put their pins
+//! in the order they like (FR-PERS-05).
+//!
+//! A comparison is one entry and one pin, named `{first}...{second}` by the names of the two
+//! repositories or the two accounts it compares. Like a dashboard's, it is the names alone
+//! (DR-01): recording or pinning one grants nothing, and opening it again reads each side
+//! with the viewer's own credentials (FR-ACC-05). A resource compared with itself is no
+//! comparison (FR-CMP-02).
 //!
 //! GitHub's names ignore letter case, so a dashboard is the same whatever the case of its
-//! name, as on the home page. A view replaces the entries of the same dashboard spelled
-//! otherwise, and pinning one already pinned only respells it.
+//! name, as on the home page, and so is a comparison. A view replaces the entries of the
+//! same dashboard spelled otherwise, and pinning one already pinned only respells it.
 //!
 //! All of it is for signed-in users alone (FR-ACC-02). What changes state is no GET, and
 //! other origins' pages cannot send it ([`crate::security`], NFR-SEC-02).
@@ -36,19 +44,41 @@ use crate::cache::Viewer;
 use crate::entity::{ResourceKind, history_entry, pin, user};
 use crate::repositories;
 
-/// A dashboard, as history and pins record it.
+/// What is between the names of the two sides of a comparison (FR-CMP-01).
+const BETWEEN: &str = "...";
+
+/// A dashboard, or a comparison of two, as history and pins record it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dashboard {
     kind: ResourceKind,
-    /// `owner/repo`, `org` or `login`.
+    /// `owner/repo`, `org` or `login`, or of a comparison, `{first}...{second}`.
     name: String,
 }
 
 impl Dashboard {
     /// The dashboard that a route's path names, `{owner}/{repo}`, `{org}` or a user's
-    /// `{login}`, if those can be GitHub's names (FR-SRCH-04).
+    /// `{login}`, or the comparison of `{owner1}/{repo1}` and `{owner2}/{repo2}`, or of the
+    /// accounts `{first}` and `{second}`, if those can be GitHub's names (FR-SRCH-04).
     fn at(params: &HashMap<String, String>) -> Option<Dashboard> {
         let param = |name| params.get(name);
+        let compared = (
+            param("owner1"),
+            param("repo1"),
+            param("owner2"),
+            param("repo2"),
+        );
+        if let (Some(owner1), Some(repo1), Some(owner2), Some(repo2)) = compared
+            && params.len() == 4
+        {
+            let name = format!("{owner1}/{repo1}{BETWEEN}{owner2}/{repo2}");
+            return Dashboard::named(ResourceKind::RepositoryComparison, name);
+        }
+        if let (Some(first), Some(second)) = (param("first"), param("second"))
+            && params.len() == 2
+        {
+            let name = format!("{first}{BETWEEN}{second}");
+            return Dashboard::named(ResourceKind::AccountComparison, name);
+        }
         match (param("owner"), param("repo"), param("org"), param("login")) {
             (Some(owner), Some(repo), None, None) => {
                 Dashboard::named(ResourceKind::Repository, format!("{owner}/{repo}"))
@@ -61,22 +91,27 @@ impl Dashboard {
         }
     }
 
-    /// The dashboard that the UI names as `{"kind": …, "name": …}`.
+    /// The dashboard or comparison that the UI names as `{"kind": …, "name": …}`.
     fn from_json(value: &Value) -> Option<Dashboard> {
         let kind = match value.get("kind")?.as_str()? {
             "repository" => ResourceKind::Repository,
             "organization" => ResourceKind::Organization,
             "user" => ResourceKind::User,
+            "repository_comparison" => ResourceKind::RepositoryComparison,
+            "account_comparison" => ResourceKind::AccountComparison,
             _ => return None,
         };
         Dashboard::named(kind, value.get("name")?.as_str()?.to_owned())
     }
 
-    /// The `kind` dashboard `name`, if that can be one's name.
+    /// The `kind` dashboard or comparison `name`, if that can be one's name.
     fn named(kind: ResourceKind, name: String) -> Option<Dashboard> {
+        let is_repository = |name: &str| repositories::names(name).is_some();
         let valid = match kind {
-            ResourceKind::Repository => repositories::names(&name).is_some(),
+            ResourceKind::Repository => is_repository(&name),
             ResourceKind::Organization | ResourceKind::User => is_account_name(&name),
+            ResourceKind::RepositoryComparison => is_comparison(&name, is_repository),
+            ResourceKind::AccountComparison => is_comparison(&name, is_account_name),
         };
         valid.then_some(Dashboard { kind, name })
     }
@@ -90,6 +125,23 @@ impl Dashboard {
     fn is(&self, kind: ResourceKind, name: &str) -> bool {
         kind == self.kind && name.eq_ignore_ascii_case(&self.name)
     }
+}
+
+/// Whether `name` is `{first}...{second}`, of two resources whose names `is_name` takes, and
+/// not one resource compared with itself, whatever the case of their names (FR-CMP-02).
+fn is_comparison(name: &str, is_name: impl Fn(&str) -> bool) -> bool {
+    sides(name).is_some_and(|(first, second)| {
+        is_name(first) && is_name(second) && !first.eq_ignore_ascii_case(second)
+    })
+}
+
+/// The names of the two sides of a comparison named `{first}...{second}`. Of repositories,
+/// it is split at the last `...` before the second's `/`, since a repository's name may have
+/// dots, but no owner's does, as the comparison's URL is (FR-CMP-01).
+fn sides(name: &str) -> Option<(&str, &str)> {
+    let before = name.rfind('/').unwrap_or(name.len());
+    let at = name[..before].rfind(BETWEEN)?;
+    Some((&name[..at], &name[at + BETWEEN.len()..]))
 }
 
 /// Why a dashboard was not pinned.
@@ -301,8 +353,10 @@ pub(crate) async fn lock(txn: &DatabaseTransaction, user_id: i64) -> Result<(), 
 }
 
 /// `GET /-/api/shortcuts`: `{"pins": […], "recent": […]}` for a signed-in user, and 401 for a
-/// visitor, who has none (FR-ACC-02). Each item is `{"kind": "repository" | "organization",
-/// "name": "owner/repo" | "org"}`, and each recent one also has `"viewed_at"`, when the user
+/// visitor, who has none (FR-ACC-02). Each item is `{"kind": "repository" | "organization" |
+/// "user", "name": "owner/repo" | "org" | "login"}`, or of a comparison, `{"kind":
+/// "repository_comparison" | "account_comparison", "name": "{first}...{second}"}`, and each
+/// recent one also has `"viewed_at"`, when the user
 /// last viewed it, as the UI is told times, such as `2026-10-22T12:00:00.123Z`. Pins are in
 /// the user's order, and recent dashboards newest first, pinned or not. The UI picks the
 /// shortcuts from them (FR-SRCH-08).
@@ -326,10 +380,12 @@ pub async fn list(State(shortcuts): State<Arc<Shortcuts>>, viewer: Viewer) -> Re
     }
 }
 
-/// `POST /-/api/repositories/{owner}/{repo}/view` and `POST /-/api/organizations/{org}/view`:
-/// records that the signed-in user viewed the dashboard, which the dashboard asks once its
-/// name is as GitHub spells it (FR-PERS-01). 204 once it is, 401 for a visitor, and 400 for
-/// names that cannot be GitHub's.
+/// `POST /-/api/repositories/{owner}/{repo}/view` and `POST /-/api/organizations/{org}/view`,
+/// and of a comparison, `POST /-/api/comparisons/repositories/{owner1}/{repo1}/{owner2}/
+/// {repo2}/view` and `POST /-/api/comparisons/accounts/{first}/{second}/view`: records that
+/// the signed-in user viewed the dashboard or the comparison, which it asks once its names
+/// are as GitHub spells them (FR-PERS-01). 204 once it is, 401 for a visitor, and 400 for
+/// names that cannot be GitHub's, or for a resource compared with itself (FR-CMP-02).
 pub async fn view(
     State(shortcuts): State<Arc<Shortcuts>>,
     viewer: Viewer,
@@ -362,10 +418,12 @@ pub async fn clear_history(State(shortcuts): State<Arc<Shortcuts>>, viewer: View
     }
 }
 
-/// `PUT /-/api/repositories/{owner}/{repo}/pin` and `PUT /-/api/organizations/{org}/pin`:
-/// pins the dashboard for the signed-in user (FR-PERS-02), and answers `{"pins": […]}`, as
+/// `PUT /-/api/repositories/{owner}/{repo}/pin` and `PUT /-/api/organizations/{org}/pin`, and
+/// of a comparison, `PUT /-/api/comparisons/…/pin`, as [`view`] names it: pins the dashboard
+/// or the comparison for the signed-in user (FR-PERS-02), and answers `{"pins": […]}`, as
 /// [`list`] has them. 409 with `{"error": "too_many_pins"}` if they have pinned 12
-/// already, 401 for a visitor, and 400 for names that cannot be GitHub's.
+/// already, dashboards and comparisons together, 401 for a visitor, and 400 for names that
+/// cannot be GitHub's, or for a resource compared with itself (FR-CMP-02).
 pub async fn pin(
     State(shortcuts): State<Arc<Shortcuts>>,
     viewer: Viewer,
@@ -386,9 +444,10 @@ pub async fn pin(
     }
 }
 
-/// `DELETE /-/api/repositories/{owner}/{repo}/pin` and `DELETE /-/api/organizations/{org}/pin`:
-/// unpins the dashboard for the signed-in user, if they pinned it (FR-PERS-02), and answers
-/// `{"pins": […]}`. 401 for a visitor, and 400 for names that cannot be GitHub's.
+/// `DELETE /-/api/repositories/{owner}/{repo}/pin` and `DELETE /-/api/organizations/{org}/pin`,
+/// and of a comparison, `DELETE /-/api/comparisons/…/pin`, as [`view`] names it: unpins the
+/// dashboard or the comparison for the signed-in user, if they pinned it (FR-PERS-02), and
+/// answers `{"pins": […]}`. 401 for a visitor, and 400 for names that cannot be GitHub's.
 pub async fn unpin(
     State(shortcuts): State<Arc<Shortcuts>>,
     viewer: Viewer,
@@ -440,12 +499,14 @@ fn listed(pins: &[pin::Model]) -> Vec<Value> {
         .collect()
 }
 
-/// A dashboard, as the UI is told of it.
+/// A dashboard or a comparison, as the UI is told of it.
 fn item(kind: ResourceKind, name: &str) -> Value {
     let kind = match kind {
         ResourceKind::Repository => "repository",
         ResourceKind::Organization => "organization",
         ResourceKind::User => "user",
+        ResourceKind::RepositoryComparison => "repository_comparison",
+        ResourceKind::AccountComparison => "account_comparison",
     };
     json!({ "kind": kind, "name": name })
 }
@@ -502,6 +563,18 @@ mod tests {
 
     fn user(name: &str) -> Dashboard {
         Dashboard::named(ResourceKind::User, name.to_owned()).unwrap()
+    }
+
+    /// The comparison of the repositories `first` and `second`.
+    fn repositories(first: &str, second: &str) -> Dashboard {
+        let name = format!("{first}...{second}");
+        Dashboard::named(ResourceKind::RepositoryComparison, name).unwrap()
+    }
+
+    /// The comparison of the accounts `first` and `second`.
+    fn accounts(first: &str, second: &str) -> Dashboard {
+        let name = format!("{first}...{second}");
+        Dashboard::named(ResourceKind::AccountComparison, name).unwrap()
     }
 
     /// Shortcuts kept in a database of their own, and the IDs of its two users, Mona and
@@ -566,6 +639,8 @@ mod tests {
             ResourceKind::Repository => format!("repository:{name}"),
             ResourceKind::Organization => format!("organization:{name}"),
             ResourceKind::User => format!("user:{name}"),
+            ResourceKind::RepositoryComparison => format!("repository_comparison:{name}"),
+            ResourceKind::AccountComparison => format!("account_comparison:{name}"),
         }
     }
 
@@ -625,6 +700,139 @@ mod tests {
         ] {
             assert_eq!(Dashboard::from_json(&value), None, "{value}");
         }
+    }
+
+    #[test]
+    fn comparisons_are_named_by_both_sides_and_compare_two() {
+        let params = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<HashMap<_, _>>()
+        };
+        let repos = [("owner1", "Acme"), ("repo1", "wid.get"), ("owner2", "octo")];
+        assert_eq!(
+            Dashboard::at(&params(&[repos[0], repos[1], repos[2], ("repo2", "thing")])),
+            Some(repositories("Acme/wid.get", "octo/thing"))
+        );
+        assert_eq!(
+            Dashboard::at(&params(&[("first", "mona"), ("second", "acme")])),
+            Some(accounts("mona", "acme"))
+        );
+        // A repository's name may have dots, even three, but an owner's has none.
+        let dotted = repositories("acme/x...", "octo/y...z");
+        assert_eq!(dotted.name, "acme/x......octo/y...z");
+        assert_eq!(
+            sides(&dotted.name),
+            Some(("acme/x...", "octo/y...z")),
+            "{dotted:?}"
+        );
+        for pairs in [
+            // A resource compared with itself, whatever the case (FR-CMP-02).
+            &[repos[0], repos[1], ("owner2", "ACME"), ("repo2", "Wid.Get")][..],
+            &[("first", "mona"), ("second", "Mona")],
+            // Names that cannot be GitHub's.
+            &[repos[0], repos[1], repos[2], ("repo2", "..")],
+            &[("first", "mo.na"), ("second", "acme")],
+            // Half of one.
+            &[repos[0], repos[1], repos[2]],
+            &[("first", "mona")],
+        ] {
+            assert_eq!(Dashboard::at(&params(pairs)), None, "{pairs:?}");
+        }
+
+        assert_eq!(
+            Dashboard::from_json(&json!({
+                "kind": "repository_comparison", "name": "acme/widget...octo/thing"
+            })),
+            Some(repositories("acme/widget", "octo/thing"))
+        );
+        assert_eq!(
+            Dashboard::from_json(&json!({ "kind": "account_comparison", "name": "mona...acme" })),
+            Some(accounts("mona", "acme"))
+        );
+        for value in [
+            json!({ "kind": "repository_comparison", "name": "acme/widget" }),
+            json!({ "kind": "repository_comparison", "name": "mona...acme" }),
+            json!({ "kind": "repository_comparison", "name": "acme/w...ACME/W" }),
+            json!({ "kind": "account_comparison", "name": "acme/widget...octo/thing" }),
+            json!({ "kind": "account_comparison", "name": "mona...acme...octo" }),
+            json!({ "kind": "account_comparison", "name": "mona" }),
+        ] {
+            assert_eq!(Dashboard::from_json(&value), None, "{value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn comparisons_share_the_12_pins_with_dashboards() {
+        let (shortcuts, mona, _) = setup().await;
+        for i in 0..10 {
+            let org = organization(&format!("org-{i}"));
+            shortcuts.pin(mona, &org).await.unwrap();
+        }
+        let widgets = repositories("acme/widget", "octo/thing");
+        shortcuts.pin(mona, &widgets).await.unwrap();
+        shortcuts
+            .pin(mona, &accounts("mona", "acme"))
+            .await
+            .unwrap();
+        // The twelfth was the last she may pin, of either.
+        for other in [accounts("mona", "octo"), organization("org-10")] {
+            assert!(
+                matches!(shortcuts.pin(mona, &other).await, Err(PinRefused::TooMany)),
+                "{other:?}"
+            );
+        }
+        // Pinned again, whatever the case, a comparison keeps its place, respelled.
+        let respelled = repositories("Acme/Widget", "Octo/Thing");
+        let pinned = names(&shortcuts.pin(mona, &respelled).await.unwrap());
+        assert_eq!(pinned.len(), 12);
+        assert_eq!(pinned[10], "repository_comparison:Acme/Widget...Octo/Thing");
+        // It moves among the pins, and goes, as a dashboard does (FR-PERS-05).
+        let order = [accounts("MONA", "acme"), organization("org-0")];
+        let pinned = names(&shortcuts.reorder(mona, &order).await.unwrap());
+        assert_eq!(
+            pinned[..2],
+            ["account_comparison:mona...acme", "organization:org-0"]
+        );
+        let pinned = shortcuts.unpin(mona, &widgets).await.unwrap();
+        assert_eq!(pinned.len(), 11);
+        shortcuts
+            .pin(mona, &accounts("mona", "octo"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn comparisons_share_the_20_recent_with_dashboards() {
+        let (shortcuts, mona, _) = setup().await;
+        let widgets = repositories("acme/widget", "octo/thing");
+        shortcuts.record_at(mona, &widgets, at(0)).await.unwrap();
+        for i in 1..20 {
+            let org = organization(&format!("org-{i}"));
+            shortcuts.record_at(mona, &org, at(i)).await.unwrap();
+        }
+        shortcuts
+            .record_at(mona, &accounts("mona", "acme"), at(20))
+            .await
+            .unwrap();
+        let recent = recent(&shortcuts, mona).await;
+        assert_eq!(recent.len(), 20);
+        assert_eq!(recent[0], "account_comparison:mona...acme");
+        // The oldest fell out, a comparison as a dashboard would.
+        assert!(!recent.contains(&"repository_comparison:acme/widget...octo/thing".to_owned()));
+
+        // A view spelled otherwise replaces the one before.
+        shortcuts
+            .record_at(mona, &accounts("Mona", "Acme"), at(21))
+            .await
+            .unwrap();
+        let recent = self::recent(&shortcuts, mona).await;
+        assert_eq!(recent[0], "account_comparison:Mona...Acme");
+        assert_eq!(recent.len(), 20);
+        // Clearing the history clears comparisons too (FR-PERS-03).
+        shortcuts.clear_history(mona).await.unwrap();
+        assert_eq!(self::recent(&shortcuts, mona).await, Vec::<String>::new());
     }
 
     #[tokio::test]
@@ -939,6 +1147,66 @@ mod tests {
         assert_eq!(
             parts(reorder(state(), visitor(), Json(json!({ "pins": [] }))).await).await,
             unauthorized
+        );
+        let compared = || path(&[("first", "mona"), ("second", "acme")]);
+        assert_eq!(
+            parts(view(state(), visitor(), compared()).await).await,
+            unauthorized
+        );
+        assert_eq!(
+            parts(pin(state(), visitor(), compared()).await).await,
+            unauthorized
+        );
+    }
+
+    #[tokio::test]
+    async fn the_ui_records_views_and_pins_of_comparisons() {
+        let (shortcuts, mona, _) = setup().await;
+        let shortcuts = Arc::new(shortcuts);
+        let state = || State(shortcuts.clone());
+        let repos = || {
+            path(&[
+                ("owner1", "Acme"),
+                ("repo1", "widget"),
+                ("owner2", "octo"),
+                ("repo2", "thing"),
+            ])
+        };
+        let people = || path(&[("first", "mona"), ("second", "hubot")]);
+        for params in [repos(), people()] {
+            assert_eq!(
+                parts(view(state(), signed_in(mona), params).await).await,
+                (StatusCode::NO_CONTENT, Value::Null)
+            );
+        }
+        assert_eq!(
+            parts(pin(state(), signed_in(mona), repos()).await).await,
+            (
+                StatusCode::OK,
+                json!({ "pins": [
+                    { "kind": "repository_comparison", "name": "Acme/widget...octo/thing" },
+                ] })
+            )
+        );
+        let (_, body) = parts(list(state(), signed_in(mona)).await).await;
+        let recent: Vec<&Value> = body["recent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| &item["name"])
+            .collect();
+        assert_eq!(recent, ["mona...hubot", "Acme/widget...octo/thing"]);
+        assert_eq!(body["recent"][0]["kind"], "account_comparison");
+        assert_eq!(
+            parts(unpin(state(), signed_in(mona), repos()).await).await,
+            (StatusCode::OK, json!({ "pins": [] }))
+        );
+
+        // A resource compared with itself is no comparison (FR-CMP-02).
+        let itself = path(&[("first", "mona"), ("second", "MONA")]);
+        assert_eq!(
+            parts(pin(state(), signed_in(mona), itself).await).await,
+            (StatusCode::BAD_REQUEST, Value::Null)
         );
     }
 

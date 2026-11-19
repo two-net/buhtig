@@ -159,11 +159,13 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   as when it is revoked or expires, is marked invalid: the user's requests go with their
   sign-in again, and BuhTig asks them to replace the token. Replacing or removing a token
   deletes the data cached with it, and what was observed with it, at once.
-- **Shortcuts:** for signed-in users, BuhTig remembers the last 20 dashboards they opened,
-  only which ones and when, and lets them pin up to 12 with the Pin button in a dashboard's
-  header. Their home page lists up to 12 of them beside the search box, pins first. In
-  Settings, users can reorder or unpin their pins and clear their history. Housekeeping
-  trims each user's history to 20 entries.
+- **Shortcuts:** for signed-in users, BuhTig remembers the last 20 dashboards and
+  comparisons they opened, only which ones and when, and lets them pin up to 12, dashboards
+  and comparisons together, with the Pin button in a dashboard's header or above a
+  comparison. A comparison is kept as the names of its two sides alone, so opening it again
+  reads each side with the user's own credentials. Their home page and the command palette list
+  them, pins first. In Settings, users can reorder or unpin their pins and clear their history.
+  Housekeeping trims each user's history to 20 entries.
 - **Watchlists:** a signed-in user may keep up to 10 named watchlists, of up to 25
   repositories each, of any owners, at `/-/watchlists`, which the avatar menu links to.
   They add repositories by name or URL, from their pins, or with "Add to watchlist…" in a

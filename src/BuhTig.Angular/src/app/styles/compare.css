@@ -1,4 +1,11 @@
 /* A comparison of two repositories or two accounts, with its code, beside a dashboard's styles. */
+.cmp-titlebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .cmp-title {
   display: flex;
   flex-wrap: wrap;

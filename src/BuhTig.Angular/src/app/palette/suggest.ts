@@ -1,7 +1,14 @@
 import { Tab, commandPath, parseCommand, tabLabel, tabsNamed } from '../search/command';
 import { problemMessage, resourceName } from '../search/messages';
 import { Resource, isUnfinished } from '../search/parse';
-import { Shortcut, pick, resourceOf } from '../shortcuts/pick';
+import {
+  Shortcut,
+  isComparison,
+  pick,
+  resourceOf,
+  shortcutLabel,
+  shortcutPath,
+} from '../shortcuts/pick';
 import { fuzzy } from './fuzzy';
 
 /** Where a suggestion comes from. */
@@ -15,12 +22,16 @@ export type Source =
   /** What the user typed, in a form of SRS Table 4-1. */
   | 'typed';
 
-/** A dashboard, or one of its tabs, that the command palette suggests opening. */
+/**
+ * A dashboard, or one of its tabs, or a comparison of two, that the command palette suggests
+ * opening.
+ */
 export interface Suggestion {
   /** What tells it apart from the others. */
   key: string;
-  resource: Resource;
-  /** `owner/repo`, `org` or `login`, as it is shown. */
+  /** The dashboard's resource, or `undefined` for a comparison (FR-CMP-05). */
+  resource: Resource | undefined;
+  /** `owner/repo`, `org` or `login`, or a comparison's, such as `a/b vs c/d`, as it is shown. */
   name: string;
   source: Source;
   tab?: Tab;
@@ -48,11 +59,13 @@ export interface Suggestions {
   problem?: string;
 }
 
-type Candidate = Omit<Suggestion, 'key' | 'tab' | 'tabLabel' | 'path'>;
+/** A suggestion before its tab is chosen: of a comparison, which has none, with where it opens. */
+type Candidate = Omit<Suggestion, 'key' | 'tab' | 'tabLabel' | 'path'> & { path?: string };
 
 /**
  * What the command palette suggests for `query` (FR-SRCH-12): the user's pins, then the dashboards
- * they viewed lately, then the public repositories opened on this BuhTig lately, each once. As the
+ * and comparisons they viewed lately, then the public repositories opened on this BuhTig lately,
+ * each once. A comparison matches by the names of both its sides, and has no tabs. As the
  * user types, those whose names match the query best come first (`fuzzy`), and the resource that
  * the query names, in any form of Table 4-1, if it is none of them: first if the query is a
  * repository or a URL, so that pasting one and pressing Enter opens it, and else last. A tab's
@@ -89,15 +102,11 @@ export function suggest(query: string, sources: Sources, host: string): Suggesti
       ? command.problem.resource
       : undefined;
   if (typed !== undefined) {
-    const at = ranked.findIndex((candidate) => isSame(candidate.resource, typed));
+    const isTyped = ({ resource }: Candidate) => resource !== undefined && isSame(resource, typed);
+    const at = ranked.findIndex(isTyped);
     if (/[/:.]/.test(target)) {
       const [first] =
-        at >= 0
-          ? ranked.splice(at, 1)
-          : [
-              candidates.find((candidate) => isSame(candidate.resource, typed)) ??
-                typedCandidate(typed),
-            ];
+        at >= 0 ? ranked.splice(at, 1) : [candidates.find(isTyped) ?? typedCandidate(typed)];
       ranked = [first, ...ranked];
     } else if (at < 0) {
       ranked = [...ranked, typedCandidate(typed)];
@@ -105,14 +114,20 @@ export function suggest(query: string, sources: Sources, host: string): Suggesti
   }
 
   const items = ranked.flatMap((candidate): Suggestion[] => {
-    const kind = candidate.resource.kind;
+    const resource = candidate.resource;
+    if (resource === undefined) {
+      // A comparison, which has no tabs.
+      const path = candidate.path ?? '';
+      return word === '' ? [{ ...candidate, key: `compare:${path.toLowerCase()}`, path }] : [];
+    }
+    const kind = resource.kind;
     const tabs: (Tab | undefined)[] = word === '' ? [undefined] : tabsNamed(kind, word);
     return tabs.map((tab) => ({
       ...candidate,
       key: `${kind}:${candidate.name.toLowerCase()}:${tab ?? ''}`,
       tab,
       tabLabel: tab === undefined ? undefined : tabLabel(kind, tab),
-      path: commandPath(candidate.resource, tab),
+      path: commandPath(resource, tab),
     }));
   });
 
@@ -127,16 +142,27 @@ export function suggest(query: string, sources: Sources, host: string): Suggesti
   return { items, problem: unfinished ? undefined : problemMessage(problem, host) };
 }
 
-/** The pins, then the dashboards viewed lately, then the repositories opened here lately, once. */
+/**
+ * The pins, then the dashboards and comparisons viewed lately, then the repositories opened here
+ * lately, once.
+ */
 function candidatesOf({ pins, recent, opened }: Sources): Candidate[] {
-  const personal = pick(pins, recent, Infinity).map((shortcut): Candidate => ({
-    resource: resourceOf(shortcut),
-    name: shortcut.name,
-    source: shortcut.pinned ? 'pinned' : 'recent',
-    matches: [],
-  }));
+  const personal = pick(pins, recent, Infinity).map((shortcut): Candidate => {
+    const source = shortcut.pinned ? 'pinned' : 'recent';
+    return isComparison(shortcut)
+      ? {
+          resource: undefined,
+          name: shortcutLabel(shortcut),
+          source,
+          matches: [],
+          path: shortcutPath(shortcut),
+        }
+      : { resource: resourceOf(shortcut), name: shortcut.name, source, matches: [] };
+  });
   const seen = new Set(
-    personal.map(({ resource, name }) => `${resource.kind}:${name.toLowerCase()}`),
+    personal.flatMap(({ resource, name }) =>
+      resource === undefined ? [] : [`${resource.kind}:${name.toLowerCase()}`],
+    ),
   );
   const others = opened
     .filter(({ name }) => !seen.has(`repository:${name.toLowerCase()}`))

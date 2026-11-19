@@ -63,6 +63,31 @@ describe('Personal', () => {
       .flush(null, { status: 204, statusText: 'No Content' });
   });
 
+  it('records and pins a comparison under its own URL (FR-CMP-05)', () => {
+    const repositories: Shortcut = {
+      kind: 'repository_comparison',
+      name: 'acme/wid.get...octo/thing',
+    };
+    outcome(personal.record(repositories));
+    http
+      .expectOne({
+        method: 'POST',
+        url: '/-/api/comparisons/repositories/acme/wid.get/octo/thing/view',
+      })
+      .flush(null, { status: 204, statusText: 'No Content' });
+
+    const accounts: Shortcut = { kind: 'account_comparison', name: 'mona...acme' };
+    const pinned = outcome(personal.pin(accounts));
+    http
+      .expectOne({ method: 'PUT', url: '/-/api/comparisons/accounts/mona/acme/pin' })
+      .flush({ pins: [accounts] });
+    expect(pinned.value).toEqual([accounts]);
+    outcome(personal.unpin(accounts));
+    http
+      .expectOne({ method: 'DELETE', url: '/-/api/comparisons/accounts/mona/acme/pin' })
+      .flush({ pins: [] });
+  });
+
   it('never fails to record a view, since the dashboard is the same either way', () => {
     const seen = outcome(personal.record(WIDGET));
     http

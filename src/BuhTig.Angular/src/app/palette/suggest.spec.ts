@@ -48,6 +48,48 @@ describe('suggest (FR-SRCH-12)', () => {
     ]);
   });
 
+  describe('of comparisons (FR-CMP-05)', () => {
+    const WITH_COMPARISONS: Sources = {
+      ...SOURCES,
+      pins: [
+        ...SOURCES.pins,
+        { kind: 'repository_comparison', name: 'tokio-rs/axum...actix/actix-web' },
+      ],
+      recent: [{ kind: 'account_comparison', name: 'mona...hubot' }, ...SOURCES.recent],
+    };
+
+    it('lists pinned and recent comparisons with the dashboards, each once', () => {
+      expect(listed('', WITH_COMPARISONS)).toEqual([
+        'tokio-rs/axum (pinned)',
+        'rust-lang (pinned)',
+        'tokio-rs/axum vs actix/actix-web (pinned)',
+        'mona vs hubot (recent)',
+        'mona (recent)',
+        'rust-lang/rust (recent)',
+        'angular/angular (opened)',
+      ]);
+    });
+
+    it('finds a pinned comparison by the name of either side, and opens it', () => {
+      const [found] = suggest('actix', WITH_COMPARISONS, GITHUB_COM).items;
+      expect([found.name, found.path, found.resource]).toEqual([
+        'tokio-rs/axum vs actix/actix-web',
+        '/-/compare/tokio-rs/axum...actix/actix-web',
+        undefined,
+      ]);
+      expect(listed('hubot', WITH_COMPARISONS)).toEqual([
+        'mona vs hubot (recent)',
+        'hubot (typed)',
+      ]);
+    });
+
+    it('offers no tabs of a comparison, which has none', () => {
+      expect(listed('axum pulls', WITH_COMPARISONS)).toEqual([
+        'tokio-rs/axum › Pull requests (pinned)',
+      ]);
+    });
+  });
+
   it('opens each at its dashboard', () => {
     expect(suggest('', SOURCES, GITHUB_COM).items.map((item) => item.path)).toEqual([
       '/tokio-rs/axum',

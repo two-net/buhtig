@@ -1,5 +1,5 @@
 <section id="shortcuts" class="section" aria-labelledby="shortcuts-heading">
-  <h2 id="shortcuts-heading" tabindex="-1">Pinned dashboards and history</h2>
+  <h2 id="shortcuts-heading" tabindex="-1">Pins and history</h2>
   <p class="help">{{ PINS_PURPOSE }}</p>
   @if (pins(); as pins) {
     <h3 class="sublabel">{{ pinnedCount(pins.length) }}</h3>
@@ -11,12 +11,16 @@
           let index = $index, first = $first, last = $last
         ) {
           <li>
-            <app-avatar [name]="pin.name.split('/')[0]" [round]="pin.kind !== 'organization'" />
-            <a class="grow" [routerLink]="'/' + pin.name">{{ pin.name }}</a>
+            @if (isComparison(pin)) {
+              <app-icon name="compare" />
+            } @else {
+              <app-avatar [name]="avatarLogin(pin)" [round]="pin.kind !== 'organization'" />
+            }
+            <a class="grow" [routerLink]="path(pin)">{{ label(pin) }}</a>
             <button
               type="button"
               class="iconbtn up"
-              [attr.aria-label]="'Move ' + pin.name + ' up'"
+              [attr.aria-label]="'Move ' + label(pin) + ' up'"
               [disabled]="busy() || first"
               (click)="move(index, -1)"
             >
@@ -25,7 +29,7 @@
             <button
               type="button"
               class="iconbtn down"
-              [attr.aria-label]="'Move ' + pin.name + ' down'"
+              [attr.aria-label]="'Move ' + label(pin) + ' down'"
               [disabled]="busy() || last"
               (click)="move(index, 1)"
             >
@@ -34,7 +38,7 @@
             <button
               type="button"
               class="iconbtn unpin"
-              [attr.aria-label]="'Unpin ' + pin.name"
+              [attr.aria-label]="'Unpin ' + label(pin)"
               [disabled]="busy()"
               (click)="unpin(index)"
             >
@@ -55,11 +59,15 @@
       <ul class="mini-list">
         @for (item of history; track item.shortcut.kind + ':' + item.shortcut.name) {
           <li>
-            <app-avatar
-              [name]="item.shortcut.name.split('/')[0]"
-              [round]="item.shortcut.kind !== 'organization'"
-            />
-            <a class="grow" [routerLink]="'/' + item.shortcut.name">{{ item.shortcut.name }}</a>
+            @if (isComparison(item.shortcut)) {
+              <app-icon name="compare" />
+            } @else {
+              <app-avatar
+                [name]="avatarLogin(item.shortcut)"
+                [round]="item.shortcut.kind !== 'organization'"
+              />
+            }
+            <a class="grow" [routerLink]="path(item.shortcut)">{{ label(item.shortcut) }}</a>
             @if (item.at; as at) {
               <span class="when"><app-relative-time [value]="at" /></span>
             }

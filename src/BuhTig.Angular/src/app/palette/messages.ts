@@ -27,7 +27,7 @@ export const START = 'Type a repository, organization or user, or paste its GitH
 export const NO_MATCHES = `No dashboards match. ${START}`;
 
 /** Where each suggestion comes from, or what kind of resource the user typed. */
-export function sourceLabel(source: Source, kind: Resource['kind']): string {
+export function sourceLabel(source: Source, kind: Resource['kind'] | undefined): string {
   switch (source) {
     case 'pinned':
       return PINNED;
@@ -36,7 +36,7 @@ export function sourceLabel(source: Source, kind: Resource['kind']): string {
     case 'opened':
       return 'Viewed on this BuhTig';
     case 'typed':
-      return KINDS[kind];
+      return kind === undefined ? '' : KINDS[kind];
   }
 }
 

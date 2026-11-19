@@ -301,6 +301,26 @@ pub fn router(
                 .delete(shortcuts::unpin)
                 .with_state(shortcuts.clone()),
         )
+        .route(
+            "/-/api/comparisons/repositories/{owner1}/{repo1}/{owner2}/{repo2}/view",
+            post(shortcuts::view).with_state(shortcuts.clone()),
+        )
+        .route(
+            "/-/api/comparisons/repositories/{owner1}/{repo1}/{owner2}/{repo2}/pin",
+            put(shortcuts::pin)
+                .delete(shortcuts::unpin)
+                .with_state(shortcuts.clone()),
+        )
+        .route(
+            "/-/api/comparisons/accounts/{first}/{second}/view",
+            post(shortcuts::view).with_state(shortcuts.clone()),
+        )
+        .route(
+            "/-/api/comparisons/accounts/{first}/{second}/pin",
+            put(shortcuts::pin)
+                .delete(shortcuts::unpin)
+                .with_state(shortcuts.clone()),
+        )
         .route("/-/api/session", get(session::current).with_state(mode))
         .route("/-/api/user", delete(session::delete))
         .route(

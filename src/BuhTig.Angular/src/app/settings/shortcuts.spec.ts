@@ -221,6 +221,38 @@ describe('ShortcutSettings', () => {
     expect(document.activeElement).toBe(element().querySelector('#shortcuts-heading'));
   });
 
+  it('lists pinned and viewed comparisons, moves one among the pins, and unpins it (FR-CMP-05)', async () => {
+    const compared = { kind: 'repository_comparison', name: 'acme/widget...octo/thing' };
+    const people = { kind: 'account_comparison', name: 'mona...hubot' };
+    await load(
+      [organization('acme'), compared],
+      [{ ...people, viewed_at: '2026-10-22T11:00:00Z' }, ...HISTORY],
+    );
+    expect(listed().map(([name]) => name)).toEqual(['acme', 'acme/widget vs octo/thing']);
+    const link = (name: string) =>
+      [...element().querySelectorAll('a')].find((link) => link.textContent?.trim() === name);
+    expect(link('acme/widget vs octo/thing')?.getAttribute('href')).toBe(
+      '/-/compare/acme/widget...octo/thing',
+    );
+    expect(link('mona vs hubot')?.getAttribute('href')).toBe('/-/compare/mona...hubot');
+
+    // Among the pins, as a dashboard (FR-PERS-05).
+    const order = await change('Move acme/widget vs octo/thing up', 'PUT', '/-/api/pins', {
+      pins: [compared, organization('acme')],
+    });
+    expect(order).toEqual({ pins: [compared, organization('acme')] });
+    expect(toasts()).toEqual([movedUp('acme/widget vs octo/thing')]);
+
+    await change(
+      'Unpin acme/widget vs octo/thing',
+      'DELETE',
+      '/-/api/comparisons/repositories/acme/widget/octo/thing/pin',
+      { pins: [organization('acme')] },
+    );
+    expect(listed().map(([name]) => name)).toEqual(['acme']);
+    expect(toasts().at(-1)).toBe(unpinned('acme/widget vs octo/thing'));
+  });
+
   it('clears the history, and keeps the pins (FR-PERS-03)', async () => {
     await load(PINS);
     await change('Clear history', 'DELETE', '/-/api/history', null, 204);

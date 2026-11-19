@@ -57,7 +57,7 @@ pub fn schema(builder: SchemaBuilder) -> SchemaBuilder {
         .register(github_host::Entity)
 }
 
-/// What a dashboard shows, as recorded in history and pins.
+/// What a dashboard shows, or a comparison of two (FR-CMP-05), as recorded in history and pins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "String", db_type = "Text")]
 pub enum ResourceKind {
@@ -67,4 +67,10 @@ pub enum ResourceKind {
     Organization,
     #[sea_orm(string_value = "user")]
     User,
+    /// Two repositories, named `{owner1}/{repo1}...{owner2}/{repo2}`.
+    #[sea_orm(string_value = "repository_comparison")]
+    RepositoryComparison,
+    /// Two accounts, organizations or users, named `{account1}...{account2}`.
+    #[sea_orm(string_value = "account_comparison")]
+    AccountComparison,
 }

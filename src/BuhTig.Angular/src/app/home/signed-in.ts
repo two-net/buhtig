@@ -14,7 +14,7 @@ import { Session } from '../session/session';
 import { HomeStyles } from '../styles/styles';
 import { paletteKeys } from '../palette/keys';
 import { Personal } from '../shortcuts/personal';
-import { pick } from '../shortcuts/pick';
+import { avatarLogin, isComparison, pick, shortcutLabel, shortcutPath } from '../shortcuts/pick';
 import {
   FIND_DASHBOARD,
   KEYBOARD,
@@ -64,7 +64,9 @@ export class SignedInHome {
   protected readonly query = signal('');
   protected readonly shown = computed(() => {
     const query = this.query().trim().toLowerCase();
-    return (this.dashboards() ?? []).filter((item) => item.name.toLowerCase().includes(query));
+    return (this.dashboards() ?? []).filter((item) =>
+      shortcutLabel(item).toLowerCase().includes(query),
+    );
   });
   protected readonly empty = computed(() => {
     const dashboards = this.dashboards();
@@ -100,6 +102,10 @@ export class SignedInHome {
   /** Ctrl+K, or ⌘K on a Mac, an iPhone or an iPad, which opens the command palette. */
   protected readonly paletteKeys = paletteKeys();
 
+  protected readonly path = shortcutPath;
+  protected readonly label = shortcutLabel;
+  protected readonly isComparison = isComparison;
+  protected readonly avatarLogin = avatarLogin;
   protected readonly TOP_DASHBOARDS = TOP_DASHBOARDS;
   protected readonly FIND_DASHBOARD = FIND_DASHBOARD;
   protected readonly PINNED = PINNED;

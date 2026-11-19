@@ -6,7 +6,7 @@ import { SaveProblem } from './tokens';
 /** FR-ACC-02: Settings are for signed-in users. */
 export const SIGN_IN_TO_MANAGE = 'Sign in to manage settings';
 export const SIGN_IN_FIRST =
-  'Settings hold your personal access token, pinned dashboards and history.';
+  'Settings hold your personal access token, your pins and your history.';
 
 /** FR-PAT-09: what a personal access token is for. */
 export const TOKEN_PURPOSE =
@@ -104,22 +104,22 @@ export function saveProblemMessage(problem: SaveProblem): string {
 
 export const REMOVE_FAILED = "BuhTig couldn't remove the token. Try again in a moment.";
 
-/** FR-PERS-02, FR-SRCH-08: what pins are for, and how to pin a dashboard. */
+/** FR-PERS-02, FR-SRCH-08: what pins are for, and how to pin a dashboard or a comparison. */
 export const PINS_PURPOSE =
-  'Pinned dashboards come first below the search box on the home page. Pin a dashboard with ' +
-  'the Pin button at its top. You can pin up to 12.';
+  'Pinned dashboards and comparisons come first below the search box on the home page. Pin one ' +
+  'with the Pin button at its top. You can pin up to 12, dashboards and comparisons together.';
 
-export const NO_PINS = 'Nothing pinned yet. Use Pin on any dashboard.';
+export const NO_PINS = 'Nothing pinned yet. Use Pin on any dashboard or comparison.';
 
-/** FR-PERS-02: how many of the 12 the user has pinned. */
+/** FR-PERS-02: how many of the 12 the user has pinned, dashboards and comparisons together. */
 export function pinnedCount(count: number): string {
   return `Pinned (${count} of 12)`;
 }
 
 /** FR-PERS-01, FR-SRCH-08: what history is for, and all it keeps. */
 export const HISTORY_PURPOSE =
-  'BuhTig remembers the last 20 dashboards you opened, and offers them below the search box on ' +
-  'the home page. It keeps only which dashboards you opened, and when.';
+  'BuhTig remembers the last 20 dashboards and comparisons you opened, and offers them below the ' +
+  'search box on the home page. It keeps only which you opened, and when.';
 
 export const NO_HISTORY = 'No history yet.';
 

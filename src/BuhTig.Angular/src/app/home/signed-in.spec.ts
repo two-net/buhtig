@@ -156,6 +156,28 @@ describe('SignedInHome', () => {
     ).toEqual([true, false]);
   });
 
+  it('lists pinned and viewed comparisons with the dashboards, each leading to it (FR-CMP-05)', async () => {
+    await session();
+    await shortcuts(
+      [{ kind: 'repository_comparison', name: 'acme/widget...octo/thing' }],
+      [
+        { kind: 'account_comparison', name: 'mona...hubot', viewed_at: '2026-10-22T11:00:00Z' },
+        { ...organization('github'), viewed_at: '2026-10-21T11:00:00Z' },
+      ],
+    );
+    expect(dashboards()).toEqual([
+      ['acme/widget vs octo/thing', '/-/compare/acme/widget...octo/thing', PINNED],
+      ['mona vs hubot', '/-/compare/mona...hubot', RECENTLY_VIEWED],
+      ['github', '/github', RECENTLY_VIEWED],
+    ]);
+    // A comparison has an icon of its own, rather than an avatar.
+    const links = [...side().querySelectorAll('.side-repos a')];
+    expect(links.map((link) => link.querySelector('.av') !== null)).toEqual([false, false, true]);
+    // It is found by either side's name.
+    await type('octo');
+    expect(dashboards().map(([name]) => name)).toEqual(['acme/widget vs octo/thing']);
+  });
+
   it(`lists at most ${MAX_SHORTCUTS} dashboards`, async () => {
     await session();
     await shortcuts(

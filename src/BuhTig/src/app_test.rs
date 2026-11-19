@@ -485,10 +485,15 @@ fn body_for(method: &Method) -> Option<Value> {
 }
 
 /// What only signed-in users may ask for or do (FR-ACC-02), whatever the mode.
-const SIGNED_IN_ONLY: [(Method, &str); 20] = [
+const SIGNED_IN_ONLY: [(Method, &str); 22] = [
     (Method::GET, "/-/api/shortcuts"),
     (Method::DELETE, "/-/api/history"),
     (Method::PUT, "/-/api/pins"),
+    (
+        Method::POST,
+        "/-/api/comparisons/repositories/octo/public/octo/flaky/view",
+    ),
+    (Method::PUT, "/-/api/comparisons/accounts/octo/hubot/pin"),
     (Method::PUT, "/-/api/token"),
     (Method::DELETE, "/-/api/user"),
     (Method::POST, "/-/api/repositories/octo/public/refresh"),
@@ -800,6 +805,8 @@ async fn signed_in_users_see_public_data_and_keep_shortcuts_in_either_mode() {
             (Method::POST, "/-/api/repositories/octo/public/view"),
             (Method::PUT, "/-/api/organizations/octo/pin"),
             (Method::PUT, "/-/api/users/hubot/pin"),
+            // A comparison, which is its names alone, asks GitHub nothing (FR-CMP-05).
+            (Method::PUT, "/-/api/comparisons/accounts/octo/hubot/pin"),
             (Method::GET, "/-/api/shortcuts"),
             (Method::POST, "/-/api/repositories/octo/public/refresh"),
             (Method::DELETE, "/-/api/history"),
@@ -817,6 +824,12 @@ async fn signed_in_users_see_public_data_and_keep_shortcuts_in_either_mode() {
         );
         assert!(
             shortcuts.body.contains(r#"{"kind":"user","name":"hubot"}"#),
+            "{mode}: {shortcuts:?}"
+        );
+        assert!(
+            shortcuts
+                .body
+                .contains(r#"{"kind":"account_comparison","name":"octo...hubot"}"#),
             "{mode}: {shortcuts:?}"
         );
         assert_eq!(

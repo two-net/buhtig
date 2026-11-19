@@ -2,17 +2,17 @@ import { Component, computed, inject, input, signal } from '@angular/core';
 import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
 import { catchError, map, of, switchMap } from 'rxjs';
 import { Icon } from '../icon/icon';
-import { Known } from '../search/parse';
 import { Session } from '../session/session';
 import { Personal, PinProblem } from '../shortcuts/personal';
-import { Shortcut, sameDashboard, shortcutOf } from '../shortcuts/pick';
+import { Shortcut, sameDashboard, shortcutLabel } from '../shortcuts/pick';
 import { Toasts } from '../toast/toasts';
 import { PIN, PINNED_LABEL, PIN_FAILED, PIN_LIMIT, pinned, unpinned } from './messages';
 
 /**
- * The button that pins a dashboard, so that it comes first among the shortcuts on the home page,
- * or unpins it, for signed-in users alone (FR-PERS-02, FR-ACC-02). It is pressed while the
- * dashboard is pinned. A user may pin 12, and it says so when they have.
+ * The button that pins a dashboard, or a comparison, so that it comes first among the shortcuts on
+ * the home page, or unpins it, for signed-in users alone (FR-PERS-02, FR-ACC-02). It is pressed
+ * while it is pinned. A user may pin 12, dashboards and comparisons together, and it says so when
+ * they have.
  *
  * While the server is asked, the button does nothing, but keeps focus (NFR-UX-03).
  */
@@ -38,12 +38,10 @@ export class Pin {
   private readonly personal = inject(Personal);
   private readonly toasts = inject(Toasts);
 
-  /** The dashboard's resource, with the names as GitHub spells them. */
-  readonly resource = input.required<Known>();
+  /** The dashboard or the comparison, with the names as GitHub spells them. */
+  readonly shortcut = input.required<Shortcut>();
 
   protected readonly user = inject(Session).user;
-
-  private readonly shortcut = computed(() => shortcutOf(this.resource()));
 
   /** Whether the user pinned the dashboard, once the server says. */
   protected readonly isPinned = signal<boolean | undefined>(undefined);
@@ -81,7 +79,7 @@ export class Pin {
         this.busy.set(false);
         this.isPinned.set(isPinned);
         this.toasts.show(
-          isPinned ? pinned(shortcut.name) : unpinned(shortcut.name),
+          isPinned ? pinned(shortcutLabel(shortcut)) : unpinned(shortcutLabel(shortcut)),
           isPinned ? 'pin-fill' : 'pin',
         );
       },

@@ -5,6 +5,7 @@ import { RelativeTime } from '../format/relative-time';
 import { Icon } from '../icon/icon';
 import { Known } from '../search/parse';
 import { Session } from '../session/session';
+import { shortcutOf } from '../shortcuts/pick';
 import { OPEN_ON_GITHUB, SHARE_CARD, UPDATED } from './messages';
 import { Pin } from './pin';
 import { Refresh } from './refresh';
@@ -30,7 +31,7 @@ import { GITHUB_HOST } from '../github/host';
         }
         <app-refresh [resource]="resource()" (refreshed)="refreshed.emit()" />
       </div>
-      <app-pin [resource]="resource()" />
+      <app-pin [shortcut]="shortcut()" />
       <app-watch [resource]="resource()" />
       <button type="button" class="btn sm" (click)="comparing.set(true)">
         <app-icon name="compare" />{{ COMPARE_WITH }}
@@ -58,6 +59,8 @@ export class HeadActions {
   protected readonly gitHub = inject(GITHUB_HOST);
   /** The dashboard's resource, with the names as GitHub spells them. */
   readonly resource = input.required<Known>();
+  /** The dashboard, as its Pin pins it (FR-PERS-02). */
+  protected readonly shortcut = computed(() => shortcutOf(this.resource()));
   /** The resource's path on GitHub, such as `/owner/repo`. */
   readonly path = input.required<string>();
   readonly fetchedAt = input<Date | undefined>(undefined);

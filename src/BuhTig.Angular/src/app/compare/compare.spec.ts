@@ -11,8 +11,10 @@ import { TITLES } from '../messages';
 import {
   NOT_FOUND_OR_PRIVATE,
   OPEN_ON_GITHUB,
+  PIN,
   UPDATED,
   notFoundForVisitor,
+  pinned,
   staleData,
 } from '../dashboard/messages';
 import { Clock } from '../format/clock';
@@ -92,11 +94,9 @@ describe('Comparison', () => {
   });
 
   afterEach(() => {
+    // Who is viewing is the session's business: no one, unless a test says, whose history and
+    // pins are then theirs to test.
     http.match('/-/api/session');
-    // A comparison is no dashboard: it goes in no history, and is pinned to nothing
-    // (FR-CMP-05).
-    http.expectNone((request) => request.method === 'POST' && request.url.endsWith('/view'));
-    http.expectNone('/-/api/shortcuts');
     http.verify();
   });
 
@@ -357,7 +357,7 @@ describe('Comparison', () => {
       ['/umbrella/gadget', 'Private', undefined],
     ]);
     // When each one's data was fetched (FR-DATA-06), and its page on GitHub, but no Refresh or
-    // Pin: a comparison is no dashboard (FR-CMP-05).
+    // Pin of either: the comparison is pinned whole, and refreshed by each dashboard (FR-CMP-05).
     expect(heads.map((head) => head.querySelector('time')?.getAttribute('datetime'))).toEqual([
       WIDGET.fetched_at,
       GADGET.fetched_at,
@@ -371,7 +371,7 @@ describe('Comparison', () => {
       [OPEN_ON_GITHUB, 'https://github.com/acme/widget'],
       [OPEN_ON_GITHUB, 'https://github.com/umbrella/gadget'],
     ]);
-    expect(page().querySelector('app-refresh, app-pin')).toBeNull();
+    expect(page().querySelector('app-refresh, app-compare-head app-pin')).toBeNull();
     expect(TestBed.inject(Toasts).toasts()).toEqual([]);
 
     expect(await answerParts(REPOSITORY_PARTS)).toEqual(Object.keys(REPOSITORY_PARTS).sort());
@@ -821,6 +821,70 @@ describe('Comparison', () => {
     expect(page().querySelector('app-compare-head, app-widget')).toBeNull();
     expect(moves()).toEqual([]);
     http.expectNone(isPart);
+  });
+
+  describe("in a signed-in user's history and pins (FR-PERS-01, FR-PERS-02)", () => {
+    const MONA = { login: 'mona', name: null, avatar_url: 'https://example.com/mona.png' };
+    const AT = '/-/api/comparisons/repositories/acme/widget/umbrella/gadget';
+    const pinButton = () => page().querySelector<HTMLButtonElement>('.cmp-titlebar app-pin button');
+
+    it('records it once, as GitHub spells both names, and offers to pin it', async () => {
+      await harness.navigateByUrl('/-/compare/ACME/Widget...umbrella/gadget');
+      http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+      await harness.fixture.whenStable();
+      // Nothing yet, until GitHub has told both.
+      http.expectNone((request) => request.url.endsWith('/view'));
+      http.expectOne('/-/api/repositories/ACME/Widget').flush(WIDGET);
+      http.expectOne('/-/api/repositories/umbrella/gadget').flush(GADGET);
+      await harness.fixture.whenStable();
+      http.expectOne({ method: 'POST', url: `${AT}/view` }).flush(null, {
+        status: 204,
+        statusText: 'No Content',
+      });
+      http.expectOne('/-/api/shortcuts').flush({ pins: [], recent: [] });
+      await answerParts(REPOSITORY_PARTS);
+      // Moving to the URL that spells the names as GitHub does records nothing again.
+      expect(moves()).toEqual(['/-/compare/acme/widget...umbrella/gadget']);
+      http.expectNone((request) => request.url.endsWith('/view'));
+
+      expect(pinButton()?.textContent?.trim()).toBe(PIN);
+      pinButton()!.click();
+      await harness.fixture.whenStable();
+      const pins = [{ kind: 'repository_comparison', name: 'acme/widget...umbrella/gadget' }];
+      http.expectOne({ method: 'PUT', url: `${AT}/pin` }).flush({ pins });
+      await harness.fixture.whenStable();
+      expect(pinButton()?.getAttribute('aria-pressed')).toBe('true');
+      expect(
+        TestBed.inject(Toasts)
+          .toasts()
+          .map((toast) => toast.message),
+      ).toEqual([pinned('acme/widget vs umbrella/gadget')]);
+    });
+
+    it('records nothing for a visitor, and offers them no Pin', async () => {
+      await harness.navigateByUrl('/-/compare/acme/widget...umbrella/gadget');
+      http.expectOne('/-/api/session').flush({ user: null });
+      http.expectOne('/-/api/repositories/acme/widget').flush(WIDGET);
+      http.expectOne('/-/api/repositories/umbrella/gadget').flush(GADGET);
+      await harness.fixture.whenStable();
+      await answerParts(REPOSITORY_PARTS);
+      http.expectNone((request) => request.url.endsWith('/view'));
+      http.expectNone('/-/api/shortcuts');
+      expect(pinButton()).toBeNull();
+    });
+
+    it('records nothing, and offers no Pin, of a side GitHub does not show (FR-ACC-05)', async () => {
+      await harness.navigateByUrl('/-/compare/acme/widget...umbrella/secret');
+      http.expectOne('/-/api/session').flush({ user: MONA, token: null });
+      http.expectOne('/-/api/repositories/acme/widget').flush(WIDGET);
+      http
+        .expectOne('/-/api/repositories/umbrella/secret')
+        .flush(null, { status: 404, statusText: 'Not Found' });
+      await harness.fixture.whenStable();
+      http.expectNone((request) => request.url.endsWith('/view'));
+      http.expectNone('/-/api/shortcuts');
+      expect(pinButton()).toBeNull();
+    });
   });
 
   it('opens no comparison of a repository with an account (FR-CMP-01)', async () => {

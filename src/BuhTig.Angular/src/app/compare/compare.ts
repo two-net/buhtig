@@ -10,18 +10,22 @@ import {
   signal,
   untracked,
 } from '@angular/core';
-import { toObservable, toSignal } from '@angular/core/rxjs-interop';
+import { takeUntilDestroyed, toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { Router } from '@angular/router';
-import { NEVER, Observable, map, startWith, switchMap } from 'rxjs';
+import { NEVER, Observable, filter, map, mergeMap, startWith, switchMap } from 'rxjs';
 import { once } from '../dashboard/data';
 import { FailurePage } from '../dashboard/failure';
 import { renamed } from '../dashboard/messages';
 import { NotFoundOrPrivate } from '../dashboard/not-found-or-private';
+import { Pin } from '../dashboard/pin';
 import { Resources, Summary } from '../dashboard/resources';
 import { same } from '../dashboard/summary';
 import { Header } from '../header/header';
 import { Announcer } from '../live/announcer';
 import { Known, Owner, Resource, dashboardPath, parseName } from '../search/parse';
+import { Session } from '../session/session';
+import { Personal } from '../shortcuts/personal';
+import { ComparisonShortcut, comparisonOf, sameDashboard } from '../shortcuts/pick';
 import { CompareStyles, DashboardStyles } from '../styles/styles';
 import { TipHost } from '../tip/tip';
 import { Toasts } from '../toast/toasts';
@@ -60,8 +64,11 @@ type Problem =
  * Each side comes from the same endpoints and cache as its dashboard, so as the viewer's own
  * credentials allow, and counts as a load of its dashboard (FR-CMP-05). When GitHub says there is
  * no such resource, it shows nothing of either, and says what the viewer can do of the one there
- * is not (FR-ACC-05). A comparison is no dashboard: it goes in no history, and is pinned to
- * nothing. Once it knows how GitHub spells both names, it moves to the URL that spells them so.
+ * is not (FR-ACC-05). Once it knows how GitHub spells both names, it moves to the URL that spells
+ * them so. For a signed-in user, it then goes in their history, as one entry, and offers Pin, as a
+ * dashboard does (FR-PERS-01, FR-PERS-02): both keep the two names alone, so that opening it again
+ * reads each side anew, with the viewer's own credentials. A resource compared with itself goes in
+ * neither (FR-CMP-02). It has no refresh of its own: refreshing each dashboard refreshes it.
  */
 @Component({
   selector: 'app-comparison',
@@ -81,6 +88,7 @@ type Problem =
     FailurePage,
     Header,
     NotFoundOrPrivate,
+    Pin,
     TipHost,
   ],
   templateUrl: './compare.html',
@@ -92,6 +100,8 @@ export class Comparison implements ComparisonData {
   private readonly injector = inject(Injector);
   private readonly toasts = inject(Toasts);
   private readonly announcer = inject(Announcer);
+  private readonly personal = inject(Personal);
+  private readonly user = inject(Session).user;
 
   /** What the comparison is of, and the names of the two, as the URL has them. */
   readonly kind = input.required<Compared>();
@@ -148,6 +158,18 @@ export class Comparison implements ComparisonData {
 
   protected readonly busy = computed(
     () => this.firstSummary() === undefined || this.secondSummary() === undefined,
+  );
+
+  /**
+   * The comparison, as history and pins keep it, with the names as GitHub spells them, once it
+   * shows both. Not of a resource with itself, which is no comparison (FR-CMP-02).
+   */
+  protected readonly comparison = computed(
+    (): ComparisonShortcut | undefined => {
+      const [first, second] = [this.firstKnown(), this.secondKnown()];
+      return this.shown() && first && second ? comparisonOf(first, second) : undefined;
+    },
+    { equal: (a, b) => a === b || (a !== undefined && b !== undefined && a.name === b.name) },
   );
 
   protected readonly crumbs = computed(() => [
@@ -207,6 +229,18 @@ export class Comparison implements ComparisonData {
         }
       });
     });
+
+    // A signed-in user's history records it, once, as GitHub spells its names (FR-PERS-01).
+    const viewed = computed(() => (this.user() ? this.comparison() : undefined), {
+      equal: (a, b) => a === b || (a !== undefined && b !== undefined && sameDashboard(a, b)),
+    });
+    toObservable(viewed)
+      .pipe(
+        filter((comparison) => comparison !== undefined),
+        mergeMap((comparison) => this.personal.record(comparison)),
+        takeUntilDestroyed(),
+      )
+      .subscribe();
   }
 
   protected retry(): void {

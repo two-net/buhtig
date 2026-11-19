@@ -179,6 +179,8 @@ mod tests {
             "/-/api/repositories/owner/repo",
             "/-/api/repositories/owner/repo/pin",
             "/-/api/organizations/acme/view",
+            "/-/api/comparisons/accounts/mona/acme/pin",
+            "/-/api/comparisons/repositories/owner/repo/acme/widget/view",
             "/-/api/session/../repositories/owner/repo",
         ] {
             assert!(!is_open::<Built>(path), "{path}");

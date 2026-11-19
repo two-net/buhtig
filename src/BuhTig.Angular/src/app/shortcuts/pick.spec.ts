@@ -1,22 +1,29 @@
 import {
+  ComparisonShortcut,
+  DashboardShortcut,
   MAX_SHORTCUTS,
   Picked,
   Shortcut,
+  comparisonOf,
+  isComparison,
   pick,
   resourceOf,
   sameDashboard,
+  shortcutLabel,
   shortcutOf,
+  shortcutPath,
+  sidesOf,
 } from './pick';
 
-function repository(name: string): Shortcut {
+function repository(name: string): DashboardShortcut {
   return { kind: 'repository', name };
 }
 
-function organization(name: string): Shortcut {
+function organization(name: string): DashboardShortcut {
   return { kind: 'organization', name };
 }
 
-function user(name: string): Shortcut {
+function user(name: string): DashboardShortcut {
   return { kind: 'user', name };
 }
 
@@ -112,5 +119,65 @@ describe('shortcutOf and resourceOf', () => {
     expect(resourceOf(organization('acme'))).toEqual({ kind: 'organization', org: 'acme' });
     expect(shortcutOf({ kind: 'user', login: 'mona' })).toEqual(user('mona'));
     expect(resourceOf(user('mona'))).toEqual({ kind: 'user', login: 'mona' });
+  });
+});
+
+describe('comparisons (FR-CMP-05)', () => {
+  const widgets: ComparisonShortcut = {
+    kind: 'repository_comparison',
+    name: 'acme/widget...octo/thing',
+  };
+
+  it('are named by both sides, as GitHub spells them, and lead to the comparison', () => {
+    expect(
+      comparisonOf(
+        { kind: 'repository', owner: 'acme', repo: 'widget' },
+        { kind: 'repository', owner: 'octo', repo: 'thing' },
+      ),
+    ).toEqual(widgets);
+    expect(
+      comparisonOf({ kind: 'user', login: 'mona' }, { kind: 'organization', org: 'acme' }),
+    ).toEqual({ kind: 'account_comparison', name: 'mona...acme' });
+    expect(isComparison(widgets)).toBe(true);
+    expect(isComparison(repository('acme/widget'))).toBe(false);
+    expect(shortcutPath(widgets)).toBe('/-/compare/acme/widget...octo/thing');
+    expect(shortcutPath(repository('acme/widget'))).toBe('/acme/widget');
+    expect(shortcutLabel(widgets)).toBe('acme/widget vs octo/thing');
+    expect(shortcutLabel(organization('acme'))).toBe('acme');
+  });
+
+  it('are of two resources, of one kind (FR-CMP-02)', () => {
+    expect(
+      comparisonOf(
+        { kind: 'repository', owner: 'acme', repo: 'widget' },
+        { kind: 'repository', owner: 'Acme', repo: 'Widget' },
+      ),
+    ).toBeUndefined();
+    expect(
+      comparisonOf(
+        { kind: 'repository', owner: 'acme', repo: 'widget' },
+        { kind: 'organization', org: 'acme' },
+      ),
+    ).toBeUndefined();
+  });
+
+  it('split where the second side begins, though a repository has dots in its name', () => {
+    expect(sidesOf({ kind: 'repository_comparison', name: 'acme/x......octo/y...z' })).toEqual([
+      'acme/x...',
+      'octo/y...z',
+    ]);
+    expect(sidesOf({ kind: 'account_comparison', name: 'mona...acme' })).toEqual(['mona', 'acme']);
+    expect(sidesOf({ kind: 'account_comparison', name: 'mona' })).toBeUndefined();
+  });
+
+  it('are one shortcut whatever the case of their names, and apart from dashboards', () => {
+    const respelled: ComparisonShortcut = { ...widgets, name: 'Acme/Widget...Octo/Thing' };
+    expect(sameDashboard(widgets, respelled)).toBe(true);
+    expect(sameDashboard(widgets, { ...widgets, name: 'octo/thing...acme/widget' })).toBe(false);
+    const picked: Picked[] = pick([widgets], [respelled, repository('acme/widget')]);
+    expect(picked).toEqual([
+      { ...widgets, pinned: true },
+      { ...repository('acme/widget'), pinned: false },
+    ]);
   });
 });

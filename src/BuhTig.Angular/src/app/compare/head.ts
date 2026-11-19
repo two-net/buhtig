@@ -27,7 +27,8 @@ interface Shown {
  * dashboard, what it is, its description, when its data was fetched (FR-DATA-06) and its page on
  * GitHub. Above them, what there is to say of its data, as on its dashboard: that it is saved
  * data (FR-DATA-05), or that GitHub keeps it from the viewer, and how to get access (FR-PAT-08).
- * A comparison has no Refresh or Pin: it is no dashboard (FR-CMP-05).
+ * A side has no Refresh or Pin: the comparison is pinned whole, and refreshed by refreshing each
+ * dashboard (FR-CMP-05).
  */
 @Component({
   selector: 'app-compare-head',

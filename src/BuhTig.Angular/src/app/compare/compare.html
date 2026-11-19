@@ -18,10 +18,15 @@
     }
   } @else {
     <div class="container">
-      <!-- Spaces in the text itself, which assistive technology reads the names apart by. -->
-      <h1 class="cmp-title">
-        {{ shownNames[0] }} <span class="vs">{{ VS }}</span> {{ shownNames[1] }}
-      </h1>
+      <div class="cmp-titlebar">
+        <!-- Spaces in the text itself, which assistive technology reads the names apart by. -->
+        <h1 class="cmp-title">
+          {{ shownNames[0] }} <span class="vs">{{ VS }}</span> {{ shownNames[1] }}
+        </h1>
+        @if (comparison(); as comparison) {
+          <app-pin [shortcut]="comparison" />
+        }
+      </div>
       <div class="cmp-heads">
         <app-compare-head [summary]="firstSummary()" [name]="shownNames[0]" />
         <app-compare-head

@@ -32,15 +32,19 @@
         (mousemove)="active.set(i)"
         (click)="open(row.item)"
       >
-        @if (row.item.source === 'typed') {
-          <app-icon [name]="ICONS[row.item.resource.kind]" />
+        @if (row.item.resource; as resource) {
+          @if (row.item.source === 'typed') {
+            <app-icon [name]="ICONS[resource.kind]" />
+          } @else {
+            <app-avatar
+              [name]="row.item.name.split('/')[0]"
+              [src]="row.item.avatar"
+              [size]="20"
+              [round]="resource.kind === 'user'"
+            />
+          }
         } @else {
-          <app-avatar
-            [name]="row.item.name.split('/')[0]"
-            [src]="row.item.avatar"
-            [size]="20"
-            [round]="row.item.resource.kind === 'user'"
-          />
+          <app-icon name="compare" />
         }
         <!-- Each part in an element of its own, so that no space comes between them. -->
         <span class="palette-name">

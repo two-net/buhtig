@@ -2,7 +2,7 @@ import { HttpClient, HttpErrorResponse, HttpStatusCode } from '@angular/common/h
 import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, map, of, throwError } from 'rxjs';
 import { resourceUrl } from '../dashboard/urls';
-import { Shortcut, resourceOf } from './pick';
+import { Shortcut, isComparison, resourceOf, sidesOf } from './pick';
 
 /** A signed-in user's pins, in their order, and what they viewed recently, newest first. */
 export interface PinsAndHistory {
@@ -10,19 +10,20 @@ export interface PinsAndHistory {
   recent: Viewed[];
 }
 
-/** A dashboard that the user viewed, and when they last did, as the server tells it. */
-export interface Viewed extends Shortcut {
-  viewed_at?: string;
-}
+/** A dashboard or a comparison that the user viewed, and when they last did, as the server tells it. */
+export type Viewed = Shortcut & { viewed_at?: string };
 
-/** Why the server did not pin or unpin a dashboard. */
+/** Why the server did not pin or unpin a dashboard or a comparison. */
 export type PinProblem =
-  /** The user has pinned 12 dashboards already, as many as they may (FR-PERS-02). */
+  /**
+   * The user has pinned 12 already, dashboards and comparisons together, as many as they may
+   * (FR-PERS-02).
+   */
   'too_many' | 'failed';
 
 /**
- * A signed-in user's personal shortcuts (§4.8): the dashboards they viewed recently, and those
- * they pinned. The server keeps them, for signed-in users alone (FR-ACC-02).
+ * A signed-in user's personal shortcuts (§4.8): the dashboards and comparisons they viewed
+ * recently, and those they pinned. The server keeps them, for signed-in users alone (FR-ACC-02).
  */
 @Injectable({ providedIn: 'root' })
 export class Personal {
@@ -67,9 +68,17 @@ export class Personal {
   }
 }
 
-/** Where the server keeps what concerns `shortcut`'s dashboard. */
+/** Where the server keeps what concerns `shortcut`'s dashboard, or its comparison. */
 function url(shortcut: Shortcut): string {
-  return resourceUrl(resourceOf(shortcut));
+  if (!isComparison(shortcut)) {
+    return resourceUrl(resourceOf(shortcut));
+  }
+  const kind = shortcut.kind === 'repository_comparison' ? 'repositories' : 'accounts';
+  const names = (sidesOf(shortcut) ?? [])
+    .flatMap((side) => side.split('/'))
+    .map(encodeURIComponent)
+    .join('/');
+  return `/-/api/comparisons/${kind}/${names}`;
 }
 
 /** The pins that `answer` gives, or the `PinProblem` that says why it did not. */

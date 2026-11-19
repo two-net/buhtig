@@ -151,11 +151,14 @@ export const STILL_SAVED = "GitHub couldn't be reached. Still showing saved data
 
 export const REFRESH_FAILED = "BuhTig couldn't refresh this dashboard. Try again in a moment.";
 
-/** FR-PERS-02: the button that pins a dashboard, so that it comes first on the home page. */
+/**
+ * FR-PERS-02: the button that pins a dashboard, or a comparison, so that it comes first on the
+ * home page.
+ */
 export const PIN = 'Pin';
 export const PINNED_LABEL = 'Pinned';
 
-/** FR-PERS-02: a dashboard just pinned, or unpinned. */
+/** FR-PERS-02: a dashboard or a comparison just pinned, or unpinned. */
 export function pinned(name: string): string {
   return `Pinned ${name}`;
 }
@@ -163,8 +166,9 @@ export function unpinned(name: string): string {
   return `Unpinned ${name}`;
 }
 
-/** FR-PERS-02: a user may pin up to 12 dashboards. */
-export const PIN_LIMIT = 'You can pin up to 12 dashboards. Unpin one in Settings first.';
+/** FR-PERS-02: a user may pin up to 12 dashboards and comparisons together. */
+export const PIN_LIMIT =
+  'You can pin up to 12 dashboards and comparisons. Unpin one in Settings first.';
 
 export const PIN_FAILED = "BuhTig couldn't change your pins. Try again in a moment.";
 

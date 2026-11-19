@@ -1273,6 +1273,27 @@ mod tests {
         .insert(db)
         .await
         .unwrap();
+        // A comparison viewed and pinned, as dashboards are (FR-CMP-05).
+        history_entry::ActiveModel {
+            user_id: Set(user_id),
+            resource_kind: Set(ResourceKind::RepositoryComparison),
+            resource_name: Set("owner/repo...acme/widget".to_owned()),
+            last_viewed_at: Set(at(1)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+        pin::ActiveModel {
+            user_id: Set(user_id),
+            resource_kind: Set(ResourceKind::AccountComparison),
+            resource_name: Set("owner...acme".to_owned()),
+            position: Set(1),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
         let watchlist = watchlist::ActiveModel {
             user_id: Set(user_id),
             name: Set("Dependencies".to_owned()),
@@ -1382,9 +1403,9 @@ mod tests {
                 .unwrap()
                 .len()
         };
-        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 1, 1, 1, 1]);
+        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 2, 2, 1, 1]);
         let bobs = rows_of(&db, bob_id).await;
-        assert_eq!(bobs, [1, 2, 2, 1, 1, 1, 1, 1]);
+        assert_eq!(bobs, [1, 2, 2, 1, 2, 2, 1, 1]);
         let delete = async |headers| delete(Extension(sessions.clone()), headers).await;
 
         // A visitor has no one to delete.
@@ -1396,7 +1417,7 @@ mod tests {
                 String::new()
             )
         );
-        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 1, 1, 1, 1]);
+        assert_eq!(rows_of(&db, mona_id).await, [1, 2, 2, 1, 2, 2, 1, 1]);
 
         // FR-PERS-04, DR-04: all of Mona's goes, and the browser forgets her session.
         let response = delete(carrying(&here)).await;

@@ -14,13 +14,17 @@
     <ul class="side-repos">
       @for (item of shown(); track item.kind + item.name) {
         <li>
-          <a [routerLink]="'/' + item.name" [title]="item.pinned ? PINNED : RECENTLY_VIEWED">
-            <app-avatar
-              [name]="item.name.split('/')[0]"
-              [size]="16"
-              [round]="item.kind !== 'organization'"
-            />
-            <span>{{ item.name }}</span>
+          <a [routerLink]="path(item)" [title]="item.pinned ? PINNED : RECENTLY_VIEWED">
+            @if (isComparison(item)) {
+              <app-icon name="compare" />
+            } @else {
+              <app-avatar
+                [name]="avatarLogin(item)"
+                [size]="16"
+                [round]="item.kind !== 'organization'"
+              />
+            }
+            <span>{{ label(item) }}</span>
             @if (item.pinned) {
               <app-icon name="pin-fill" /><span class="sr">({{ PINNED }})</span>
             }
