@@ -61,6 +61,7 @@
 }
 .forked {
   display: flex;
+  flex-wrap: wrap;
   flex-basis: 100%;
   align-items: center;
   gap: 4px;
@@ -72,6 +73,7 @@
 .forked app-icon {
   --icon: 12px;
 }
+
 .orghead {
   display: flex;
   flex-wrap: wrap;

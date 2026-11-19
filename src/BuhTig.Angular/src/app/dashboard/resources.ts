@@ -591,6 +591,16 @@ export type Glanced =
   | { status: 'invalid' }
   | { status: 'denied'; denied: Denied };
 
+/** How far a fork's default branch is from its parent's (FR-REPO-19). */
+export interface ParentComparison {
+  /** The parent's `owner/repo`, as GitHub spells it. */
+  parent: string;
+  /** How many commits the fork's default branch has that its parent's has not. */
+  aheadBy: number;
+  /** How many commits the parent's default branch has that the fork's has not. */
+  behindBy: number;
+}
+
 /** How many lines were added to and deleted from a repository each week (FR-REPO-15). */
 export interface CodeFrequency {
   /** The last 52, oldest first, the current one last, or none for an empty repository. */
@@ -995,6 +1005,13 @@ interface WorkflowRunsAnswer extends DatedAnswer {
     url: string | null;
   } | null;
   hidden: boolean;
+}
+
+/** The server's answer about a fork, for how far it is from its parent. */
+interface ParentComparisonAnswer extends DatedAnswer {
+  parent: string;
+  ahead_by: number;
+  behind_by: number;
 }
 
 /** The server's answer about a repository, for its code frequency chart. */
@@ -1583,6 +1600,27 @@ export class Resources {
           additions: weeks.reduce((total, week) => total + week.additions, 0),
           deletions: weeks.reduce((total, week) => total + week.deletions, 0),
           tooLarge: answer.too_large === true,
+          ...freshness(answer),
+        };
+      }),
+    );
+  }
+
+  /**
+   * How far the default branch of the fork `owner/repo` is from its parent's (FR-REPO-19), which
+   * fails as `commitActivity` does, and when the server names no parent there could be a link to.
+   */
+  parentComparison(owner: string, repo: string): Observable<Dated<ParentComparison>> {
+    return this.part<ParentComparisonAnswer>(owner, repo, 'parent').pipe(
+      map((answer) => {
+        const parent = answer.parent;
+        if (typeof parent !== 'string' || canonicalPath(parent, 'repository') === undefined) {
+          throw new Error('The server names no parent of the fork.');
+        }
+        return {
+          parent,
+          aheadBy: count(answer.ahead_by),
+          behindBy: count(answer.behind_by),
           ...freshness(answer),
         };
       }),

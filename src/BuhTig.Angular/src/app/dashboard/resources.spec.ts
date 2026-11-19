@@ -861,6 +861,34 @@ describe('Resources', () => {
     expect(computing.error).toBeInstanceOf(Computing);
   });
 
+  it("gives how far a fork is from its parent, and fails without a parent's name (FR-REPO-19)", () => {
+    const seen = outcome(resources.parentComparison('acme', 'widget'));
+    http.expectOne(`${WIDGET}/parent`).flush({
+      parent: 'Upstream/Widget',
+      ahead_by: 3,
+      behind_by: 12,
+      fetched_at: '2026-10-22T12:00:00.000Z',
+      stale: 'github',
+    });
+    expect(seen.value).toEqual({
+      parent: 'Upstream/Widget',
+      aheadBy: 3,
+      behindBy: 12,
+      fetchedAt: new Date('2026-10-22T12:00:00.000Z'),
+      stale: 'github',
+    });
+
+    for (const parent of ['../evil', 'https://evil.example/a/b', null]) {
+      const odd = outcome(resources.parentComparison('acme', 'widget'));
+      http.expectOne(`${WIDGET}/parent`).flush({ parent, ahead_by: 1, behind_by: 1 });
+      expect(odd.error, `${parent}`).toBeInstanceOf(Error);
+    }
+
+    const failed = outcome(resources.parentComparison('acme', 'widget'));
+    http.expectOne(`${WIDGET}/parent`).flush(null, { status: 502, statusText: 'Bad Gateway' });
+    expect(failed.error).toBeDefined();
+  });
+
   it('gives how the figures changed, as observed, leaving out what it cannot date (FR-REPO-17)', () => {
     const seen = outcome(resources.trends('acme', 'widget'));
     const first = {

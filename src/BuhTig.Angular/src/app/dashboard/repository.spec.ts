@@ -168,6 +168,7 @@ describe('RepositoryDashboard', () => {
       downloads: 7,
       truncated: false,
     },
+    parent: { parent: 'upstream/widget', ahead_by: 3, behind_by: 0 },
     trends: {
       scope: 'shared',
       kept_days: 90,
@@ -394,6 +395,29 @@ describe('RepositoryDashboard', () => {
     expect(page().querySelector('app-repository-commits li .ttl')?.textContent).toBe(
       'Steady the widgets',
     );
+  });
+
+  it('compares a fork with its parent once, whatever its tab, and nothing else (FR-REPO-19)', async () => {
+    const fork = { ...WIDGET, fork: true, parent: 'upstream/widget' };
+    await open('/acme/widget/activity', '/-/api/repositories/acme/widget', fork);
+    expect(await answerParts()).toEqual(
+      [...OVERVIEW_PARTS, 'code-frequency', 'parent', 'trends', 'workflow-runs']
+        .filter((part) => !['commits', 'issues', 'languages'].includes(part))
+        .concat(['commits'])
+        .sort(),
+    );
+    expect(shown(page().querySelector('app-fork-status')!)).toBe(
+      '3 commits ahead of upstream/widget Compare with parent',
+    );
+    await harness.navigateByUrl('/acme/widget/releases');
+    await harness.fixture.whenStable();
+    expect(await answerParts()).toEqual(['release-cadence']);
+
+    // A repository that is no fork is compared with nothing.
+    await harness.navigateByUrl('/-/about');
+    await open('/acme/widget', '/-/api/repositories/acme/widget', WIDGET);
+    expect(await answerParts()).toEqual(OVERVIEW_PARTS);
+    expect(page().querySelector('app-fork-status')).toBeNull();
   });
 
   it("moves to GitHub's spelling of the names, on the same tab, in place (FR-NAV-04)", async () => {

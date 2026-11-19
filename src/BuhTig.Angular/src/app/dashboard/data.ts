@@ -27,6 +27,7 @@ import {
   Stats,
   TopRepositories,
   Trends,
+  ParentComparison,
   WorkflowRuns,
 } from './resources';
 
@@ -61,6 +62,8 @@ export abstract class RepositoryData {
   abstract readonly releaseCadence: () => Loader<ReleaseCadence>;
   /** FR-REPO-17, for its Activity tab. */
   abstract readonly trends: () => Loader<Dated<Trends>>;
+  /** FR-REPO-19, for the head of a fork, asked for only of one whose parent it names. */
+  abstract readonly parentComparison: () => Loader<Dated<ParentComparison>>;
   /**
    * FR-REPO-06: the page of its issues, or of its pull requests, of `kind`, that `view` shows,
    * for its Issues or Pull requests tab, loaded anew as either changes, on each refresh, and when

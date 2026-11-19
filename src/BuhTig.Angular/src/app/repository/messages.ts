@@ -8,6 +8,7 @@ import {
   IssueOrPullRequest,
   MergeVelocity,
   Observation,
+  ParentComparison,
   Period,
   ReleaseCadence,
   Unsupported,
@@ -720,3 +721,32 @@ export function commitComparison({ weeks, recent, before }: CommitComparison): s
 }
 
 export const COMMITS = 'Commits';
+
+/**
+ * FR-REPO-19: how far a fork's default branch is from its parent's, the parent named, such as "3
+ * commits ahead of and 12 commits behind Upstream/Widget", or "Even with Upstream/Widget".
+ */
+export function parentStanding({ parent, aheadBy, behindBy }: ParentComparison): string {
+  if (aheadBy === 0 && behindBy === 0) {
+    return `Even with ${parent}`;
+  }
+  if (behindBy === 0) {
+    return `${commits(aheadBy)} ahead of ${parent}`;
+  }
+  if (aheadBy === 0) {
+    return `${commits(behindBy)} behind ${parent}`;
+  }
+  return `${commits(aheadBy)} ahead of and ${commits(behindBy)} behind ${parent}`;
+}
+
+/** FR-REPO-19: what a fork's head says while it compares the fork with its parent. */
+export function comparingWith(parent: string): string {
+  return `Comparing with ${parent}…`;
+}
+
+/** FR-REPO-19, FR-REPO-09: what a fork's head says when it could not compare it with its parent. */
+export function notComparedWith(parent: string): string {
+  return `Couldn't compare with ${parent}.`;
+}
+
+export const COMPARE_WITH_PARENT = 'Compare with parent';

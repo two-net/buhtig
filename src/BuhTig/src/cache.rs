@@ -258,6 +258,12 @@ enum Lookup {
 #[derive(Clone, Copy)]
 enum Fetch<'a> {
     One(&'a Path),
+    /// One resource, of which only the members `fields` are kept, such as the counts of a
+    /// comparison of two branches, without the commits and files that GitHub sends too.
+    Fields {
+        path: &'a Path,
+        fields: &'a [&'a str],
+    },
     /// One resource that may not exist, such as a repository's latest release: GitHub's
     /// "not found" is then an answer, cached as any other, rather than an error.
     Optional(&'a Path),
@@ -281,6 +287,8 @@ enum Fetch<'a> {
 impl Fetch<'_> {
     /// The `resource_key` of its cache entries, such as `/repos/owner/repo/languages`,
     /// `/repos/owner/repo/releases/latest optional` for a resource that may not exist,
+    /// `/repos/owner/repo/compare/a...b fields=ahead_by,behind_by` for a resource of which
+    /// only those members are kept,
     /// `/orgs/org/repos?sort=pushed limit=1000` for a list, with ` fields=name,language`
     /// after it if only those members of each item are kept,
     /// `/orgs/org/public_members count` for how many items a list has, or
@@ -290,6 +298,7 @@ impl Fetch<'_> {
     fn key(&self) -> String {
         match self {
             Fetch::One(path) => path.to_string(),
+            Fetch::Fields { path, fields } => format!("{path} fields={}", fields.join(",")),
             Fetch::Optional(path) => format!("{path} optional"),
             Fetch::Count(path) => format!("{path} count"),
             Fetch::Page { path, fields: [] } => format!("{path} page"),
@@ -311,6 +320,7 @@ impl Fetch<'_> {
     fn holds(&self, data: &Value) -> bool {
         match self {
             Fetch::One(_) => true,
+            Fetch::Fields { .. } => data.is_object(),
             Fetch::Optional(_) => data.get("found").is_some_and(Value::is_boolean),
             Fetch::List { .. } => {
                 data.get("items").is_some_and(Value::is_array)
@@ -334,7 +344,9 @@ impl Fetch<'_> {
         etag: Option<&str>,
     ) -> Result<Reply<Value>, github::Error> {
         match self {
-            Fetch::One(path) => github.get(credential, path, etag).await,
+            Fetch::One(path) | Fetch::Fields { path, .. } => {
+                github.get(credential, path, etag).await
+            }
             Fetch::Optional(path) => match github.get(credential, path, etag).await {
                 Err(github::Error::NotFound) => Ok(Reply::Fresh {
                     data: optional_value(None),
@@ -367,11 +379,13 @@ impl Fetch<'_> {
         }
     }
 
-    /// Leaves only the members of each item of a list or a page that it keeps, if it names
-    /// them.
+    /// Leaves only the members of a resource that it keeps, or of each item of a list or a
+    /// page, if it names them.
     fn trim(&self, data: &mut Value) {
-        let (Fetch::List { fields, .. } | Fetch::Page { fields, .. }) = self else {
-            return;
+        let fields = match self {
+            Fetch::Fields { fields, .. } => return keep(data, fields),
+            Fetch::List { fields, .. } | Fetch::Page { fields, .. } => fields,
+            Fetch::One(_) | Fetch::Optional(_) | Fetch::Count(_) => return,
         };
         if fields.is_empty() {
             return;
@@ -509,6 +523,21 @@ impl Cache {
     ) -> Result<Outcome<Value>, Error> {
         self.lookup(viewer, dashboard, Fetch::One(path), &ChronoUtc::now)
             .await
+    }
+
+    /// One resource, for a dashboard, as [`Cache::get`], with only its members `fields`, so
+    /// that a large answer of which a dashboard shows little, such as a comparison of two
+    /// branches, is quick to store and to read again (NFR-PERF-03). Whether GitHub marks it
+    /// private is still told from all that it gave (FR-DATA-04).
+    pub async fn get_fields(
+        &self,
+        viewer: &Viewer,
+        dashboard: &str,
+        path: &Path,
+        fields: &[&str],
+    ) -> Result<Outcome<Value>, Error> {
+        let fetch = Fetch::Fields { path, fields };
+        self.lookup(viewer, dashboard, fetch, &ChronoUtc::now).await
     }
 
     /// One resource that may not exist, for a dashboard, as [`Cache::get`]: `None` when
@@ -1749,6 +1778,19 @@ mod tests {
         ) -> Result<Outcome<Value>, Error> {
             self.lookup(viewer, dashboard, Fetch::One(path), &move || now)
                 .await
+        }
+
+        /// [`Cache::get_fields`] at `now`.
+        async fn get_fields_at(
+            &self,
+            viewer: &Viewer,
+            dashboard: &str,
+            path: &Path,
+            fields: &[&str],
+            now: DateTimeUtc,
+        ) -> Result<Outcome<Value>, Error> {
+            let fetch = Fetch::Fields { path, fields };
+            self.lookup(viewer, dashboard, fetch, &move || now).await
         }
 
         /// [`Cache::get_optional`] at `now`.
@@ -3280,6 +3322,57 @@ mod tests {
                        "author": {"login": "alice", "id": 1}}),
                 json!({"tag_name": "v1", "assets": [], "author": null}),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resource_may_keep_only_some_of_its_members_and_still_be_revalidated() {
+        let setup = setup().await;
+        setup.answer(|request| match header(request, IF_NONE_MATCH) {
+            Some(r#"W/"v1""#) => answer(304, &[], ""),
+            _ => answer(
+                200,
+                &[("etag", r#"W/"v1""#)],
+                r#"{"status":"diverged","ahead_by":2,"behind_by":5,
+                    "commits":[{"sha":"a"}],"files":[{"filename":"a.rs","patch":"@@"}]}"#,
+            ),
+        });
+        let compare = path(&["repos", "owner", "repo", "compare", "up:main...owner:main"]);
+        let fields = ["status", "ahead_by", "behind_by"];
+        let kept = json!({"status": "diverged", "ahead_by": 2, "behind_by": 5});
+
+        let first = data(
+            setup
+                .cache
+                .get_fields_at(&visitor(), DASHBOARD, &compare, &fields, at(0))
+                .await,
+        );
+        assert_eq!(first.data, kept);
+        let rows = setup.rows().await;
+        assert_eq!(
+            (rows[0].resource_key.as_str(), &rows[0].data),
+            (
+                "/repos/owner/repo/compare/up:main...owner:main fields=status,ahead_by,behind_by",
+                &kept
+            )
+        );
+
+        // Within the TTL, from the cache, and after it, conditionally.
+        let again = setup
+            .cache
+            .get_fields_at(&visitor(), DASHBOARD, &compare, &fields, at(14))
+            .await;
+        assert_eq!(data(again).data, kept);
+        assert_eq!(setup.stub.requests().len(), 1);
+        let confirmed = setup
+            .cache
+            .get_fields_at(&visitor(), DASHBOARD, &compare, &fields, at(16))
+            .await;
+        assert_eq!(data(confirmed).data, kept);
+        let requests = setup.stub.requests();
+        assert_eq!(
+            sent_header(&requests[1].1, IF_NONE_MATCH),
+            Some(r#"W/"v1""#)
         );
     }
 

@@ -129,7 +129,8 @@ fn github(revoked: Arc<AtomicBool>) -> Arc<Stub> {
 const ETAG: &[(&str, &str)] = &[("etag", "\"octo\"")];
 
 /// Octo's repository `name`, as GitHub gives it: `secret` and `leaky` are private, and
-/// `inner` internal, which GitHub marks private too.
+/// `inner` internal, which GitHub marks private too. `secret` is a fork of
+/// `upstream/origin`.
 fn repository(name: &str) -> Value {
     let (visibility, id) = match name {
         "secret" => ("private", 1002),
@@ -138,7 +139,7 @@ fn repository(name: &str) -> Value {
         "flaky" => ("public", 1005),
         _ => ("public", 1001),
     };
-    json!({
+    let mut repository = json!({
         "id": id,
         "name": name,
         "full_name": format!("octo/{name}"),
@@ -151,7 +152,12 @@ fn repository(name: &str) -> Value {
         "forks_count": 5,
         "subscribers_count": 3,
         "open_issues_count": 7,
-    })
+    });
+    if name == "secret" {
+        repository["fork"] = json!(true);
+        repository["parent"] = json!({"full_name": "upstream/origin", "default_branch": "main"});
+    }
+    repository
 }
 
 /// What GitHub gives under Octo's repository `name` at `what` (FR-REPO-06, FR-REPO-13,
@@ -172,6 +178,11 @@ fn under(name: &str, what: &str) -> Value {
         "labels" => json!([{"name": "bug", "color": "d73a4a"}]),
         "releases" => json!([{"tag_name": "v1", "draft": false, "prerelease": false,
                               "published_at": at, "assets": []}]),
+        // Its default branch, as it compares with its parent's (FR-REPO-19).
+        compared if compared.starts_with("compare/") => {
+            json!({"status": "ahead", "ahead_by": 2, "behind_by": 0,
+                   "files": [{"filename": "secret.txt", "patch": "+secret"}]})
+        }
         "releases/latest" => json!({"tag_name": "v1", "published_at": at,
             "html_url": format!("https://github.com/octo/{name}/releases/tag/v1")}),
         "actions/runs" => json!({"total_count": 1, "workflow_runs": [{
@@ -1000,6 +1011,8 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
             "/-/api/repositories/octo/secret/trends",
             "/-/api/repositories/octo/inner/trends",
             "/-/api/repositories/octo/leaky/trends",
+            // How far the private fork is from its parent (FR-REPO-19).
+            "/-/api/repositories/octo/secret/parent",
             "/-/api/accounts/hubot",
             "/-/api/users/hubot",
             "/-/api/users/hubot/stats",
@@ -1051,14 +1064,21 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
         "0"
     );
     // The repository, and its runs, open issues, releases, pull requests searched for, and
-    // the count of those open, which its trends observe, and a page of each of its tabs'
-    // lists, and its labels.
+    // the count of those open, which its trends observe, a page of each of its tabs'
+    // lists, its labels, and how it compares with its parent.
     assert_eq!(
         served.psql(
             "SELECT count(*) FROM cache_entries \
              WHERE scope <> 'shared' AND resource_key LIKE '%secret%'"
         ),
-        "9"
+        "10"
+    );
+    assert_eq!(
+        served.psql(
+            "SELECT count(*) FROM cache_entries \
+             WHERE scope <> 'shared' AND resource_key LIKE '/repos/octo/secret/compare/%'"
+        ),
+        "1"
     );
     let hubot = served.psql("SELECT id FROM users WHERE login = 'hubot'");
     let pat = served.psql(&format!(

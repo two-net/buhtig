@@ -4,9 +4,11 @@ import { Component, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
+import { RepositoryData } from '../dashboard/data';
 import { HeadActions } from '../dashboard/head-actions';
 import { OPEN_ON_GITHUB } from '../dashboard/messages';
-import { Repository } from '../dashboard/resources';
+import { Dated, ParentComparison, Repository } from '../dashboard/resources';
+import { Load } from '../widget/load';
 import { RepositoryHead } from './head';
 
 @Component({
@@ -45,9 +47,28 @@ describe('RepositoryHead', () => {
   let fixture: ComponentFixture<Host>;
   let http: HttpTestingController;
 
+  const compared = signal<Load<Dated<ParentComparison>>>({
+    status: 'ready',
+    data: {
+      parent: 'Upstream/Widget',
+      aheadBy: 3,
+      behindBy: 12,
+      fetchedAt: undefined,
+      stale: undefined,
+    },
+  });
+
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting()],
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        {
+          provide: RepositoryData,
+          useValue: { parentComparison: () => ({ state: compared, retry: () => {} }) },
+        },
+      ],
     });
     http = TestBed.inject(HttpTestingController);
     fixture = TestBed.createComponent(Host);
@@ -101,12 +122,17 @@ describe('RepositoryHead', () => {
   });
 
   it("says what a fork was forked from, linking to the parent's dashboard", async () => {
-    expect(forked()?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Forked from Upstream/Widget');
+    expect(forked()?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'Forked from Upstream/Widget 3 commits ahead of and 12 commits behind Upstream/Widget ' +
+        'Compare with parent',
+    );
     expect(forked()?.querySelector('a')?.getAttribute('href')).toBe('/Upstream/Widget');
     // GitHub did not say which.
     await show({ parent: undefined });
     expect(forked()?.textContent?.trim()).toBe('Fork');
     expect(forked()?.querySelector('a')).toBeNull();
+    // Nor is it compared with a parent GitHub does not name (FR-REPO-19).
+    expect(element().querySelector('app-fork-status')).toBeNull();
     await show({ fork: false, parent: undefined });
     expect(forked()).toBeNull();
   });

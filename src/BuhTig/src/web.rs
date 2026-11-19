@@ -272,6 +272,10 @@ pub fn router(
             get(repositories::code_frequency).with_state(cache.clone()),
         )
         .route(
+            "/-/api/repositories/{owner}/{repo}/parent",
+            get(repositories::parent).with_state(cache.clone()),
+        )
+        .route(
             "/-/api/repositories/{owner}/{repo}/release-cadence",
             get(repositories::release_cadence).with_state(cache.clone()),
         )

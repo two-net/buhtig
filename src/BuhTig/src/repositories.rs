@@ -1151,6 +1151,108 @@ pub async fn code_frequency(
     }
 }
 
+/// The members of a comparison of two branches that [`parent`] keeps. GitHub sends the
+/// commits and the changed files too, which no dashboard shows.
+const COMPARED: &[&str] = &["status", "ahead_by", "behind_by"];
+
+/// `/-/api/repositories/{owner}/{repo}/parent`: how far a fork's default branch is from its
+/// parent's (FR-REPO-19),
+///
+/// ```json
+/// {"parent": "Upstream/Widget", "ahead_by": 3, "behind_by": 12,
+///  "fetched_at": …, "stale": null | "held" | "github"}
+/// ```
+///
+/// `ahead_by` is how many commits the fork's default branch has that its parent's has not,
+/// and `behind_by` how many the parent's has that the fork's has not. `parent` is the
+/// parent's name, as GitHub spells it. Both counts come from one comparison of the two
+/// branches, read as part of the dashboard's load: cached for the viewer as all that is
+/// under the repository is (FR-DATA-04), and asked again conditionally (FR-DATA-09).
+///
+/// 404, without asking GitHub, for a repository that is no fork, or whose parent, or
+/// either default branch, GitHub does not name. Otherwise its statuses are those of
+/// [`commit_activity`], and 404 too when GitHub cannot compare the branches, as when they
+/// have no history in common.
+pub async fn parent(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    let Some(fork) = Fork::of(&repository) else {
+        return status(StatusCode::NOT_FOUND);
+    };
+    let path = repository
+        .path(&["compare", &fork.basehead()])
+        .query("per_page", "1");
+    let compared = cache
+        .get_fields(&repository.viewer, &repository.dashboard, &path, COMPARED)
+        .await;
+    let compared = match data(compared) {
+        Ok(compared) => compared,
+        Err(code) => return status(code),
+    };
+    let count = |key| compared.data.get(key).and_then(Value::as_u64);
+    match (count("ahead_by"), count("behind_by")) {
+        (Some(ahead), Some(behind)) => respond(dated_by(
+            json!({ "parent": fork.parent, "ahead_by": ahead, "behind_by": behind }),
+            &compared,
+        )),
+        _ => status(StatusCode::BAD_GATEWAY),
+    }
+}
+
+/// A fork, as [`parent`] compares it with the repository it was forked from.
+struct Fork<'a> {
+    /// The fork's name, and its parent's, as GitHub spells them.
+    name: &'a str,
+    parent: &'a str,
+    /// Their default branches.
+    branch: &'a str,
+    parent_branch: &'a str,
+}
+
+impl<'a> Fork<'a> {
+    /// The repository as a fork, if GitHub says it is one and names its parent and both
+    /// default branches.
+    fn of(repository: &'a Under) -> Option<Fork<'a>> {
+        let data = &repository.data;
+        if data.get("fork") != Some(&Value::Bool(true)) {
+            return None;
+        }
+        let parent = data
+            .pointer("/parent/full_name")
+            .and_then(Value::as_str)
+            .filter(|parent| names(parent).is_some())?;
+        let parent_branch = data
+            .pointer("/parent/default_branch")
+            .and_then(Value::as_str)
+            .filter(|branch| !branch.is_empty())?;
+        Some(Fork {
+            name: &repository.name,
+            parent,
+            branch: text(data, "default_branch")?,
+            parent_branch,
+        })
+    }
+
+    /// GitHub's `base...head` of the parent's default branch and the fork's, each named
+    /// with its owner, as GitHub compares branches of two repositories of one network.
+    fn basehead(&self) -> String {
+        let owner = |name: &'a str| name.split_once('/').map_or(name, |(owner, _)| owner);
+        format!(
+            "{}:{}...{}:{}",
+            owner(self.parent),
+            self.parent_branch,
+            owner(self.name),
+            self.branch
+        )
+    }
+}
+
 /// `/-/api/repositories/{owner}/{repo}/release-cadence`: how often the repository was
 /// released, and how many times its releases' files were downloaded, over its 100 latest
 /// releases (FR-REPO-16),
@@ -2853,10 +2955,11 @@ mod tests {
         IssueList,
         PullList,
         Labels,
+        Parent,
     }
 
     impl Api {
-        const ALL: [Api; 17] = [
+        const ALL: [Api; 18] = [
             Api::Summary,
             Api::Stats,
             Api::CommitActivity,
@@ -2874,6 +2977,7 @@ mod tests {
             Api::IssueList,
             Api::PullList,
             Api::Labels,
+            Api::Parent,
         ];
     }
 
@@ -2922,6 +3026,7 @@ mod tests {
                 Api::IssueList => issue_list(cache, visitor, names, Query(HashMap::new())).await,
                 Api::PullList => pull_list(cache, visitor, names, Query(HashMap::new())).await,
                 Api::Labels => labels(cache, visitor, names).await,
+                Api::Parent => parent(cache, visitor, names).await,
             }
         })
         .await;
@@ -5007,6 +5112,141 @@ mod tests {
                 StatusCode::OK,
                 json!({"weeks": [], "too_large": true, "stale": null})
             )
+        );
+    }
+
+    /// `acme/{repo}`, a fork of `Upstream/Widget` whose default branch is `dev`, as GitHub
+    /// gives it.
+    fn fork_of_widget(repo: &str) -> String {
+        json!({
+            "full_name": format!("acme/{repo}"), "private": false, "fork": true,
+            "default_branch": "dev",
+            "parent": {"full_name": "Upstream/Widget", "default_branch": "main"},
+        })
+        .to_string()
+    }
+
+    /// A GitHub with forks of `Upstream/Widget` that are ahead of it and behind it, even
+    /// with it, of no history in common with it, and whose comparison GitHub fails, and
+    /// with repositories that are no fork, or name no parent.
+    fn forks() -> Arc<Stub> {
+        Stub::new(|request| {
+            let path = request.uri().path().to_ascii_lowercase();
+            let (repo, compared) = match path.strip_prefix("/repos/acme/") {
+                Some(rest) => rest.split_once('/').unwrap_or((rest, "")),
+                None => return answer(404, &[], r#"{"message": "Not Found"}"#),
+            };
+            let both = compared == "compare/upstream:main...acme:dev";
+            match (repo, compared) {
+                ("ahead" | "even" | "orphan" | "flaky", "") => {
+                    answer(200, &[], &fork_of_widget(repo))
+                }
+                ("plain", "") => answer(
+                    200,
+                    &[],
+                    r#"{"full_name": "acme/plain", "private": false, "fork": false,
+                        "default_branch": "main"}"#,
+                ),
+                ("odd", "") => answer(200, &[], ODD),
+                ("ahead", _) if both => answer(
+                    200,
+                    &[("etag", r#"W/"c""#)],
+                    r#"{"status": "diverged", "ahead_by": 3, "behind_by": 12,
+                        "commits": [{"sha": "a"}], "files": [{"filename": "a.rs", "patch": "@@"}]}"#,
+                ),
+                ("even", _) if both => answer(
+                    200,
+                    &[],
+                    r#"{"status": "identical", "ahead_by": 0, "behind_by": 0}"#,
+                ),
+                ("flaky", _) if both => answer(500, &[], r#"{"message": "Server Error"}"#),
+                _ => answer(404, &[], r#"{"message": "Not Found"}"#),
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn a_fork_is_compared_with_its_parent_as_part_of_its_dashboards_load() {
+        let stub = forks();
+        // A visitor who may load one dashboard loads this one whole.
+        let cache = cache(&stub, 1).await;
+        assert_eq!(
+            ask(&cache, Api::Summary, "acme", "ahead").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            ask(&cache, Api::Parent, "acme", "ahead").await,
+            (
+                StatusCode::OK,
+                json!({"parent": "Upstream/Widget", "ahead_by": 3, "behind_by": 12,
+                       "stale": null})
+            )
+        );
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://api.github.com/repos/acme/ahead",
+                "https://api.github.com/repos/acme/ahead/compare/Upstream:main...acme:dev?per_page=1",
+            ]
+        );
+        // Asked again, it is from the cache.
+        assert_eq!(
+            ask(&cache, Api::Parent, "acme", "ahead").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(stub.urls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_fork_even_with_its_parent_is_ahead_and_behind_by_nothing() {
+        let stub = forks();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Parent, "acme", "even").await,
+            (
+                StatusCode::OK,
+                json!({"parent": "Upstream/Widget", "ahead_by": 0, "behind_by": 0,
+                       "stale": null})
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_comparison_github_does_not_give_is_told_as_it_fails() {
+        let stub = forks();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Parent, "acme", "orphan").await,
+            (StatusCode::NOT_FOUND, Value::Null)
+        );
+        assert_eq!(
+            ask(&cache, Api::Parent, "acme", "flaky").await.0,
+            StatusCode::BAD_GATEWAY
+        );
+        // The dashboard's own data is still there.
+        assert_eq!(
+            ask(&cache, Api::Summary, "acme", "flaky").await.0,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn a_repository_that_is_no_fork_of_a_named_parent_is_not_compared() {
+        let stub = forks();
+        let cache = cache(&stub, 30).await;
+        for repo in ["plain", "odd"] {
+            assert_eq!(
+                ask(&cache, Api::Parent, "acme", repo).await,
+                (StatusCode::NOT_FOUND, Value::Null),
+                "{repo}"
+            );
+        }
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://api.github.com/repos/acme/plain",
+                "https://api.github.com/repos/acme/odd",
+            ]
         );
     }
 

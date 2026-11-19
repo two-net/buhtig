@@ -5,6 +5,7 @@ import { HeadActions } from '../dashboard/head-actions';
 import { Repository } from '../dashboard/resources';
 import { Icon } from '../icon/icon';
 import { Known } from '../search/parse';
+import { ForkStatus } from './fork-status';
 
 /** What a repository's visibility is called. */
 export const VISIBILITY = { public: 'Public', private: 'Private', internal: 'Internal' } as const;
@@ -12,11 +13,12 @@ export const VISIBILITY = { public: 'Public', private: 'Private', internal: 'Int
 /**
  * A repository's head (FR-REPO-01): the owner's avatar and the repository's name, badges for
  * its visibility, and for Archived and Template, and for Fork, with a link from Fork to the
- * parent's dashboard. Then when its data was fetched, Refresh and Pin, and its page on GitHub.
+ * parent's dashboard, how far the fork is from the parent, and a link to compare the two
+ * (FR-REPO-19). Then when its data was fetched, Refresh and Pin, and its page on GitHub.
  */
 @Component({
   selector: 'app-repository-head',
-  imports: [Avatar, HeadActions, Icon, RouterLink],
+  imports: [Avatar, ForkStatus, HeadActions, Icon, RouterLink],
   template: `
     @let shown = repository();
     <div class="repohead">
@@ -42,7 +44,8 @@ export const VISIBILITY = { public: 'Public', private: 'Private', internal: 'Int
       />
       @if (shown.parent; as parent) {
         <div class="forked">
-          <app-icon name="fork" />Forked from <a [routerLink]="'/' + parent">{{ parent }}</a>
+          <app-icon name="fork" />Forked from <a [routerLink]="'/' + parent">{{ parent }}</a
+          >&ngsp;<app-fork-status [name]="shown.name" [parent]="parent" />
         </div>
       } @else if (shown.fork) {
         <div class="forked"><app-icon name="fork" />Fork</div>
