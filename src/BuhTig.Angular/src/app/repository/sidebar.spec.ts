@@ -2,11 +2,24 @@ import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { RepositoryData } from '../dashboard/data';
-import { Contributors, Languages, Releases, Repository, Stats } from '../dashboard/resources';
+import {
+  COMMUNITY_FILES,
+  Community,
+  CommunityFile,
+  Contributors,
+  Dated,
+  Languages,
+  Releases,
+  Repository,
+  Stats,
+} from '../dashboard/resources';
 import { Clock } from '../format/clock';
 import { compactNumber, exactDay, exactTime, percent, relativeTime } from '../format/format';
 import { Load } from '../widget/load';
 import {
+  COMMUNITY_FAILED,
+  COMMUNITY_OF_FORK,
+  SECURITY_POLICY_NOTE,
   LATEST,
   NO_CODE,
   NO_DESCRIPTION,
@@ -87,13 +100,16 @@ describe('RepositorySidebar', () => {
   const releases = signal<Load<Releases>>({ status: 'loading' });
   const contributors = signal<Load<Contributors>>({ status: 'loading' });
   const languages = signal<Load<Languages>>({ status: 'loading' });
+  const community = signal<Load<Dated<Community>>>({ status: 'loading' });
+  const retryCommunity = vi.fn();
   let fixture: ComponentFixture<RepositorySidebar>;
 
   beforeEach(async () => {
     repository.set(undefined);
-    for (const part of [stats, releases, contributors, languages]) {
+    for (const part of [stats, releases, contributors, languages, community]) {
       part.set({ status: 'loading' });
     }
+    retryCommunity.mockClear();
     const loader =
       <T>(state: ReturnType<typeof signal<Load<T>>>) =>
       () => ({
@@ -113,6 +129,7 @@ describe('RepositorySidebar', () => {
             releases: loader(releases),
             contributors: loader(contributors),
             languages: loader(languages),
+            community: () => ({ state: community, retry: retryCommunity }),
           },
         },
       ],
@@ -155,6 +172,76 @@ describe('RepositorySidebar', () => {
     languages.set({ status: 'ready', data: LANGUAGES });
     await fixture.whenStable();
   }
+
+  describe('community files (FR-REPO-20)', () => {
+    const files = (found: Partial<Record<CommunityFile, string>>) =>
+      Object.fromEntries(COMMUNITY_FILES.map((file) => [file, found[file]])) as Record<
+        CommunityFile,
+        string | undefined
+      >;
+    const POLICY = 'https://github.com/acme/widget/security/policy';
+    const items = () =>
+      [...section('community').querySelectorAll('li')].map((item) => [
+        words(item),
+        item.querySelector('a')?.getAttribute('href') ?? null,
+      ]);
+
+    async function show(data: Community): Promise<void> {
+      community.set({ status: 'ready', data: { ...data, fetchedAt: undefined, stale: undefined } });
+      await fixture.whenStable();
+    }
+
+    it('shows a placeholder while they load', () => {
+      expect(section('community').querySelectorAll('.skel')).toHaveLength(3);
+      expect(section('community').querySelector('li')).toBeNull();
+    });
+
+    it('links each the repository has to it on GitHub, and names each it lacks', async () => {
+      await show({
+        files: files({
+          contributing: 'https://github.com/acme/widget/blob/main/CONTRIBUTING.md',
+          pull_request_template: 'https://github.com/acme/widget/blob/main/.github/PR.md',
+        }),
+        securityPolicy: POLICY,
+      });
+      expect(items()).toEqual([
+        ['Contributing guide', 'https://github.com/acme/widget/blob/main/CONTRIBUTING.md'],
+        ['No code of conduct', null],
+        ['No issue template', null],
+        ['Pull request template', 'https://github.com/acme/widget/blob/main/.github/PR.md'],
+        [`Security policy (${SECURITY_POLICY_NOTE})`, POLICY],
+      ]);
+      // No score of them.
+      expect(section('community').textContent).not.toMatch(/%|score|health/i);
+    });
+
+    it('names each missing when the repository has none', async () => {
+      await show({ files: files({}), securityPolicy: POLICY });
+      expect(items().map(([text]) => text)).toEqual([
+        'No contributing guide',
+        'No code of conduct',
+        'No issue template',
+        'No pull request template',
+        `Security policy (${SECURITY_POLICY_NOTE})`,
+      ]);
+    });
+
+    it("says of a fork that GitHub doesn't report them", async () => {
+      await show({ files: undefined, securityPolicy: POLICY });
+      expect(items()[0]).toEqual([COMMUNITY_OF_FORK, null]);
+    });
+
+    it('says when they could not be read, alone, and tries again (FR-REPO-09)', async () => {
+      await ready();
+      community.set({ status: 'error', failure: 'github' });
+      await fixture.whenStable();
+      expect(words(section('community').querySelector('p'))).toBe(`${COMMUNITY_FAILED} Try again`);
+      section('community').querySelector<HTMLButtonElement>('button')!.click();
+      expect(retryCommunity).toHaveBeenCalledTimes(1);
+      // The rest is there still.
+      expect(section('about').querySelector('.about')?.textContent).toBe('Widgets for everyone');
+    });
+  });
 
   it('shows placeholders until the repository is known', () => {
     expect(section('about').querySelectorAll('.skel')).toHaveLength(3);

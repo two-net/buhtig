@@ -593,6 +593,26 @@ export type Glanced =
   | { status: 'invalid' }
   | { status: 'denied'; denied: Denied };
 
+/** The files a person looks for before contributing to a repository (FR-REPO-20). */
+export const COMMUNITY_FILES = [
+  'contributing',
+  'code_of_conduct',
+  'issue_template',
+  'pull_request_template',
+] as const;
+export type CommunityFile = (typeof COMMUNITY_FILES)[number];
+
+/** Which of the community files a repository has, as GitHub's community profile tells (FR-REPO-20). */
+export interface Community {
+  /**
+   * Each file's page on GitHub, `undefined` for one the repository does not have, or `undefined`
+   * altogether for a fork, of which GitHub keeps no community profile.
+   */
+  files: Record<CommunityFile, string | undefined> | undefined;
+  /** GitHub's page of the repository's security policy, which says whether it has one. */
+  securityPolicy: string | undefined;
+}
+
 /** How far a fork's default branch is from its parent's (FR-REPO-19). */
 export interface ParentComparison {
   /** The parent's `owner/repo`, as GitHub spells it. */
@@ -1008,6 +1028,13 @@ interface WorkflowRunsAnswer extends DatedAnswer {
     url: string | null;
   } | null;
   hidden: boolean;
+}
+
+/** The server's answer about a repository's community files. */
+interface CommunityAnswer extends DatedAnswer {
+  fork: boolean;
+  files: Partial<Record<CommunityFile, string | null>> | null;
+  security_policy: string | null;
 }
 
 /** The server's answer about a fork, for how far it is from its parent. */
@@ -1604,6 +1631,28 @@ export class Resources {
           additions: weeks.reduce((total, week) => total + week.additions, 0),
           deletions: weeks.reduce((total, week) => total + week.deletions, 0),
           tooLarge: answer.too_large === true,
+          ...freshness(answer),
+        };
+      }),
+    );
+  }
+
+  /**
+   * Which of the files a person looks for before contributing the repository `owner/repo` has,
+   * with their pages on GitHub (FR-REPO-20), which fails as `commitActivity` does.
+   */
+  community(owner: string, repo: string): Observable<Dated<Community>> {
+    return this.part<CommunityAnswer>(owner, repo, 'community').pipe(
+      map((answer) => {
+        const files = answer.files;
+        return {
+          files:
+            answer.fork || !files
+              ? undefined
+              : (Object.fromEntries(
+                  COMMUNITY_FILES.map((file) => [file, link(files[file], ['https:'])]),
+                ) as Record<CommunityFile, string | undefined>),
+          securityPolicy: link(answer.security_policy, ['https:']),
           ...freshness(answer),
         };
       }),

@@ -4,6 +4,7 @@
 import {
   CodeFrequency,
   CommitActivity,
+  CommunityFile,
   IssueAge,
   IssueOrPullRequest,
   MergeVelocity,
@@ -750,3 +751,25 @@ export function notComparedWith(parent: string): string {
 }
 
 export const COMPARE_WITH_PARENT = 'Compare with parent';
+
+/** FR-REPO-20: the sidebar's section of the files a person looks for before contributing. */
+export const COMMUNITY = 'Community';
+
+/** FR-REPO-20: each community file, as a link to it names it, and as it is named missing. */
+export const COMMUNITY_FILE_LABELS: Record<CommunityFile, { found: string; missing: string }> = {
+  contributing: { found: 'Contributing guide', missing: 'No contributing guide' },
+  code_of_conduct: { found: 'Code of conduct', missing: 'No code of conduct' },
+  issue_template: { found: 'Issue template', missing: 'No issue template' },
+  pull_request_template: { found: 'Pull request template', missing: 'No pull request template' },
+};
+
+/** FR-REPO-20: the link to GitHub's page of the security policy, which says if there is one. */
+export const SECURITY_POLICY = 'Security policy';
+export const SECURITY_POLICY_NOTE = 'GitHub says whether there is one';
+
+/** FR-REPO-20: of a fork, of which GitHub keeps no community profile. */
+export const COMMUNITY_OF_FORK =
+  "GitHub reports these files only for repositories that aren't forks.";
+
+/** FR-REPO-20, FR-REPO-09: the community files could not be read. */
+export const COMMUNITY_FAILED = "Couldn't load the community files.";

@@ -169,6 +169,11 @@ describe('RepositoryDashboard', () => {
       truncated: false,
     },
     parent: { parent: 'upstream/widget', ahead_by: 3, behind_by: 0 },
+    community: {
+      fork: false,
+      files: { contributing: null, code_of_conduct: null },
+      security_policy: null,
+    },
     trends: {
       scope: 'shared',
       kept_days: 90,
@@ -195,6 +200,7 @@ describe('RepositoryDashboard', () => {
   const OVERVIEW_PARTS = [
     'commit-activity',
     'commits',
+    'community',
     'contributors',
     'issues',
     'languages',
@@ -316,6 +322,7 @@ describe('RepositoryDashboard', () => {
         'app-repository-overview',
         'commit-activity',
         'commits',
+        'community',
         'issues',
         'languages',
       ],
@@ -400,12 +407,18 @@ describe('RepositoryDashboard', () => {
   it('compares a fork with its parent once, whatever its tab, and nothing else (FR-REPO-19)', async () => {
     const fork = { ...WIDGET, fork: true, parent: 'upstream/widget' };
     await open('/acme/widget/activity', '/-/api/repositories/acme/widget', fork);
-    expect(await answerParts()).toEqual(
-      [...OVERVIEW_PARTS, 'code-frequency', 'parent', 'trends', 'workflow-runs']
-        .filter((part) => !['commits', 'issues', 'languages'].includes(part))
-        .concat(['commits'])
-        .sort(),
-    );
+    // What the Activity tab asks for, the counts of the tabs, and how far the fork is.
+    expect(await answerParts()).toEqual([
+      'code-frequency',
+      'commit-activity',
+      'commits',
+      'contributors',
+      'parent',
+      'releases',
+      'stats',
+      'trends',
+      'workflow-runs',
+    ]);
     expect(shown(page().querySelector('app-fork-status')!)).toBe(
       '3 commits ahead of upstream/widget Compare with parent',
     );

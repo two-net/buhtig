@@ -169,6 +169,7 @@ export class RepositoryDashboard implements RepositoryData {
   readonly parentComparison = this.part((owner, repo) =>
     this.resources.parentComparison(owner, repo),
   );
+  readonly community = this.part((owner, repo) => this.resources.community(owner, repo));
 
   /** What the tabs count, loaded with the dashboard, whatever its tab. */
   private readonly counted = {

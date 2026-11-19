@@ -1261,6 +1261,90 @@ impl<'a> Fork<'a> {
     }
 }
 
+/// The files a person looks for before contributing to a repository, that [`community`] tells
+/// of (FR-REPO-20), each with where GitHub's community profile gives its page, the first that
+/// it gives, as its code of conduct may be told as a file or as the code it follows.
+const COMMUNITY_FILES: [(&str, &[&str]); 4] = [
+    ("contributing", &["/files/contributing/html_url"]),
+    (
+        "code_of_conduct",
+        &[
+            "/files/code_of_conduct_file/html_url",
+            "/files/code_of_conduct/html_url",
+        ],
+    ),
+    ("issue_template", &["/files/issue_template/html_url"]),
+    (
+        "pull_request_template",
+        &["/files/pull_request_template/html_url"],
+    ),
+];
+
+/// `/-/api/repositories/{owner}/{repo}/community`: which of the files a person looks for before
+/// contributing the repository has (FR-REPO-20),
+///
+/// ```json
+/// {"fork": false,
+///  "files": {"contributing": "https://github.com/…" | null, "code_of_conduct": …,
+///            "issue_template": …, "pull_request_template": …},
+///  "security_policy": "https://github.com/owner/repo/security/policy",
+///  "fetched_at": …, "stale": null | "held" | "github"}
+/// ```
+///
+/// Each file is the link to its page on GitHub (FR-REPO-12), or `null` when GitHub's community
+/// profile says the repository has none. They come from that profile alone: one request, read
+/// as part of the dashboard's load, so cached for the viewer as all that is under the
+/// repository is (FR-DATA-04), and asked again conditionally (FR-DATA-09). Its health score is
+/// not told. GitHub's profile says nothing of a security policy, which `security_policy` links to
+/// GitHub's page of, which says whether there is one: BuhTig does not say either way.
+///
+/// GitHub keeps no community profile of a fork, so of one, `files` is `null`, `fork` is
+/// `true`, and GitHub is not asked; `fetched_at` and `stale` are then the repository's.
+///
+/// Its statuses are those of [`commit_activity`].
+pub async fn community(
+    State(cache): State<Arc<Cache>>,
+    viewer: Viewer,
+    Path((owner, repo)): Path<(String, String)>,
+) -> Response {
+    let repository = match under(&cache, viewer, &owner, &repo).await {
+        Ok(repository) => repository,
+        Err(code) => return status(code),
+    };
+    let host = cache.github_host();
+    let policy = Value::from(format!(
+        "https://{host}/{}/security/policy",
+        repository.name
+    ));
+    let security_policy = page(Some(&policy), host);
+    if repository.data.get("fork") == Some(&Value::Bool(true)) {
+        return respond(repository.dated(json!({
+            "fork": true, "files": null, "security_policy": security_policy,
+        })));
+    }
+    let path = repository.path(&["community", "profile"]);
+    let profile = cache
+        .get(&repository.viewer, &repository.dashboard, &path)
+        .await;
+    let profile = match data(profile) {
+        Ok(profile) => profile,
+        Err(code) => return status(code),
+    };
+    let files: serde_json::Map<String, Value> = COMMUNITY_FILES
+        .iter()
+        .map(|(file, pointers)| {
+            let link = pointers
+                .iter()
+                .find_map(|pointer| page(profile.data.pointer(pointer), host));
+            ((*file).to_owned(), link.into())
+        })
+        .collect();
+    respond(dated_by(
+        json!({ "fork": false, "files": files, "security_policy": security_policy }),
+        &profile,
+    ))
+}
+
 /// `/-/api/repositories/{owner}/{repo}/release-cadence`: how often the repository was
 /// released, and how many times its releases' files were downloaded, over its 100 latest
 /// releases (FR-REPO-16),
@@ -2964,10 +3048,11 @@ mod tests {
         PullList,
         Labels,
         Parent,
+        Community,
     }
 
     impl Api {
-        const ALL: [Api; 18] = [
+        const ALL: [Api; 19] = [
             Api::Summary,
             Api::Stats,
             Api::CommitActivity,
@@ -2986,6 +3071,7 @@ mod tests {
             Api::PullList,
             Api::Labels,
             Api::Parent,
+            Api::Community,
         ];
     }
 
@@ -3035,6 +3121,7 @@ mod tests {
                 Api::PullList => pull_list(cache, visitor, names, Query(HashMap::new())).await,
                 Api::Labels => labels(cache, visitor, names).await,
                 Api::Parent => parent(cache, visitor, names).await,
+                Api::Community => community(cache, visitor, names).await,
             }
         })
         .await;
@@ -5256,6 +5343,137 @@ mod tests {
                 "https://api.github.com/repos/acme/odd",
             ]
         );
+    }
+
+    /// A GitHub with a repository that has some of the community files, one that has none,
+    /// one whose community profile GitHub fails to give, and a fork.
+    fn communities() -> Arc<Stub> {
+        Stub::new(|request| {
+            let path = request.uri().path().to_ascii_lowercase();
+            let repository = |name: &str, fork: bool| {
+                let data = json!({"full_name": format!("acme/{name}"), "private": false,
+                                  "fork": fork, "default_branch": "main"});
+                answer(200, &[("etag", r#"W/"r""#)], &data.to_string())
+            };
+            match path.as_str() {
+                "/repos/acme/some" => repository("some", false),
+                "/repos/acme/none" => repository("none", false),
+                "/repos/acme/flaky" => repository("flaky", false),
+                "/repos/acme/fork" => repository("fork", true),
+                "/repos/acme/some/community/profile" => answer(
+                    200,
+                    &[("etag", r#"W/"p""#)],
+                    r#"{"health_percentage": 71, "description": "Some",
+                        "files": {
+                          "contributing": {"html_url": "https://github.com/acme/some/blob/main/CONTRIBUTING.md"},
+                          "code_of_conduct": {"key": "contributor_covenant", "html_url": null},
+                          "code_of_conduct_file": {"html_url": "https://github.com/acme/some/blob/main/CODE_OF_CONDUCT.md"},
+                          "issue_template": null,
+                          "pull_request_template": {"html_url": "https://evil.example/template"},
+                          "license": {"key": "mit"},
+                          "readme": {"html_url": "https://github.com/acme/some/blob/main/README.md"}
+                        }}"#,
+                ),
+                "/repos/acme/none/community/profile" => answer(
+                    200,
+                    &[],
+                    r#"{"health_percentage": 0,
+                        "files": {"code_of_conduct": null, "code_of_conduct_file": null,
+                                  "contributing": null, "issue_template": null,
+                                  "pull_request_template": null, "license": null,
+                                  "readme": null}}"#,
+                ),
+                "/repos/acme/flaky/community/profile" => {
+                    answer(500, &[], r#"{"message": "Server Error"}"#)
+                }
+                _ => answer(404, &[], r#"{"message": "Not Found"}"#),
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn community_files_are_linked_or_named_missing_with_no_score() {
+        let stub = communities();
+        let cache = cache(&stub, 1).await;
+        // Part of the dashboard's load: a visitor who may load one loads it whole.
+        assert_eq!(
+            ask(&cache, Api::Summary, "acme", "some").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            ask(&cache, Api::Community, "acme", "some").await,
+            (
+                StatusCode::OK,
+                json!({
+                    "fork": false,
+                    "files": {
+                        "contributing": "https://github.com/acme/some/blob/main/CONTRIBUTING.md",
+                        "code_of_conduct": "https://github.com/acme/some/blob/main/CODE_OF_CONDUCT.md",
+                        "issue_template": null,
+                        // Only pages on GitHub (FR-REPO-12).
+                        "pull_request_template": null,
+                    },
+                    "security_policy": "https://github.com/acme/some/security/policy",
+                    "stale": null,
+                })
+            )
+        );
+        assert_eq!(
+            stub.urls(),
+            [
+                "https://api.github.com/repos/acme/some",
+                "https://api.github.com/repos/acme/some/community/profile",
+            ]
+        );
+        // From the cache, while it is fresh.
+        assert_eq!(
+            ask(&cache, Api::Community, "acme", "some").await.0,
+            StatusCode::OK
+        );
+        assert_eq!(stub.urls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_repository_without_community_files_names_each_missing() {
+        let stub = communities();
+        let cache = cache(&stub, 30).await;
+        let (status, body) = ask(&cache, Api::Community, "acme", "none").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["files"],
+            json!({"contributing": null, "code_of_conduct": null, "issue_template": null,
+                   "pull_request_template": null})
+        );
+    }
+
+    #[tokio::test]
+    async fn a_community_profile_github_fails_to_give_fails_alone() {
+        let stub = communities();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Community, "acme", "flaky").await.0,
+            StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            ask(&cache, Api::Summary, "acme", "flaky").await.0,
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn a_fork_has_no_community_profile_and_github_is_not_asked() {
+        let stub = communities();
+        let cache = cache(&stub, 30).await;
+        assert_eq!(
+            ask(&cache, Api::Community, "acme", "fork").await,
+            (
+                StatusCode::OK,
+                json!({"fork": true, "files": null,
+                       "security_policy": "https://github.com/acme/fork/security/policy",
+                       "stale": null})
+            )
+        );
+        assert_eq!(stub.urls(), ["https://api.github.com/repos/acme/fork"]);
     }
 
     #[test]

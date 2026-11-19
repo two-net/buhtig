@@ -178,6 +178,11 @@ fn under(name: &str, what: &str) -> Value {
         "labels" => json!([{"name": "bug", "color": "d73a4a"}]),
         "releases" => json!([{"tag_name": "v1", "draft": false, "prerelease": false,
                               "published_at": at, "assets": []}]),
+        // Its community profile (FR-REPO-20).
+        "community/profile" => json!({"health_percentage": 42, "files": {
+            "contributing": {"html_url": format!("https://github.com/octo/{name}/blob/main/CONTRIBUTING.md")},
+            "code_of_conduct": null, "issue_template": null, "pull_request_template": null,
+        }}),
         // Its default branch, as it compares with its parent's (FR-REPO-19).
         compared if compared.starts_with("compare/") => {
             json!({"status": "ahead", "ahead_by": 2, "behind_by": 0,
@@ -1047,6 +1052,9 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
             "/-/api/repositories/octo/leaky/trends",
             // How far the private fork is from its parent (FR-REPO-19).
             "/-/api/repositories/octo/secret/parent",
+            // The community files of the public and the internal repository (FR-REPO-20).
+            "/-/api/repositories/octo/public/community",
+            "/-/api/repositories/octo/inner/community",
             "/-/api/accounts/hubot",
             "/-/api/users/hubot",
             "/-/api/users/hubot/stats",
@@ -1113,6 +1121,20 @@ async fn the_shared_cache_holds_nothing_private_once_everyone_has_looked() {
              WHERE scope <> 'shared' AND resource_key LIKE '/repos/octo/secret/compare/%'"
         ),
         "1"
+    );
+    // The internal repository's community profile is in Hubot's private cache alone, and the
+    // public one's in the shared cache too.
+    let hubots = served.psql("SELECT id FROM users WHERE login = 'hubot'");
+    assert_eq!(
+        served.psql(
+            "SELECT string_agg(scope || ' ' || resource_key, ', ' ORDER BY resource_key, scope) \
+             FROM cache_entries WHERE resource_key LIKE '%/community/profile'"
+        ),
+        format!(
+            "user:{hubots} /repos/octo/inner/community/profile, \
+             shared /repos/octo/public/community/profile, \
+             user:{hubots} /repos/octo/public/community/profile"
+        )
     );
     let hubot = served.psql("SELECT id FROM users WHERE login = 'hubot'");
     let pat = served.psql(&format!(

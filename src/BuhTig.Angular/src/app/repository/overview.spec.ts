@@ -37,6 +37,7 @@ describe('RepositoryOverview', () => {
             contributors: loading,
             issues: loading,
             releases: loading,
+            community: loading,
             commits: ready(commits),
           },
         },

@@ -153,4 +153,56 @@
       }
     }
   </section>
+
+  <section class="side-sec community" aria-labelledby="community-heading">
+    <h2 id="community-heading">{{ COMMUNITY }}</h2>
+    @switch (communityLoader.state().status) {
+      @case ('ready') {
+        @if (community(); as community) {
+          <ul class="side-list">
+            @if (community.files; as files) {
+              @for (file of COMMUNITY_FILES; track file) {
+                @if (files[file]; as url) {
+                  <li>
+                    <app-icon name="check" /><a [href]="url">{{
+                      COMMUNITY_FILE_LABELS[file].found
+                    }}</a>
+                  </li>
+                } @else {
+                  <li class="muted">
+                    <app-icon name="x" />{{ COMMUNITY_FILE_LABELS[file].missing }}
+                  </li>
+                }
+              }
+            } @else {
+              <li class="muted"><app-icon name="info" />{{ COMMUNITY_OF_FORK }}</li>
+            }
+            @if (community.securityPolicy; as url) {
+              <li>
+                <app-icon name="lock" /><a [href]="url" [title]="SECURITY_POLICY_NOTE">{{
+                  SECURITY_POLICY
+                }}</a
+                ><span class="muted small">({{ SECURITY_POLICY_NOTE }})</span>
+              </li>
+            }
+          </ul>
+        }
+      }
+      @case ('error') {
+        <p class="muted">
+          <app-icon name="alert" />{{ COMMUNITY_FAILED }}
+          <button type="button" class="btn sm" (click)="communityLoader.retry()">
+            <app-icon name="refresh" />Try again
+          </button>
+        </p>
+      }
+      @default {
+        <div aria-hidden="true">
+          <span class="skel line"></span>
+          <span class="skel line"></span>
+          <span class="skel line"></span>
+        </div>
+      }
+    }
+  </section>
 </aside>

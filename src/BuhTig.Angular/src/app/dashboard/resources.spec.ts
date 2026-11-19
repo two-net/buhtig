@@ -861,6 +861,40 @@ describe('Resources', () => {
     expect(computing.error).toBeInstanceOf(Computing);
   });
 
+  it('gives which community files a repository has, with links on GitHub alone (FR-REPO-20)', () => {
+    const seen = outcome(resources.community('acme', 'widget'));
+    http.expectOne(`${WIDGET}/community`).flush({
+      fork: false,
+      files: {
+        contributing: 'https://github.com/acme/widget/blob/main/CONTRIBUTING.md',
+        code_of_conduct: null,
+        issue_template: 'javascript:alert(1)',
+      },
+      security_policy: 'https://github.com/acme/widget/security/policy',
+      fetched_at: '2026-10-22T12:00:00.000Z',
+      stale: null,
+    });
+    expect(seen.value).toEqual({
+      files: {
+        contributing: 'https://github.com/acme/widget/blob/main/CONTRIBUTING.md',
+        code_of_conduct: undefined,
+        issue_template: undefined,
+        pull_request_template: undefined,
+      },
+      securityPolicy: 'https://github.com/acme/widget/security/policy',
+      fetchedAt: new Date('2026-10-22T12:00:00.000Z'),
+      stale: undefined,
+    });
+
+    const fork = outcome(resources.community('acme', 'widget'));
+    http.expectOne(`${WIDGET}/community`).flush({ fork: true, files: null, security_policy: null });
+    expect(fork.value?.files).toBeUndefined();
+
+    const failed = outcome(resources.community('acme', 'widget'));
+    http.expectOne(`${WIDGET}/community`).flush(null, { status: 502, statusText: 'Bad Gateway' });
+    expect(failed.error).toBeDefined();
+  });
+
   it("gives how far a fork is from its parent, and fails without a parent's name (FR-REPO-19)", () => {
     const seen = outcome(resources.parentComparison('acme', 'widget'));
     http.expectOne(`${WIDGET}/parent`).flush({

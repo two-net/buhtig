@@ -68,7 +68,7 @@ const RELEASES: usize = 42;
 
 /// What a repository dashboard asks for, besides its summary, and how each is reported:
 /// what its overview shows, and what its other tabs add, as of a user who opens each.
-const REPOSITORY_WIDGETS: [(&str, &str); 16] = [
+const REPOSITORY_WIDGETS: [(&str, &str); 17] = [
     ("stats", "repository stats"),
     ("commit-activity", "repository commit-activity"),
     ("languages", "repository languages"),
@@ -85,6 +85,7 @@ const REPOSITORY_WIDGETS: [(&str, &str); 16] = [
     ("code-frequency", "repository code-frequency"),
     ("release-cadence", "repository release-cadence"),
     ("trends", "repository trends"),
+    ("community", "repository community"),
 ];
 /// What an organization dashboard asks for, besides its summary.
 const ORGANIZATION_WIDGETS: [(&str, &str); 7] = [
@@ -765,6 +766,14 @@ fn github(path: &str, query: &HashMap<String, String>) -> (u16, Option<String>, 
             paged(path, query, releases.collect(), RELEASES)
         }
         ["repos", owner, name, "releases", "latest"] => ok(release(owner, name, 0)),
+        ["repos", owner, name, "community", "profile"] => ok(json!({
+            "health_percentage": 57,
+            "files": {
+                "contributing": {"html_url": format!("https://github.com/{owner}/{name}/blob/main/CONTRIBUTING.md")},
+                "code_of_conduct": null, "code_of_conduct_file": null, "issue_template": null,
+                "pull_request_template": null, "license": null, "readme": null,
+            },
+        })),
         // The pull requests updated last, as merge velocity searches for them.
         ["search", "issues"] if query.get("per_page").map(String::as_str) == Some("100") => {
             let pulls: Vec<Value> = (0..100).map(|n| issue(OWNER, "repo", 2 * n + 1)).collect();

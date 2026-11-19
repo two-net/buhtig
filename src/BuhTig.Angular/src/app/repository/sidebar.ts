@@ -9,11 +9,18 @@ import { exactDay, exactTime } from '../format/format';
 import { RelativeTime } from '../format/relative-time';
 import { Icon } from '../icon/icon';
 import { Enter } from '../motion/entrance';
+import { COMMUNITY_FILES } from '../dashboard/resources';
 import {
+  COMMUNITY,
+  COMMUNITY_FAILED,
+  COMMUNITY_FILE_LABELS,
+  COMMUNITY_OF_FORK,
   LATEST,
   NO_CODE,
   NO_DESCRIPTION,
   OTHER,
+  SECURITY_POLICY,
+  SECURITY_POLICY_NOTE,
   TOO_MANY_CONTRIBUTORS,
   languagesDescription,
   moreReleases,
@@ -25,7 +32,9 @@ import { GITHUB_HOST } from '../github/host';
  * homepage and topics, license, figures, default branch, and when it was created and last pushed
  * to. Then its latest release and how many it has (FR-REPO-08), its contributors' avatars and how
  * many there are (FR-REPO-05), and its languages as a split bar (FR-REPO-04), whose legend names
- * each with its share (NFR-UX-05).
+ * each with its share (NFR-UX-05). Last, the files a person looks for before contributing, each
+ * linking to its page on GitHub or named missing, and its security policy's page on GitHub, with no
+ * score of them (FR-REPO-20): they load apart, with a placeholder, and fail alone (FR-REPO-09).
  */
 @Component({
   selector: 'app-repository-sidebar',
@@ -43,11 +52,13 @@ export class RepositorySidebar {
   private readonly releasesLoader = this.data.releases();
   private readonly contributorsLoader = this.data.contributors();
   private readonly languagesLoader = this.data.languages();
+  protected readonly communityLoader = this.data.community();
 
   protected readonly stats = computed(() => ready(this.statsLoader.state()));
   protected readonly releases = computed(() => ready(this.releasesLoader.state()));
   protected readonly contributors = computed(() => ready(this.contributorsLoader.state()));
   protected readonly languages = computed(() => ready(this.languagesLoader.state()));
+  protected readonly community = computed(() => ready(this.communityLoader.state()));
 
   protected readonly latest = computed(() => this.stats()?.latestRelease);
 
@@ -94,6 +105,13 @@ export class RepositorySidebar {
   protected readonly NO_CODE = NO_CODE;
   protected readonly LATEST = LATEST;
   protected readonly TOO_MANY_CONTRIBUTORS = TOO_MANY_CONTRIBUTORS;
+  protected readonly COMMUNITY = COMMUNITY;
+  protected readonly COMMUNITY_FILES = COMMUNITY_FILES;
+  protected readonly COMMUNITY_FILE_LABELS = COMMUNITY_FILE_LABELS;
+  protected readonly COMMUNITY_OF_FORK = COMMUNITY_OF_FORK;
+  protected readonly COMMUNITY_FAILED = COMMUNITY_FAILED;
+  protected readonly SECURITY_POLICY = SECURITY_POLICY;
+  protected readonly SECURITY_POLICY_NOTE = SECURITY_POLICY_NOTE;
 }
 
 function ready<T>(state: { status: string; data?: T }): T | undefined {
