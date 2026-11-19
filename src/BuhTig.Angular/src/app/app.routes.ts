@@ -63,6 +63,12 @@ export const routes: Routes = [
         path: 'compare',
         loadChildren: () => import('./compare/routes').then((module) => module.COMPARE_ROUTES),
       },
+      // The public repositories already in the shared cache, to browse (FR-SRCH-14).
+      {
+        path: 'browse',
+        loadComponent: () => import('./browse/browse').then((module) => module.Browse),
+        title: TITLES.browse,
+      },
       // A signed-in user's watchlists, each at its own URL (FR-PERS-08).
       {
         path: 'watchlists',

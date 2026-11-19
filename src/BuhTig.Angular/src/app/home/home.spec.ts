@@ -77,7 +77,9 @@ describe('Home', () => {
     expect(signedIn()).toBeNull();
     expect(visitor()!.querySelector('h1')!.textContent?.trim()).toBe(HEADLINE);
     expect(
-      [...visitor()!.querySelectorAll('.hero-more a')].map((link) => link.getAttribute('href')),
+      [...visitor()!.querySelectorAll('.hero-more a:not(.browse)')].map((link) =>
+        link.getAttribute('href'),
+      ),
     ).toEqual(['/acme/a', '/acme/b']);
     // Only the visitor's home page offers a surprise.
     http.expectOne('/-/api/surprise').flush(null, { status: 404, statusText: 'Not Found' });

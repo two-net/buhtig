@@ -11,6 +11,8 @@ export const SHORTCUTS_UNAVAILABLE =
   "BuhTig couldn't load your dashboards. Reload the page to try again.";
 
 export const RECENT_HEADING = 'Recently viewed on this BuhTig';
+/** FR-SRCH-14: the link to the page that lists more of them. */
+export const BROWSE_ALL = 'Browse all';
 export const NOTHING_RECENT =
   'Nothing yet. Open a dashboard and it shows up here for everyone on this instance.';
 

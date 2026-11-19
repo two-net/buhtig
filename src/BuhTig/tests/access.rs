@@ -63,6 +63,7 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         ),
         ("/acme", "/-/sign-in?return_to=%2Facme"),
         ("/-/settings", "/-/sign-in?return_to=%2F-%2Fsettings"),
+        ("/-/browse", "/-/sign-in?return_to=%2F-%2Fbrowse"),
         (
             "/-/compare/owner/repo...other/repo",
             "/-/sign-in?return_to=%2F-%2Fcompare%2Fowner%2Frepo...other%2Frepo",
@@ -91,6 +92,7 @@ fn private_mode_lets_visitors_reach_only_what_signing_in_needs() {
         "/-/api/users/mona",
         "/-/api/users/mona/stats",
         "/-/api/surprise",
+        "/-/api/browse",
         "/-/api/shortcuts",
         "/-/api/watchlists",
         "/-/api/repositories/owner/repo/glance",

@@ -25,6 +25,7 @@ import {
   PINNED,
   PRIVATE_REPOSITORIES,
   RECENTLY_VIEWED,
+  BROWSE_ALL,
   RECENT_HEADING,
   SHORTCUTS_UNAVAILABLE,
   TOKEN_TEXTS,
@@ -107,6 +108,7 @@ export class SignedInHome {
   protected readonly isComparison = isComparison;
   protected readonly avatarLogin = avatarLogin;
   protected readonly TOP_DASHBOARDS = TOP_DASHBOARDS;
+  protected readonly BROWSE_ALL = BROWSE_ALL;
   protected readonly FIND_DASHBOARD = FIND_DASHBOARD;
   protected readonly PINNED = PINNED;
   protected readonly RECENTLY_VIEWED = RECENTLY_VIEWED;

@@ -8,6 +8,7 @@ export const TITLES = {
   privacy: 'Privacy · BuhTig',
   settings: 'Settings · BuhTig',
   watchlists: 'Watchlists · BuhTig',
+  browse: 'Browse · BuhTig',
   signIn: 'Sign in · BuhTig',
   notAllowed: 'Not allowed · BuhTig',
   signInFailed: 'Sign-in failed · BuhTig',

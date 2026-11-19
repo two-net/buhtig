@@ -1,0 +1,141 @@
+<app-page-styles />
+<app-browse-styles />
+<app-header />
+<main id="main" class="page" tabindex="-1">
+  @if (signInFirst()) {
+    <app-center icon="lock" [heading]="SIGN_IN_TO_BROWSE" [text]="SIGN_IN_TEXT">
+      <div class="row">
+        <a class="btn primary" [href]="signIn">{{ SIGN_IN_WITH_GITHUB }}</a>
+      </div>
+    </app-center>
+  } @else {
+    @switch (listed.state().status) {
+      @case ('error') {
+        <app-center icon="cloudoff" [heading]="BROWSE_FAILED" [text]="BROWSE_FAILED_TEXT">
+          <div class="row">
+            <button type="button" class="btn" (click)="listed.retry()">{{ TRY_AGAIN }}</button>
+          </div>
+        </app-center>
+      }
+      @case ('empty') {
+        <app-center icon="repo" [heading]="NOTHING_TO_BROWSE" [text]="NOTHING_TO_BROWSE_TEXT">
+          <div class="row">
+            <a class="btn" routerLink="/">Home</a>
+          </div>
+        </app-center>
+      }
+      @case ('ready') {
+        <div class="container browse">
+          <h1>{{ BROWSE }}</h1>
+          <p class="help">{{ purpose() }}</p>
+          <div class="filters">
+            <select
+              #language
+              class="select language"
+              [attr.aria-label]="LANGUAGE"
+              (change)="setLanguage(language.value)"
+            >
+              <option value="" [selected]="view().language === undefined">
+                {{ ANY_LANGUAGE }}
+              </option>
+              @for (option of languages(); track option) {
+                <option [value]="option" [selected]="isChosen(option, view().language)">
+                  {{ option }}
+                </option>
+              }
+            </select>
+            <select
+              #topic
+              class="select topic"
+              [attr.aria-label]="TOPIC"
+              (change)="setTopic(topic.value)"
+            >
+              <option value="" [selected]="view().topic === undefined">{{ ANY_TOPIC }}</option>
+              @for (option of topics(); track option) {
+                <option [value]="option" [selected]="isChosen(option, view().topic)">
+                  {{ option }}
+                </option>
+              }
+            </select>
+          </div>
+          <p class="count-note" aria-live="polite">{{ status() }}</p>
+          @if (shown().length > 0) {
+            <ul class="Box rows browse-list">
+              @for (repository of shown(); track repository.name) {
+                <li>
+                  <app-avatar
+                    class="lead"
+                    [name]="repository.name.split('/')[0]"
+                    [src]="repository.ownerAvatarUrl"
+                    [size]="20"
+                  />
+                  <div class="t">
+                    <a class="ttl" [routerLink]="'/' + repository.name">{{ repository.name }}</a>
+                    @if (repository.description; as description) {
+                      <p class="desc">{{ description }}</p>
+                    }
+                    @if (repository.topics.length > 0) {
+                      <div class="topics">
+                        @for (name of repository.topics; track name) {
+                          <a
+                            class="topic-tag"
+                            [routerLink]="[]"
+                            [queryParams]="{ topic: name, page: null }"
+                            queryParamsHandling="merge"
+                            >{{ name }}</a
+                          >
+                        }
+                      </div>
+                    }
+                    <div class="rmeta">
+                      @if (repository.language; as language) {
+                        <span
+                          ><span
+                            class="lang-dot"
+                            [style.background]="languageColor()(language)"
+                          ></span
+                          >{{ language }}</span
+                        >
+                      }
+                      <span
+                        ><app-icon name="star" /><app-compact-number
+                          [value]="repository.stars"
+                          [plain]="true"
+                        /><span class="sr"> stars</span></span
+                      >
+                      <span
+                        ><app-icon name="fork" /><app-compact-number
+                          [value]="repository.forks"
+                          [plain]="true"
+                        /><span class="sr"> forks</span></span
+                      >
+                      @if (repository.pushedAt; as pushedAt) {
+                        <span>{{ UPDATED }} <app-relative-time [value]="pushedAt" /></span>
+                      }
+                    </div>
+                  </div>
+                </li>
+              }
+            </ul>
+            <app-pager [index]="pageIndex()" [count]="pageCount()" (go)="go($event)" />
+          } @else {
+            <p class="empty-note">
+              {{ NO_MATCH }} <a routerLink="/-/browse">{{ CLEAR_FILTERS }}</a>
+            </p>
+          }
+        </div>
+      }
+      @default {
+        <div class="container browse" aria-busy="true">
+          <h1>{{ BROWSE }}</h1>
+          <div class="browse-skel" aria-hidden="true">
+            <span class="skel line"></span>
+            <span class="skel line thin"></span>
+            <span class="skel line"></span>
+            <span class="skel line thin"></span>
+          </div>
+        </div>
+      }
+    }
+  }
+</main>

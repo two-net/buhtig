@@ -85,6 +85,16 @@
 .dash-main .recent-title {
   margin-top: 32px;
 }
+.dash-main .recent-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dash-main .recent-head a {
+  font-size: 14px;
+}
 .dash-search {
   padding: 16px;
   border: 1px solid var(--border);

@@ -6,7 +6,7 @@ import { RecentRepository } from '../recent/recent';
 import { Search } from '../search/search';
 import { Surprise } from '../surprise/surprise';
 import { Wordmark } from '../wordmark/wordmark';
-import { FEATURES, HEADLINE, LEDE, NOT_AFFILIATED, TRY } from './messages';
+import { BROWSE, FEATURES, HEADLINE, LEDE, NOT_AFFILIATED, TRY } from './messages';
 
 /**
  * The visitor's home page (UI-02): BuhTig's wordmark, what it does, and the search box with "Show
@@ -42,6 +42,7 @@ import { FEATURES, HEADLINE, LEDE, NOT_AFFILIATED, TRY } from './messages';
             }
           }
           <app-surprise />
+          <a class="browse" routerLink="/-/browse"><app-icon name="repo" />{{ BROWSE }}</a>
         </div>
       </section>
       <section class="features" aria-label="What BuhTig shows">
@@ -80,6 +81,7 @@ export class VisitorHome {
   protected readonly HEADLINE = HEADLINE;
   protected readonly LEDE = LEDE;
   protected readonly TRY = TRY;
+  protected readonly BROWSE = BROWSE;
   protected readonly FEATURES = FEATURES;
   protected readonly NOT_AFFILIATED = NOT_AFFILIATED;
 }

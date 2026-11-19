@@ -1,7 +1,7 @@
 //! The repositories viewed last on BuhTig, which the home page offers below the search box
-//! to anyone: those whose dashboards the shared cache holds, which are only public ones
-//! (FR-DATA-04), as GitHub last gave them. Nothing about who viewed them is told, or kept:
-//! only that GitHub was asked for them lately.
+//! to anyone, and the Browse page lists at more length: those whose dashboards the shared
+//! cache holds, which are only public ones (FR-DATA-04), as GitHub last gave them. Nothing
+//! about who viewed them is told, or kept: only that GitHub was asked for them lately.
 
 use std::sync::Arc;
 
@@ -9,14 +9,18 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use sea_orm::DbErr;
 use serde_json::{Value, json};
 use tracing::error;
 
 use crate::cache::{Cache, Cached};
-use crate::repositories::{link, text};
+use crate::repositories::{link, text, topics};
 
 /// The repositories the home page offers.
 const RECENT: usize = 8;
+
+/// The most repositories the Browse page lists (FR-SRCH-14).
+pub const BROWSED: usize = 200;
 
 /// `/-/api/recent`: up to 8 of the public repositories that GitHub gave or confirmed last
 /// for their dashboards, latest first, each once,
@@ -34,15 +38,45 @@ const RECENT: usize = 8;
 /// or 0 for a figure: avatars only from `https` URLs (NFR-SEC-03). Without any, there are
 /// none. 503 if the database cannot be read.
 pub async fn list(State(cache): State<Arc<Cache>>) -> Response {
-    match cache.recent_repositories(RECENT).await {
-        Ok(recent) => {
-            let repositories: Vec<Value> = recent.iter().map(repository).collect();
-            (
-                [(header::CACHE_CONTROL, "no-store")],
-                Json(json!({ "repositories": repositories })),
-            )
-                .into_response()
-        }
+    answer(
+        cache.recent_repositories(RECENT).await,
+        |recent| json!({ "repositories": recent.iter().map(repository).collect::<Vec<_>>() }),
+    )
+}
+
+/// `/-/api/browse`: up to 200 of the public repositories that GitHub gave or confirmed last
+/// for their dashboards, for the Browse page (FR-SRCH-14), as [`list`] tells them, each with
+/// its topics, and how many it may list at most,
+///
+/// ```json
+/// {"cap": 200, "repositories": [{"name": "owner/repo", …, "topics": ["cli", "rust"]}, …]}
+/// ```
+///
+/// The page filters them by language and by topic, and pages through them, itself. They are
+/// read as [`list`] reads them: from the shared cache alone, which holds nothing fetched with
+/// a PAT (FR-DATA-04), and GitHub is never asked, so no visitor's load counts (FR-DATA-10).
+/// A repository without topics has none. 503 if the database cannot be read.
+pub async fn browse(State(cache): State<Arc<Cache>>) -> Response {
+    answer(cache.recent_repositories(BROWSED).await, |recent| {
+        let repositories: Vec<Value> = recent
+            .iter()
+            .map(|cached| {
+                let mut listed = repository(cached);
+                listed["topics"] = topics(&cached.data).into();
+                listed
+            })
+            .collect();
+        json!({ "cap": BROWSED, "repositories": repositories })
+    })
+}
+
+/// The answer of `body` about the repositories `read`, or 503 if they could not be.
+fn answer(
+    read: Result<Vec<Cached<Value>>, DbErr>,
+    body: impl FnOnce(&[Cached<Value>]) -> Value,
+) -> Response {
+    match read {
+        Ok(recent) => ([(header::CACHE_CONTROL, "no-store")], Json(body(&recent))).into_response(),
         Err(error) => {
             error!("cannot read the repositories viewed last: {error}");
             (
@@ -112,6 +146,7 @@ mod tests {
             "stargazers_count": 12,
             "forks_count": 3,
             "pushed_at": "2026-10-20T08:00:00Z",
+            "topics": ["widgets", name],
         })
     }
 
@@ -202,7 +237,15 @@ mod tests {
 
     /// The status and body of a request for the repositories viewed last.
     async fn ask(cache: &Arc<Cache>) -> (StatusCode, Value) {
-        let response = list(State(cache.clone())).await;
+        answered(list(State(cache.clone())).await).await
+    }
+
+    /// The status and body of a request for the repositories the Browse page lists.
+    async fn browsed(cache: &Arc<Cache>) -> (StatusCode, Value) {
+        answered(browse(State(cache.clone())).await).await
+    }
+
+    async fn answered(response: Response) -> (StatusCode, Value) {
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let status = response.status();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -228,6 +271,44 @@ mod tests {
             ask(&cache).await,
             (StatusCode::OK, json!({"repositories": []}))
         );
+    }
+
+    #[tokio::test]
+    async fn browse_lists_none_without_any_and_says_how_many_it_may() {
+        let (cache, _, _) = cache().await;
+        assert_eq!(
+            browsed(&cache).await,
+            (StatusCode::OK, json!({"cap": 200, "repositories": []}))
+        );
+    }
+
+    #[tokio::test]
+    async fn browse_lists_more_with_their_language_and_topics_and_asks_github_nothing() {
+        let (cache, stub, db) = cache().await;
+        for n in 0..12 {
+            let name = format!("r{n}");
+            view(&cache, &visitor(), &["repos", "acme", &name]).await;
+            fetched(&db, &format!("/repos/acme/{name}"), at(n)).await;
+        }
+        // What is beneath a repository is no repository, and one without topics has none.
+        view(
+            &cache,
+            &visitor(),
+            &["repos", "acme", "widget", "languages"],
+        )
+        .await;
+        view(&cache, &visitor(), &["repos", "acme", "bare"]).await;
+        let read = stub.urls();
+        let (status, body) = browsed(&cache).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["cap"], 200);
+        let names = named(&body);
+        assert_eq!(names.len(), 13);
+        assert_eq!(names[..3], ["acme/bare", "acme/r11", "acme/r10"]);
+        assert_eq!(body["repositories"][1]["language"], "Rust");
+        assert_eq!(body["repositories"][1]["topics"], json!(["widgets", "r11"]));
+        assert_eq!(body["repositories"][0]["topics"], json!([]));
+        assert_eq!(stub.urls(), read);
     }
 
     #[tokio::test]
@@ -327,6 +408,8 @@ mod tests {
             .unwrap();
         assert_eq!(private, 3);
         assert_eq!(named(&ask(&cache).await.1), Vec::<&str>::new());
+        // Nor does Browse list them (FR-SRCH-14).
+        assert_eq!(named(&browsed(&cache).await.1), Vec::<&str>::new());
 
         // Without a PAT, what GitHub marks private or internal is not cached at all, and
         // what is not a repository's is not offered.

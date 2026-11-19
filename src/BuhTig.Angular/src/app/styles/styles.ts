@@ -61,3 +61,12 @@ export class WatchlistStyles {}
   encapsulation: ViewEncapsulation.None,
 })
 export class CompareStyles {}
+
+/** The styles of the Browse page (FR-SRCH-14): its filters, list and pages, as a dashboard's. */
+@Component({
+  selector: 'app-browse-styles',
+  template: '',
+  styleUrls: ['./dashboard.css', './lists.css', './browse.css'],
+  encapsulation: ViewEncapsulation.None,
+})
+export class BrowseStyles {}

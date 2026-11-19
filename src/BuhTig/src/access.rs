@@ -162,6 +162,8 @@ mod tests {
             "/-/health/../owner/repo",
             "/-/api/surprise",
             "/-/api/recent",
+            "/-/browse",
+            "/-/api/browse",
             "/-/api/users/octocat",
             "/-/api/users/octocat/repositories",
             "/-/api/users/octocat/repositories/widget/commit-activity",

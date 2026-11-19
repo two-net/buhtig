@@ -5,6 +5,8 @@ export const LEDE =
   'Paste a repository, organization or user URL to see its activity, languages, contributors, ' +
   'issues and releases on one animated dashboard.';
 export const TRY = 'Try';
+/** FR-SRCH-14: the link to the page of what was opened on this BuhTig lately. */
+export const BROWSE = 'Browse';
 /** What BuhTig shows, in three. */
 export const FEATURES = [
   {

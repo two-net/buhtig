@@ -534,6 +534,7 @@ async fn visitors_in_public_mode_see_public_data_only() {
         "/orgs/octo/people",
         "/hubot",
         "/-/settings",
+        "/-/browse",
     ] {
         let answer = served.get(&VISITOR, page).await;
         assert_eq!(answer.status, 200, "{page}: {answer:?}");
@@ -557,6 +558,20 @@ async fn visitors_in_public_mode_see_public_data_only() {
         let path = format!("/-/api/repositories/octo/{repo}");
         assert_eq!(served.get(&VISITOR, &path).await.status, 404, "{path}");
     }
+    // Browse lists the public repositories the shared cache holds, and asks GitHub nothing
+    // (FR-SRCH-14).
+    let asked = served.stub.urls().len();
+    let browsed = served.get(&VISITOR, "/-/api/browse").await;
+    assert_eq!(browsed.status, 200, "{browsed:?}");
+    let listed = browsed.json();
+    let names: Vec<&Value> = listed["repositories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|repository| &repository["name"])
+        .collect();
+    assert_eq!(names, [&json!("octo/public")]);
+    assert_eq!(served.stub.urls().len(), asked);
     for (method, path) in SIGNED_IN_ONLY {
         let answer = served
             .send(&VISITOR, method.clone(), path, body_for(&method))
@@ -595,6 +610,11 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
             "/-/sign-in?return_to=%2Forgs%2Focto%2Fpeople",
         ),
         ("/-/settings", "/-/sign-in?return_to=%2F-%2Fsettings"),
+        // Browse lists public repositories, but its page is no less closed (FR-SRCH-14).
+        (
+            "/-/browse?language=rust",
+            "/-/sign-in?return_to=%2F-%2Fbrowse%3Flanguage%3Drust",
+        ),
         // A comparison needs signing in as each of its resources' dashboards does (FR-CMP-05).
         (
             "/-/compare/octo/public...octo/inner",
@@ -635,6 +655,7 @@ async fn visitors_in_private_mode_see_only_what_signing_in_needs() {
         "/-/api/users/hubot/repositories/tools/commit-activity",
         "/-/api/surprise",
         "/-/api/recent",
+        "/-/api/browse",
     ] {
         let answer = served.get(&VISITOR, path).await;
         assert_eq!(answer.status, 401, "{path}: {answer:?}");

@@ -366,7 +366,8 @@ pub fn router(
             "/-/api/surprise",
             get(surprise::pick).with_state(cache.clone()),
         )
-        .route("/-/api/recent", get(recent::list).with_state(cache))
+        .route("/-/api/recent", get(recent::list).with_state(cache.clone()))
+        .route("/-/api/browse", get(recent::browse).with_state(cache))
         // `{name}.svg` and `{repo}.png` alike, since a route cannot end in a suffix.
         .route(
             "/-/preview/{file}",

@@ -21,17 +21,20 @@ export interface RecentRepository {
   fetchedAt: Date | undefined;
 }
 
+/** A repository as the server tells of one in the shared cache. */
+export interface RecentRepositoryAnswer {
+  name: string;
+  owner_avatar_url: string | null;
+  description: string | null;
+  language: string | null;
+  stars: number;
+  forks: number;
+  pushed_at: string | null;
+  fetched_at: string | null;
+}
+
 interface RecentAnswer {
-  repositories: {
-    name: string;
-    owner_avatar_url: string | null;
-    description: string | null;
-    language: string | null;
-    stars: number;
-    forks: number;
-    pushed_at: string | null;
-    fetched_at: string | null;
-  }[];
+  repositories: RecentRepositoryAnswer[];
 }
 
 /**
@@ -46,34 +49,39 @@ export class Recent {
   /** Up to 8 of them, or none when the server cannot say. */
   list(): Observable<RecentRepository[]> {
     return this.http.get<RecentAnswer>('/-/api/recent').pipe(
-      map(({ repositories }) =>
-        repositories.flatMap((repository): RecentRepository[] => {
-          // Only `owner/repo` itself, not a URL or a deeper path that `parse` would make one of.
-          const parsed = parseName(repository.name);
-          if (
-            !parsed.ok ||
-            parsed.resource.kind !== 'repository' ||
-            dashboardPath(parsed.resource) !== `/${repository.name}`
-          ) {
-            return [];
-          }
-          return [
-            {
-              name: repository.name,
-              ownerAvatarUrl: https(repository.owner_avatar_url),
-              description: repository.description || undefined,
-              language: repository.language || undefined,
-              stars: repository.stars,
-              forks: repository.forks,
-              pushedAt: date(repository.pushed_at),
-              fetchedAt: date(repository.fetched_at),
-            },
-          ];
-        }),
-      ),
+      map(({ repositories }) => repositories.flatMap((answer) => recentRepository(answer) ?? [])),
       catchError(() => of([])),
     );
   }
+}
+
+/**
+ * The repository the server tells of as `answer`, unless its name is not a repository's `owner/repo`
+ * itself, such as a URL, or a deeper path, that `parse` would make one of.
+ */
+export function recentRepository(answer: RecentRepositoryAnswer): RecentRepository | undefined {
+  const parsed = parseName(answer.name);
+  if (
+    !parsed.ok ||
+    parsed.resource.kind !== 'repository' ||
+    dashboardPath(parsed.resource) !== `/${answer.name}`
+  ) {
+    return undefined;
+  }
+  return {
+    name: answer.name,
+    ownerAvatarUrl: https(answer.owner_avatar_url),
+    description: answer.description || undefined,
+    language: answer.language || undefined,
+    stars: count(answer.stars),
+    forks: count(answer.forks),
+    pushedAt: date(answer.pushed_at),
+    fetchedAt: date(answer.fetched_at),
+  };
+}
+
+function count(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
 function date(text: string | null): Date | undefined {

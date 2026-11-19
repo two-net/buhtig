@@ -4,7 +4,7 @@ import { Component, signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { RecentRepository } from '../recent/recent';
-import { FEATURES, HEADLINE, LEDE, NOT_AFFILIATED } from './messages';
+import { BROWSE, FEATURES, HEADLINE, LEDE, NOT_AFFILIATED } from './messages';
 import { VisitorHome } from './visitor';
 
 @Component({
@@ -54,7 +54,7 @@ describe('VisitorHome', () => {
   const more = () => element().querySelector('.hero-more')!;
   /** The repositories offered to try, as their links' text and where they lead. */
   const tries = () =>
-    [...more().querySelectorAll('a')].map((link) => [
+    [...more().querySelectorAll('a:not(.browse)')].map((link) => [
       link.textContent?.trim(),
       link.getAttribute('href'),
     ]);
@@ -102,11 +102,20 @@ describe('VisitorHome', () => {
   it('offers nothing to try until it knows, nor when nothing was opened here', async () => {
     await surprise(null, 404);
     expect(tries()).toEqual([]);
-    expect(more().textContent?.trim()).toBe('');
+    expect(more().textContent).not.toContain('Try');
     fixture.componentInstance.recent.set([]);
     await fixture.whenStable();
     expect(tries()).toEqual([]);
-    expect(more().textContent?.trim()).toBe('');
+    expect(more().textContent).not.toContain('Try');
+  });
+
+  it('leads to the page of all that was opened here lately (FR-SRCH-14)', async () => {
+    await surprise(null, 404);
+    const browse = more().querySelector('a.browse')!;
+    expect([browse.textContent?.trim(), browse.getAttribute('href')]).toEqual([
+      BROWSE,
+      '/-/browse',
+    ]);
   });
 
   it('offers a surprise, beside what to try, once the server has picked one', async () => {

@@ -194,8 +194,12 @@ Debug builds read the UI from `src/BuhTig.Angular/dist` as they serve it. Run
   the repository, or deleting the watchlist or the account, deletes it.
 - **Recently viewed:** the signed-in home page lists up to 8 public repositories whose
   dashboards were opened on this instance lately, and the visitor's home page suggests the
-  first 3 to try. They come from the shared cache alone, never from data fetched with a
-  personal access token, and BuhTig asks GitHub nothing for them. The Privacy page says so.
+  first 3 to try. Both link to `/-/browse`, which lists up to the latest 200 of them, 25 a
+  page, with their descriptions, languages, stars, forks, last pushes and topics, and narrows
+  them to one language and one topic. They come from the shared cache alone, never from data
+  fetched with a personal access token, and BuhTig asks GitHub nothing for them, so the
+  visitor limit doesn't apply. In private mode, Browse needs sign-in, as every page does. The
+  Privacy page says so.
 - **Deleting data:** in Settings, once they confirm, signed-in users can delete everything
   BuhTig keeps of theirs: their account, sessions, credentials, the data cached and the
   figures observed with their token, their history, their pins and their watchlists, with what

@@ -1,0 +1,29 @@
+/* The Browse page (FR-SRCH-14), beside the lists' styles. */
+.browse h1 {
+  margin: 24px 0 4px;
+  font-size: 24px;
+  font-weight: 400;
+}
+.browse .filters {
+  margin-top: 16px;
+}
+.browse-list {
+  margin-top: 8px;
+}
+.browse-list .desc {
+  margin: 2px 0 0;
+  color: var(--fg-muted);
+  font-size: 14px;
+}
+.browse-list .topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.browse-list .rmeta {
+  margin-top: 6px;
+}
+.browse-skel .skel {
+  max-width: 480px;
+}

@@ -232,6 +232,12 @@ describe('SignedInHome', () => {
     await shortcuts([], []);
     expect(element().querySelector('h1')!.textContent?.trim()).toBe('Home');
     expect(element().querySelector('.recent-title')!.textContent?.trim()).toBe(RECENT_HEADING);
+    // Beside it, the page that lists more of them (FR-SRCH-14).
+    const browse = element().querySelector('.recent-head a')!;
+    expect([browse.textContent?.trim(), browse.getAttribute('href')]).toEqual([
+      'Browse all',
+      '/-/browse',
+    ]);
     // Nothing until it knows.
     expect(cards()).toEqual([]);
     expect(element().querySelector('.dash-main .empty-note')).toBeNull();
